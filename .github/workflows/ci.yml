@@ -26,6 +26,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node --check scripts/validate-native-clients.mjs
+      - name: Report runtime capabilities
+        run: node --input-type=module -e "import {DatabaseSync} from 'node:sqlite'; const db=new DatabaseSync(':memory:'); console.log(JSON.stringify({node:process.version,platform:process.platform,arch:process.arch,fts5:Boolean(db.prepare(\"SELECT 1 FROM pragma_module_list WHERE name='fts5'\").get())})); db.close();"
       - run: pnpm typecheck
       - run: pnpm test --reporter=default --reporter=junit --outputFile=artifacts/tests.xml
       - run: git diff --check

@@ -69,7 +69,7 @@ export class KithEngine {
    * Executes the complete PostToolUse pipeline whenever an agent writes or edits a file:
    * 1. Extracts AST exports/imports and updates the Contract Blackboard & Import Graph
    * 2. Computes transitive breaking-change blast radius across downstream dependent files
-   * 3. Checks for semantic duplicate utilities/functions via FTS5 BM25 + AST type fingerprints
+   * 3. Checks for semantic duplicate utilities/functions via name/type fingerprints and optional FTS5 hints
    * 4. Updates the agent's shadow Git index (`GIT_INDEX_FILE`) and runs `git merge-tree` against sibling dirty trees
    */
   public processPostFileEdit(params: {

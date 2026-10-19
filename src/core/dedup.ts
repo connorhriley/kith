@@ -43,7 +43,7 @@ export class SemanticDeduplicator {
 
   /**
    * Checks newly extracted symbols from a file against all existing contracts in the repo
-   * and sibling agents (excluding the same file itself) using FTS5 BM25 + AST type fingerprints.
+   * and sibling agents (excluding the same file itself) using name/type fingerprints and optional FTS5 hints.
    */
   public findDuplicateSymbols(params: {
     filePath: string;
@@ -54,6 +54,8 @@ export class SemanticDeduplicator {
     const threshold = params.threshold ?? 0.65;
     const duplicates: DuplicateSymbolMatch[] = [];
 
+    this.coordDb.refreshContractSearch();
+
     // Fetch candidate contracts from other files
     const otherContracts = this.coordDb.db
       .prepare(`SELECT * FROM contracts WHERE file_path != ?`)
@@ -62,14 +64,14 @@ export class SemanticDeduplicator {
     if (otherContracts.length === 0) return [];
 
     for (const sym of params.symbols) {
-      // Also run FTS5 query to get BM25-ranked candidates
+      // Optionally use full-text hits to boost identifier/type candidates
       const ftsTokens = DependencyAndContractEngine.tokenizeIdentifier(sym.symbolName)
         .split(/\s+/)
         .map((t) => t.replace(/[^a-z0-9]/g, ''))
         .filter((t) => t.length >= 2);
 
       const ftsBoostIds = new Set<string>();
-      if (ftsTokens.length > 0) {
+      if (this.coordDb.supportsFts5 && ftsTokens.length > 0) {
         const matchExpr = ftsTokens.map((t) => `"${t}"*`).join(' OR ');
         try {
           const ftsRows = this.coordDb.db
@@ -134,7 +136,7 @@ export class SemanticDeduplicator {
           reasons.push(`matching type signature ${existingFp}`);
         }
 
-        // 4. FTS5 BM25 hit boost
+        // 4. Optional full-text hit boost
         if (ftsBoostIds.has(existingId)) {
           score += 0.1;
         }

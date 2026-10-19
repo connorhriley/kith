@@ -4,6 +4,7 @@ import path from 'node:path';
 import { AstAnalyzer, ExtractedSymbol, SymbolKind } from './ast-analyzer.js';
 import { FencingAndAgentManager } from './fencing.js';
 import { CoordDatabase } from './db.js';
+import { tokenizeIdentifier } from './identifier-tokens.js';
 import { LockEngine } from './locks.js';
 
 export interface ContractRecord {
@@ -47,11 +48,7 @@ export class DependencyAndContractEngine {
   ) {}
 
   public static tokenizeIdentifier(name: string): string {
-    return name
-      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-      .replace(/[_\-.]+/g, ' ')
-      .toLowerCase()
-      .trim();
+    return tokenizeIdentifier(name);
   }
 
   /**
@@ -164,9 +161,9 @@ export class DependencyAndContractEngine {
           this.coordDb.db
             .prepare(`DELETE FROM contracts WHERE id = ?`)
             .run(oldContract.id);
-          this.coordDb.db
-            .prepare(`DELETE FROM contracts_fts WHERE contract_id = ?`)
-            .run(oldContract.id);
+          if (this.coordDb.supportsFts5) {
+            this.coordDb.db.prepare('DELETE FROM contracts_fts WHERE contract_id = ?').run(oldContract.id);
+          } else this.coordDb.markContractSearchDirty();
         }
       }
 
@@ -372,26 +369,29 @@ export class DependencyAndContractEngine {
         params.now
       );
 
-    // Sync FTS5 table
-    this.coordDb.db
-      .prepare(`DELETE FROM contracts_fts WHERE contract_id = ?`)
-      .run(id);
+    // Full-text search is an optional hint; core contracts work on every supported runtime.
+    if (this.coordDb.supportsFts5) {
+      // Sync FTS5 table
+      this.coordDb.db
+        .prepare(`DELETE FROM contracts_fts WHERE contract_id = ?`)
+        .run(id);
 
-    this.coordDb.db
-      .prepare(`
-        INSERT INTO contracts_fts (
-          contract_id, file_path, symbol_name, tokenized_name, signature, doc_comment
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      .run(
-        id,
-        params.filePath,
-        params.symbol.symbolName,
-        DependencyAndContractEngine.tokenizeIdentifier(params.symbol.symbolName),
-        params.symbol.signature,
-        params.symbol.docComment
-      );
+      this.coordDb.db
+        .prepare(`
+          INSERT INTO contracts_fts (
+            contract_id, file_path, symbol_name, tokenized_name, signature, doc_comment
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          id,
+          params.filePath,
+          params.symbol.symbolName,
+          DependencyAndContractEngine.tokenizeIdentifier(params.symbol.symbolName),
+          params.symbol.signature,
+          params.symbol.docComment
+        );
+    } else this.coordDb.markContractSearchDirty();
 
     return {
       id,

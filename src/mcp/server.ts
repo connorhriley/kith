@@ -266,6 +266,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     async (args) => {
       if (args.agentId) authorize({ ...args, agentId: args.agentId });
       const state = {
+        runtime: { node: process.version, fts5: engine.coordDb.supportsFts5 },
         fencingEpoch: engine.coordDb.currentFencingEpoch(),
         agents: engine.fencing.listAgents(true),
         locks: engine.locks.listLocks(),

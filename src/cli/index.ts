@@ -122,6 +122,7 @@ async function main(): Promise<void> {
 
     if (cmd === 'status') {
       const state = {
+        runtime: { node: process.version, fts5: engine.coordDb.supportsFts5 },
         fencingEpoch: engine.coordDb.currentFencingEpoch(),
         agents: engine.fencing.listAgents(true),
         locks: engine.locks.listLocks(),

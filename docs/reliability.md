@@ -45,3 +45,9 @@ These are test scenarios, not universal guarantees. CI coverage and real usage n
 6. Inspect `mutex_runs` before manually removing a stuck command guard. Confirm its worker group and protected descendants cannot still execute. A process that escaped the group may require external recovery. Never clear a live guard to bypass a busy result.
 
 The SQLite implementation requires Node's unflagged SQLite API: [Node SQLite documentation](https://nodejs.org/download/release/latest-jod/docs/api/sqlite.html). Generated Claude integration follows the [hook reference](https://code.claude.com/docs/en/hooks) and [project MCP configuration](https://code.claude.com/docs/en/mcp).
+
+## SQLite runtime capabilities
+
+Node 22.13.0 makes `node:sqlite` available without a flag, but its stock SQLite build has no FTS5 module. Kith detects available modules per connection. Contracts, dependency reports, name/type duplicate hints, tasks, locks and supervised commands work without FTS5; only the optional full-text similarity boost is absent. CLI/MCP status exposes `runtime.node` and `runtime.fts5`.
+
+The contracts table remains authoritative. A runtime without FTS5 leaves any existing virtual index intact and marks it dirty when contracts change. A capable runtime rebuilds that derived index transactionally, including updates and deletions, before using it again. No session or workspace reset is needed when switching supported runtimes. This is not a database backup or repair mechanism for corrupted state.

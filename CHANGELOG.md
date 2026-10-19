@@ -2,6 +2,8 @@
 
 ## Unreleased — native clients and hosted checks
 
+- Fix startup on stock Node 22.13.0, which lacks SQLite FTS5. Detect optional full-text support, retain normal contract/name/type hints without it, and rebuild the derived index safely when switching runtimes. Expose runtime capabilities in CLI/MCP status.
+
 - Add `kith_run_with_mutex` for sandboxed MCP clients unable to inspect process identities in their native shell. Preserve ownership, renewable supervision and actual exit codes; cancel commands on request cancellation or connection loss before closing coordination state. Translate stdio EOF into graceful cancellation; the MCP SDK alone does not emit a close callback for stdin EOF. Commands run with server permissions and need client approval.
 
 - Add non-destructive Codex project MCP configuration with capability environment forwarding. Preserve custom Kith transports and malformed-config fail-before-write behavior.

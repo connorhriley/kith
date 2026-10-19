@@ -1,0 +1,50 @@
+{
+  "date": "2026-10-19",
+  "scope": "SQLite capability compatibility; local macOS checks, hosted failure reproduction",
+  "hosted_before_fix": {
+    "run": "https://github.com/connorhriley/kith/actions/runs/39280488937",
+    "passed": [
+      "macos/22",
+      "macos/24",
+      "ubuntu/22",
+      "ubuntu/24"
+    ],
+    "failed": [
+      "macos/22.13.0",
+      "ubuntu/22.13.0"
+    ],
+    "cause": "no such module: fts5"
+  },
+  "local_runtimes": [
+    {
+      "node": "22.13.0",
+      "fts5": false,
+      "tests_passed": 78,
+      "tests_skipped": 2,
+      "skip_reason": "Restoration of an FTS5 index requires the unavailable module; fallback behavior is exercised.",
+      "package_consumer": "passed",
+      "two_mcp_clients": "passed"
+    },
+    {
+      "node": "22.23.3",
+      "fts5": true,
+      "tests_passed": 80,
+      "tests_skipped": 0
+    },
+    {
+      "node": "24.22.0",
+      "fts5": true,
+      "tests_passed": 80,
+      "tests_skipped": 0
+    }
+  ],
+  "real_cross_runtime_roundtrip": {
+    "result": "passed",
+    "sequence": [
+      "Create indexed state under Node 22.23.3",
+      "Update a contract and delete another under stock Node 22.13.0",
+      "Rebuild derived FTS index under Node 22.23.3 and verify only the updated contract remains"
+    ]
+  },
+  "hosted_after_fix": "Pending; inspect the final commit CI run for Linux/macOS validation."
+}

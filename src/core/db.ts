@@ -2,6 +2,7 @@ import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
+import { tokenizeIdentifier } from './identifier-tokens.js';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as {
@@ -18,6 +19,7 @@ export interface CoordEvent {
 
 export class CoordDatabase {
   public readonly db: DatabaseSyncType;
+  public readonly supportsFts5: boolean;
   public readonly repoRoot: string;
   public readonly coordDir: string;
   public readonly dbPath: string;
@@ -35,8 +37,49 @@ export class CoordDatabase {
     this.dbPath = customDbPath ?? path.join(this.coordDir, 'state.db');
     this.db = new DatabaseSync(this.dbPath);
 
-    try { this.configurePragmas(); this.migrate(); }
+    try {
+      this.supportsFts5 = CoordDatabase.hasFts5(this.db);
+      this.configurePragmas(); this.migrate();
+    }
     catch (err) { this.db.close(); throw err; }
+  }
+
+  public static hasFts5(db: DatabaseSyncType): boolean {
+    return Boolean(db.prepare("SELECT 1 FROM pragma_module_list WHERE name='fts5'").get());
+  }
+
+  public markContractSearchDirty(): void {
+    this.db.prepare("INSERT INTO meta(key,value) VALUES('contracts_fts_dirty','1') ON CONFLICT(key) DO UPDATE SET value='1'").run();
+  }
+
+  /** Contracts are authoritative. Rebuild once after a runtime without FTS5 changed them. */
+  public refreshContractSearch(): void {
+    if (!this.supportsFts5) return;
+    const dirty = () => (this.db.prepare("SELECT value FROM meta WHERE key='contracts_fts_dirty'").get() as { value: string } | undefined)?.value === '1';
+    if (!dirty()) return;
+    this.withTransaction(() => {
+      if (!dirty()) return;
+      this.db.exec('DELETE FROM contracts_fts');
+      const insert = this.db.prepare('INSERT INTO contracts_fts(contract_id,file_path,symbol_name,tokenized_name,signature,doc_comment) VALUES(?,?,?,?,?,?)');
+      const rows = this.db.prepare('SELECT id,file_path,symbol_name,signature,doc_comment FROM contracts').all() as Array<Record<string, string>>;
+      for (const row of rows) insert.run(row.id, row.file_path, row.symbol_name, tokenizeIdentifier(row.symbol_name), row.signature, row.doc_comment);
+      this.db.prepare("UPDATE meta SET value='0' WHERE key='contracts_fts_dirty'").run();
+    });
+  }
+
+  private configureContractSearch(): void {
+    if (!this.supportsFts5) { this.markContractSearchDirty(); return; }
+    const exists = this.db.prepare("SELECT 1 FROM sqlite_master WHERE name='contracts_fts'").get();
+    this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS contracts_fts USING fts5(
+          contract_id UNINDEXED,
+          file_path,
+          symbol_name,
+          tokenized_name,
+          signature,
+          doc_comment
+        );`);
+    if (!exists) this.markContractSearchDirty();
+    this.refreshContractSearch();
   }
 
   private configurePragmas(): void {
@@ -139,15 +182,6 @@ export class CoordDatabase {
           UNIQUE(file_path, symbol_name)
         );
 
-        CREATE VIRTUAL TABLE IF NOT EXISTS contracts_fts USING fts5(
-          contract_id UNINDEXED,
-          file_path,
-          symbol_name,
-          tokenized_name,
-          signature,
-          doc_comment
-        );
-
         CREATE TABLE IF NOT EXISTS conflicts (
           id TEXT PRIMARY KEY,
           agent_a TEXT NOT NULL,
@@ -234,6 +268,7 @@ export class CoordDatabase {
           UPDATE meta SET value='2' WHERE key='schema_version';
         `);
       }
+      this.configureContractSearch();
     });
   }
 

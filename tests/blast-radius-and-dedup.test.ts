@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KithEngine } from '../src/index.js';
 
-describe('Pillar 3 & 4: Import-Graph Blast Radius, Zero-Touch Contracts & FTS5 Deduplicator', () => {
+describe('Pillar 3 & 4: Import-Graph Blast Radius, Contracts & Optional Full-Text Duplicate Hints', () => {
   let tmpDir: string;
   let engine: KithEngine;
 
@@ -79,7 +79,7 @@ describe('Pillar 3 & 4: Import-Graph Blast Radius, Zero-Touch Contracts & FTS5 D
     );
   });
 
-  it('catches semantic duplicate helper functions across different files via FTS5 + AST fingerprints', () => {
+  it('catches semantic duplicate helper functions across different files via name/type fingerprints and optional full-text hints', () => {
     engine.fencing.registerAgent({ id: 'agent-a' });
     engine.fencing.registerAgent({ id: 'agent-b' });
 
