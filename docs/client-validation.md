@@ -9,7 +9,7 @@ node scripts/validate-native-clients.mjs --client codex --output artifacts/codex
 node scripts/validate-native-clients.mjs --client claude --output artifacts/claude.json
 ```
 
-Use `--scenario isolated` or `--scenario shared` for a single run. Both modes integrate an isolated worktree. The isolated scenario gives Codex an MCP-owned session; shared mode forwards a capability anchored to the runner. Claude always inherits a session so its generated edit hooks and MCP server share ownership.
+Use `--scenario isolated` or `--scenario shared` for a single run. Claude also runs `--scenario hook-failure` by default, replacing the pre-hook executable with a missing path and proving that its native Write is denied. Both worktree modes integrate an isolated worktree. The isolated scenario gives Codex an MCP-owned session; shared mode forwards a capability anchored to the runner. Claude always inherits a session so its generated edit hooks and MCP server share ownership.
 
 Each run uses a disposable Git repository with spaces and an apostrophe in its path. A peer holds a source file. The native client must receive the conflict (Claude also attempts a native edit that its pre-hook must deny), choose a separate scope, edit its returned worktree, report the edit, integrate it with verification, and release ownership. The runner checks native tool events, exact protected/integrated bytes, contracts, task completion, verification diagnostics, Git HEAD and remaining locks. An exit-zero client that merely reports a permission failure fails validation. Results are version-specific evidence, not certification of every client release or GUI.
 
@@ -24,3 +24,5 @@ The `CI` workflow runs independently on Linux/macOS with Node 22.13.0, current 2
 ## Recorded native runs
 
 On 2026-10-19, macOS / Node 22.23.3: [Codex CLI 0.163.0-alpha.10.2](validation/2026-10-19-codex-client-report.json) passed MCP-owned and inherited-owner scenarios; [Claude Code 2.1.301](validation/2026-10-19-claude-client-report.json) passed both worktree flows. An additional [native Claude edit denial](validation/2026-10-19-claude-hook-report.json) confirmed that a peer-owned file edit was blocked before a valid task completed. These are recorded outcomes on these versions, with the configuration delivery limits described above.
+
+The separate [missing guard check](validation/2026-10-19-claude-hook-unavailable-report.json) also passed: a native Write attempted once was denied and the marker file remained absent. This case is included in the reusable runner.

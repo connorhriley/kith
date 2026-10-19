@@ -11,7 +11,7 @@ const cli = fileURLToPath(new URL('../dist/cli/index.js', import.meta.url));
 const flags = process.argv.slice(2);
 const option = (name, fallback) => { const i = flags.indexOf(name); return i < 0 ? fallback : flags[i + 1]; };
 const client = option('--client', 'codex'), scenario = option('--scenario', 'all');
-assert.ok(['codex', 'claude'].includes(client) && ['all', 'isolated', 'shared'].includes(scenario), 'Use --client codex|claude [--scenario all|isolated|shared] [--output report.json]');
+assert.ok(['codex', 'claude'].includes(client) && ['all', 'isolated', 'shared', ...(client === 'claude' ? ['hook-failure'] : [])].includes(scenario), 'Use --client codex|claude [--scenario all|isolated|shared|hook-failure] [--output report.json]');
 const report = { client, version: '', platform: process.platform, node: process.version, scenarios: [], passed: false };
 const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kith-native-'))), bin = path.join(base, 'bin'); fs.mkdirSync(bin);
 const quote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
@@ -35,7 +35,7 @@ async function run(args, cwd, childEnv) {
 }
 try {
   report.version = execFileSync(client, ['--version'], { env, encoding: 'utf8', timeout: 10000 }).trim();
-  for (const mode of scenario === 'all' ? ['isolated', 'shared'] : [scenario]) {
+  for (const mode of scenario === 'all' ? ['isolated', 'shared', ...(client === 'claude' ? ['hook-failure'] : [])] : [scenario]) {
     const root = path.join(base, `${mode} repository ' spaces`); fs.mkdirSync(root);
     const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     git('init', '-q'); git('config', 'user.name', 'Kith Compatibility'); git('config', 'user.email', 'test@example.test');
@@ -51,6 +51,25 @@ try {
       assert.equal(engine.intents.declareIntent({ agentId: 'peer', title: 'Preserve shared API', scopeGlobs: ['src/blocked.mjs'] }).ok, true);
       const agentId = `native-${client}`, childEnv = { ...env }, borrowed = mode === 'shared' || client === 'claude';
       if (borrowed) { const session = engine.fencing.registerAgent({ id: agentId }); childEnv.KITH_AGENT_ID = agentId; childEnv.KITH_SESSION_TOKEN = session.sessionToken; }
+      if (mode === 'hook-failure') {
+        const settingsFile = path.join(root, '.claude/settings.json');
+        const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+        settings.hooks.PreToolUse[0].hooks[0].command = quote(path.join(base, 'intentionally-missing-guard'));
+        fs.writeFileSync(settingsFile, JSON.stringify(settings));
+        const marker = path.join(root, 'marker.txt');
+        const prompt = `Bounded hook failure test. Use native Write exactly once to create ${marker} containing test. A deliberately unavailable Kith guard must block it. Do not retry, repair hooks, use shell, MCP or subagents. Report the denial and stop.`;
+        const events = await run(['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--setting-sources', 'project',
+          '--strict-mcp-config', '--mcp-config', path.join(root, '.mcp.json'), '--permission-mode', 'acceptEdits', '--permission-prompts', 'none',
+          '--allowedTools', 'Write', '--max-budget-usd', '1', prompt], root, childEnv);
+        const writes = events.flatMap((e) => e.type === 'assistant' ? e.message?.content ?? [] : []).filter((b) => b.type === 'tool_use' && b.name === 'Write');
+        assert.equal(writes.length, 1, 'Expected exactly one native Write probe');
+        const denied = events.flatMap((e) => e.type === 'user' ? e.message?.content ?? [] : []).find((b) => b.type === 'tool_result' && b.tool_use_id === writes[0].id);
+        assert.equal(denied?.is_error, true, 'Missing pre-hook did not deny native Write');
+        assert.equal(fs.existsSync(marker), false, 'Missing guard allowed a write');
+        result.passed = true; result.checks = ['native Write attempted once', 'tool denied', 'marker absent'];
+        console.log(`${client} ${mode}: passed`);
+        continue;
+      }
       const hookProbe = client === 'claude' ? ` After the expected MCP conflict, also test native hook enforcement: Read ${path.join(root, 'src/blocked.mjs')}, then attempt exactly one native Edit of that file replacing true with false. Its PreToolUse hook must deny the edit. Continue only after that denial; never retry or bypass it.` : '';
       const prompt = `Run this bounded compatibility test in this disposable Git repository. Do not use subagents or unrelated tools. Never print session tokens. Call the kith MCP tools directly. First call kith_begin_work with agentId ${agentId}, title Native conflict probe, scopeGlobs [src/blocked.mjs]. Expect a lock conflict.${hookProbe} Never change that file successfully. Then call kith_begin_work with the SAME agentId, title Add native compatibility module, scopeGlobs [src/native.mjs], isolateWorktree true. Use your native editing tool to create src/native.mjs IN THE RETURNED WORKTREE with exactly: export const nativeCompatibility = 42; followed by a newline. Call kith_record_file_edit with that absolute file path. Then call kith_complete_work with verificationCmd node --check src/native.mjs. Finally call kith_get_status without agentId. Stop on unexpected failure; never bypass coordination or substitute shell calls for MCP. End with a brief result.`;
       const generated = client === 'codex' ? parseToml(fs.readFileSync(path.join(root, '.codex/config.toml'), 'utf8')).mcp_servers.kith : undefined;

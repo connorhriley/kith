@@ -25,6 +25,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: node --check scripts/validate-native-clients.mjs
       - run: pnpm typecheck
       - run: pnpm test --reporter=default --reporter=junit --outputFile=artifacts/tests.xml
       - run: git diff --check

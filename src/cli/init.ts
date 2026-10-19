@@ -73,10 +73,15 @@ export function initializeKithRepository(
       const command = `${hookCommand} ${phase}`;
       const exists = entries.some((entry) => {
         if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return false;
-        return entry.hooks.some((hook: { command?: string }) => hook.command === command);
+        return entry.hooks.some((hook: { command?: string } | null) => hook?.command === command);
       });
-      hooks[event] = exists ? entries.map((entry) => ({ ...entry, hooks: Array.isArray(entry.hooks) ? entry.hooks.map((hook: { command?: string }) => hook.command === command && event === 'PreToolUse' ? { ...hook, onFailure: 'block' } : hook) : entry.hooks })) : [...entries, {
-        matcher: 'Edit|Write|MultiEdit|NotebookEdit|Bash', hooks: [{ type: 'command', command, ...(event === 'PreToolUse' ? { onFailure: 'block' } : {}) }],
+      hooks[event] = exists ? entries.map((entry) => {
+        if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return entry;
+        return { ...entry, hooks: entry.hooks.map((hook: { command?: string } | null) =>
+          hook?.command === command && event === 'PreToolUse' ? { ...hook, onFailure: 'block' } : hook) };
+      }) : [...entries, {
+        matcher: 'Edit|Write|MultiEdit|NotebookEdit|Bash',
+        hooks: [{ type: 'command', command, ...(event === 'PreToolUse' ? { onFailure: 'block' } : {}) }],
       }];
     }
     settings.hooks = hooks;
