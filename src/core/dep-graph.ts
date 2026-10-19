@@ -65,7 +65,7 @@ export class DependencyAndContractEngine {
   }
 
   private walkSourceFiles(dir: string, acc: string[] = []): string[] {
-    if (!fs.existsSync(dir)) return acc;
+    if (!fs.existsSync(dir) || dir !== this.coordDb.repoRoot && fs.existsSync(path.join(dir, '.git'))) return acc;
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       if (
@@ -81,7 +81,7 @@ export class DependencyAndContractEngine {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         this.walkSourceFiles(fullPath, acc);
-      } else if (/\.(ts|tsx|js|jsx|mjs|py)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
+      } else if (entry.isFile() && /\.(ts|tsx|js|jsx|mjs|py)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
         acc.push(fullPath);
       }
     }
@@ -287,7 +287,7 @@ export class DependencyAndContractEngine {
     signature: string;
     docComment?: string;
   }): ContractRecord {
-    const relPath = LockEngine.normalizePattern(this.coordDb.repoRoot, params.filePath);
+    const relPath = LockEngine.normalizeFile(this.coordDb.repoRoot, params.filePath);
     const now = Date.now();
     const astHash = crypto
       .createHash('sha256')
@@ -416,7 +416,7 @@ export class DependencyAndContractEngine {
     targetFile: string,
     maxHops = 4
   ): Array<{ filePath: string; hopDistance: number; importedSymbols: string[] }> {
-    const normTarget = LockEngine.normalizePattern(this.coordDb.repoRoot, targetFile);
+    const normTarget = LockEngine.normalizeFile(this.coordDb.repoRoot, targetFile);
     const visited = new Map<string, { hopDistance: number; importedSymbols: string[] }>();
     let frontier: string[] = [normTarget];
 
@@ -451,7 +451,7 @@ export class DependencyAndContractEngine {
     const rows = filePathFilter
       ? (this.coordDb.db
           .prepare(`SELECT * FROM contracts WHERE file_path = ? ORDER BY updated_at DESC`)
-          .all(LockEngine.normalizePattern(this.coordDb.repoRoot, filePathFilter)) as Array<
+          .all(LockEngine.normalizeFile(this.coordDb.repoRoot, filePathFilter)) as Array<
           Record<string, unknown>
         >)
       : (this.coordDb.db

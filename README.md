@@ -29,7 +29,7 @@ Kith gives cooperating agents shared local state: who owns a task, which files a
 
 Kith fits workflows where you already launch multiple coding agents and want them to coordinate. It does not choose models, write prompts, or launch a fleet for you. Worktrees separate files; Kith adds shared ownership and resource coordination.
 
-**Experimental.** Kith relies on cooperating clients. Hooks are not an OS security boundary, and analysis of globs and source code is heuristic. Start in a disposable repository. Read the [reliability contract](docs/reliability.md) before using it on important work.
+**Experimental.** Kith relies on cooperating clients. Hooks are not an OS security boundary, and contract analysis is advisory. Scope matching follows a [documented grammar](docs/path-and-scope-rules.md). Start in a disposable repository. Read the [reliability contract](docs/reliability.md) before using it on important work.
 
 ## Quick start
 
@@ -104,7 +104,7 @@ For runnable commands and library examples, see [CLI and library workflows](docs
 
 The suite exercises process contention, session ownership, command cancellation and disconnects, generated hooks, MCP workflows, and worktree integration. Clean-package checks install the built distribution in a separate consumer project. Native-client reports include exact versions and outcomes.
 
-The CI badge links to current hosted results; local tests and recorded native runs do not establish that every platform or client release passes. Known gaps include common-repository discovery, supported glob grammar, conservative source parsing, and recovery tooling.
+The CI badge links to current hosted results; local tests and recorded native runs do not establish that every platform or client release passes. Repository discovery, physical path checks, exact supported glob matching and conservative conflict resolution have dedicated regressions. Backup/recovery, broader client coverage and advisory source analysis still need work.
 
 - [Reliability contract](docs/reliability.md): behavior, boundaries, and recovery
 - [Architecture](docs/architecture.md): storage, adapters, and Git integration

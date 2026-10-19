@@ -1,3 +1,4 @@
+import { discoverRepository, physicalPath } from './repository.js';
 import { execFileSync, execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -88,8 +89,20 @@ export class SpeculativeMergeTrain {
       const targetBranch = this.gitBranch(this.coordDb.repoRoot);
       if (!targetBranch) throw new Error('Merge target must be on a branch, not a detached HEAD.');
       this.requireCleanTarget();
+      // Validate ownership and repository/branch identity before staging any source bytes.
+      if (params.worktreePath) {
+        const registered = this.fencing.getAgent(params.agentId)?.worktree_path;
+        if (!registered || physicalPath(registered) !== physicalPath(params.worktreePath)) {
+          throw new Error("Source checkout must be the agent's registered worktree.");
+        }
+        const source = discoverRepository(params.worktreePath);
+        if (source.commonGitDir !== this.coordDb.commonGitDir || source.checkoutRoot !== physicalPath(params.worktreePath)
+          || this.gitBranch(source.checkoutRoot) !== params.branch.replace(/^refs\/heads\//, '')) {
+          throw new Error('Source checkout repository or branch does not match the requested integration.');
+        }
+      }
       // 1. If the agent's worktree has uncommitted changes, commit them to its branch first
-      if (params.worktreePath && fs.existsSync(params.worktreePath)) {
+      if (params.worktreePath) {
         const statusOut = execFileSync('git', ['status', '--porcelain'], {
           cwd: params.worktreePath,
           encoding: 'utf8',
@@ -108,6 +121,10 @@ export class SpeculativeMergeTrain {
         }
       }
 
+      // Freeze the source ref after its checkpoint; never interpret a user ref as merge options.
+      const sourceSha = execFileSync('git', ['rev-parse', '--verify', '--end-of-options', `${params.branch}^{commit}`], {
+        cwd: this.coordDb.repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
       // Clean up any previous staging worktree
       this.cleanupStageWorktree(stageDir);
 
@@ -128,7 +145,7 @@ export class SpeculativeMergeTrain {
       try {
         execFileSync(
           'git',
-          ['merge', '--no-ff', '-m', `Merge branch '${params.branch}' (${params.agentId})`, params.branch],
+          ['merge', '--no-ff', '-m', `Merge branch '${params.branch}' (${params.agentId})`, sourceSha],
           {
             cwd: stageDir, env: sessionEnv,
             encoding: 'utf8',
@@ -139,16 +156,24 @@ export class SpeculativeMergeTrain {
         // Check if conflicts can be AST-additively resolved!
         const unmergedOut = execFileSync(
           'git',
-          ['diff', '--name-only', '--diff-filter=U'],
+          ['diff', '--name-only', '--diff-filter=U', '-z'],
           { cwd: stageDir, env: sessionEnv, encoding: 'utf8' }
-        ).trim();
+        );
 
-        const conflictedFiles = unmergedOut.split(/\r?\n/).filter(Boolean);
+        const conflictedFiles = unmergedOut.split('\0').filter(Boolean);
         if (conflictedFiles.length === 0) {
           throw new Error(`git merge failed on branch '${params.branch}'.`);
         }
 
         for (const relFile of conflictedFiles) {
+          const stages = execFileSync('git', ['--literal-pathspecs', 'ls-files', '--unmerged', '-z', '--', relFile], {
+            cwd: stageDir, encoding: 'utf8',
+          }).split('\0').filter(Boolean).map(record => /^(\d{6}) [0-9a-f]+ ([123])\t/.exec(record));
+          const modes = stages.map(stage => stage?.[1]);
+          if (stages.length !== 3 || new Set(stages.map(stage => stage?.[2])).size !== 3
+            || !modes.every(mode => mode === modes[0] && (mode === '100644' || mode === '100755'))) {
+            throw new Error(`Merge conflict in '${relFile}': missing stages, symlink, or changed file modes require explicit resolution.`);
+          }
           const baseContent = this.readStageBlob(stageDir, 1, relFile);
           const oursContent = this.readStageBlob(stageDir, 2, relFile);
           const theirsContent = this.readStageBlob(stageDir, 3, relFile);
@@ -167,7 +192,7 @@ export class SpeculativeMergeTrain {
           }
 
           fs.writeFileSync(path.join(stageDir, relFile), check.mergedContent, 'utf8');
-          execFileSync('git', ['add', relFile], { cwd: stageDir, env: sessionEnv, stdio: 'ignore' });
+          execFileSync('git', ['--literal-pathspecs', 'add', '--', relFile], { cwd: stageDir, env: sessionEnv, stdio: 'ignore' });
           autoResolvedFiles.push(relFile);
         }
 
@@ -303,18 +328,13 @@ export class SpeculativeMergeTrain {
   }
 
   private readStageBlob(cwd: string, stage: 1 | 2 | 3, relFile: string): string {
-    try {
-      return execFileSync('git', ['show', `:${stage}:${relFile}`], {
-        cwd,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-    } catch {
-      return '';
-    }
+    return new TextDecoder('utf-8', { fatal: true }).decode(execFileSync('git', ['show', `:${stage}:${relFile}`], {
+      cwd, stdio: ['ignore', 'pipe', 'pipe'],
+    }));
   }
 
   private cleanupStageWorktree(stageDir: string): void {
+    if (!fs.existsSync(stageDir)) return;
     try {
       execFileSync('git', ['worktree', 'remove', '--force', stageDir], {
         cwd: this.coordDb.repoRoot,

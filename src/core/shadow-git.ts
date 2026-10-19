@@ -114,7 +114,7 @@ export class ShadowGitEngine {
       });
     } else if (params.modifiedFiles && params.modifiedFiles.length > 0) {
       for (const mod of params.modifiedFiles) {
-        const relPath = LockEngine.normalizePattern(targetDir, mod.filePath);
+        const relPath = LockEngine.normalizeFile(targetDir, mod.filePath);
         const absPath = path.join(targetDir, relPath);
         const content =
           mod.content ??
@@ -123,13 +123,22 @@ export class ShadowGitEngine {
         if (content === null) {
           // File was deleted
           {
-            execFileSync('git', ['update-index', '--force-remove', '--', relPath], {
+            execFileSync('git', ['--literal-pathspecs', 'update-index', '--force-remove', '--', relPath], {
               cwd: targetDir,
               env,
               stdio: 'ignore',
             });
           }
         } else {
+          const tracked = execFileSync('git', ['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', relPath], {
+            cwd: targetDir, env, encoding: 'utf8',
+          }).split('\0').find(Boolean);
+          const trackedMode = tracked?.split(' ')[0];
+          const stat = fs.existsSync(absPath) ? fs.lstatSync(absPath) : null;
+          if (trackedMode && !['100644', '100755'].includes(trackedMode) || stat?.isSymbolicLink()) {
+            throw new Error(`Cannot report symlinks or special entries as source content: ${relPath}`);
+          }
+          const mode = trackedMode ?? (stat && stat.mode & 0o111 ? '100755' : '100644');
           const blobSha = execFileSync('git', ['hash-object', '-w', '--stdin'], {
             cwd: targetDir,
             input: content,
@@ -138,7 +147,7 @@ export class ShadowGitEngine {
 
           execFileSync(
             'git',
-            ['update-index', '--add', '--cacheinfo', `100644,${blobSha},${relPath}`],
+            ['update-index', '--add', '--cacheinfo', `${mode},${blobSha},${relPath}`],
             {
               cwd: targetDir,
               env,
@@ -243,7 +252,7 @@ export class ShadowGitEngine {
     try {
       const stdout = execFileSync(
         'git',
-        ['merge-tree', '--write-tree', commitA, commitB],
+        ['merge-tree', '--write-tree', '-z', commitA, commitB],
         {
           cwd: this.coordDb.repoRoot,
           encoding: 'utf8',
@@ -251,7 +260,7 @@ export class ShadowGitEngine {
         }
       ).trim();
 
-      const mergedTreeSha = stdout.split(/\r?\n/)[0]?.trim() ?? null;
+      const mergedTreeSha = stdout.split('\0')[0]?.trim() ?? null;
       return {
         clean: true,
         mergedTreeSha,
@@ -266,15 +275,16 @@ export class ShadowGitEngine {
 
       const stageBlobsByFile = new Map<
         string,
-        { stage1?: string; stage2?: string; stage3?: string }
+        { stage1?: string; stage2?: string; stage3?: string; modes: Map<string, string> }
       >();
 
-      for (const line of stdout.split(/\r?\n/)) {
+      for (const line of stdout.split('\0')) {
         // Format: 100644 <blob-sha> <stage>\t<file-path>
-        const m = line.match(/^\d+\s+([0-9a-f]{40})\s+([123])\t(.+)$/);
+        const m = line.match(/^(\d{6}) ([0-9a-f]+) ([123])\t([\s\S]+)$/);
         if (m) {
-          const [, blobSha, stage, filePath] = m;
-          const entry = stageBlobsByFile.get(filePath) ?? {};
+          const [, mode, blobSha, stage, filePath] = m;
+          const entry = stageBlobsByFile.get(filePath) ?? { modes: new Map<string, string>() };
+          entry.modes.set(stage, mode);
           if (stage === '1') entry.stage1 = blobSha;
           if (stage === '2') entry.stage2 = blobSha;
           if (stage === '3') entry.stage3 = blobSha;
@@ -294,12 +304,12 @@ export class ShadowGitEngine {
         const contentA = stages.stage2 ? this.readGitBlob(stages.stage2) : '';
         const contentB = stages.stage3 ? this.readGitBlob(stages.stage3) : '';
 
-        const additiveCheck = AstAnalyzer.checkAdditiveMergeability(
-          filePath,
-          baseContent,
-          contentA,
-          contentB
-        );
+        const modes = [...stages.modes.values()];
+        const regular = stages.stage1 && stages.stage2 && stages.stage3 && modes.length === 3
+          && modes.every(mode => mode === modes[0] && (mode === '100644' || mode === '100755'));
+        const additiveCheck = regular
+          ? AstAnalyzer.checkAdditiveMergeability(filePath, baseContent, contentA, contentB)
+          : { autoMergeable: false, reason: 'Missing stages, symlink, or changed file modes require explicit resolution', mergedContent: undefined };
 
         const severity: ConflictRecord['severity'] = additiveCheck.autoMergeable
           ? 'auto_mergeable'
@@ -370,15 +380,9 @@ export class ShadowGitEngine {
   }
 
   private readGitBlob(blobSha: string): string {
-    try {
-      return execFileSync('git', ['cat-file', '-p', blobSha], {
-        cwd: this.coordDb.repoRoot,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-    } catch {
-      return '';
-    }
+    return new TextDecoder('utf-8', { fatal: true }).decode(execFileSync('git', ['cat-file', '-p', blobSha], {
+      cwd: this.coordDb.repoRoot, stdio: ['ignore', 'pipe', 'pipe'],
+    }));
   }
 
   public listConflicts(): ConflictRecord[] {

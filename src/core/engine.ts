@@ -80,7 +80,7 @@ export class KithEngine {
   }): PostFileEditHookResult {
     this.fencing.heartbeat(params.agentId);
     const targetRoot = params.worktreeDir ?? this.fencing.getAgent(params.agentId)?.worktree_path ?? this.coordDb.repoRoot;
-    const file = LockEngine.normalizePattern(targetRoot, params.filePath);
+    const file = LockEngine.normalizeFile(targetRoot, params.filePath);
     const access = this.locks.checkFileWriteAccess({ agentId: params.agentId, filePath: file });
     if (!access.allowed) throw new Error(access.reason);
     const content = params.content ?? (fs.existsSync(path.join(targetRoot, file)) ? fs.readFileSync(path.join(targetRoot, file), 'utf8') : '');

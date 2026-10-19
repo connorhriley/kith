@@ -122,6 +122,7 @@ async function main(): Promise<void> {
 
     if (cmd === 'status') {
       const state = {
+        repository: { root: engine.coordDb.repoRoot, commonGitDir: engine.coordDb.commonGitDir, coordDir: engine.coordDb.coordDir },
         runtime: { node: process.version, fts5: engine.coordDb.supportsFts5 },
         fencingEpoch: engine.coordDb.currentFencingEpoch(),
         agents: engine.fencing.listAgents(true),
@@ -401,7 +402,7 @@ async function main(): Promise<void> {
       }
 
       if (subCmd === 'pre-commit') {
-        const res = handler.handleGitPreCommit(agentId);
+        const res = handler.handleGitPreCommit(agentId, process.cwd());
         if (!res.allowed) {
           console.error(
             `[KITH GIT PRE-COMMIT GUARD] Cannot commit files locked by sibling agents:\n` +

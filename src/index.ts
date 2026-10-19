@@ -11,3 +11,4 @@ export * from './core/worktree-cow.js';
 export * from './core/merge-train.js';
 export * from './core/bash-guard.js';
 export * from './core/broker.js';
+export * from './core/repository.js';

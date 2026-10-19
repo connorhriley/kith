@@ -26,8 +26,8 @@ afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close()));
   fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(bin, { recursive: true, force: true });
 });
-async function connect() {
-  const transport = new StdioClientTransport({ command: process.execPath, args: [cli, 'mcp', '--repo', root], env, stderr: 'pipe' });
+async function connect(directory = root, discover = false) {
+  const transport = new StdioClientTransport({ command: process.execPath, args: [cli, 'mcp', ...(discover ? [] : ['--repo', directory])], cwd: directory, env, stderr: 'pipe' });
   transport.stderr?.on('data', () => {});
   const client = new Client({ name: 'kith-end-to-end', version: '1.0.0' }); clients.push(client);
   await client.connect(transport); return { client, transport };
@@ -261,4 +261,39 @@ it('stops a disconnected borrowed-session MCP command while preserving the origi
     expect(engine.fencing.getAgent('borrowed')?.pid).toBe(process.pid);
     expect(engine.broker.listResources().filter((r) => r.type === 'mutex')).toEqual([]);
   } finally { engine.close(); }
+});
+
+
+it('shares real MCP clients across linked checkout/subdirectory discovery and guards that checkout index', async () => {
+  seed();
+  const linked = path.join(root, '.coord/worktrees/manual');
+  git('worktree', 'add', '-b', 'manual-linked', linked);
+  const one = await connect(path.join(root, 'src'), true);
+  const two = await connect(path.join(linked, 'src'), true);
+  data(await tool(one.client, 'kith_begin_work', { agentId: 'owner', title: 'Protected base module', scopeGlobs: ['src/base.mjs'] }));
+  expect((await tool(two.client, 'kith_begin_work', { agentId: 'peer', title: 'Try conflicting scope', scopeGlobs: ['src/base.mjs'], force: true })).isError).toBe(true);
+  const begun = data(await tool(two.client, 'kith_begin_work', { agentId: 'peer', title: 'Linked route implementation', scopeGlobs: ['src/routes/**'], force: true }));
+  const file = path.join(linked, 'src/routes/[id]/route.mjs');
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'export function route() { return 1; }\n');
+  const tokenEnv = { ...env, KITH_AGENT_ID: 'peer', KITH_SESSION_TOKEN: begun.sessionToken };
+  const pre = spawnSync(process.execPath, [cli, 'hook', 'pre'], { cwd: path.join(linked, 'src'), env: tokenEnv, encoding: 'utf8',
+    input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: file } }) });
+  expect(pre.status, pre.stderr).toBe(0);
+  const post = spawnSync(process.execPath, [cli, 'hook', 'post'], { cwd: path.join(linked, 'src'), env: tokenEnv, encoding: 'utf8',
+    input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: file } }) });
+  expect(post.status, post.stderr).toBe(0);
+  const status = data(await tool(one.client, 'kith_get_status', {}));
+  expect(status.repository.root).toBe(fs.realpathSync(root));
+  expect(status.repository.coordDir).toBe(path.join(fs.realpathSync(root), '.coord'));
+  expect(status.agents.find((a: any) => a.id === 'peer').worktree_path).toBe(fs.realpathSync(linked));
+  expect(status.contracts.some((c: any) => c.file_path === 'src/routes/[id]/route.mjs')).toBe(true);
+  // Main's index is clean. Only the linked index stages a forbidden edit.
+  fs.writeFileSync(path.join(linked, 'src/base.mjs'), 'export const base = 2;\n');
+  execFileSync('git', ['add', 'src/base.mjs'], { cwd: linked, env });
+  const guard = spawnSync(process.execPath, [cli, '--repo', root, 'hook', 'pre-commit'], { cwd: linked, env: tokenEnv, encoding: 'utf8', input: '' });
+  expect(guard.status).toBe(1);
+  expect(guard.stdout + guard.stderr).toContain('owner');
+  const mainStatus = spawnSync(process.execPath, [cli, 'status'], { cwd: path.join(root, 'src'), env, encoding: 'utf8' });
+  expect(mainStatus.status).toBe(0);
+  expect(JSON.parse(mainStatus.stdout).agents.some((a: any) => a.id === 'owner')).toBe(true);
 });

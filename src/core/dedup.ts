@@ -50,7 +50,7 @@ export class SemanticDeduplicator {
     symbols: ExtractedSymbol[];
     threshold?: number;
   }): DuplicateSymbolMatch[] {
-    const relPath = LockEngine.normalizePattern(this.coordDb.repoRoot, params.filePath);
+    const relPath = LockEngine.normalizeFile(this.coordDb.repoRoot, params.filePath);
     const threshold = params.threshold ?? 0.65;
     const duplicates: DuplicateSymbolMatch[] = [];
 

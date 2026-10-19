@@ -1,3 +1,4 @@
+import { discoverRepository, isWithin, physicalPath } from '../core/repository.js';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,7 +41,7 @@ export function initializeKithRepository(
   cliBinaryCommand = 'kith',
   options: { dryRun?: boolean; integrations?: Integration[] } = {}
 ): InitReport {
-  const absRoot = path.resolve(repoRoot);
+  const absRoot = discoverRepository(repoRoot).checkoutRoot;
   const selected = new Set(options.integrations ?? INTEGRATIONS);
   for (const integration of selected) {
     if (!INTEGRATIONS.includes(integration)) throw new Error(`Unknown integration: ${integration}`);
@@ -50,6 +51,7 @@ export function initializeKithRepository(
   const warnings: string[] = [];
   const add = (name: string, content: string, mode?: number) => {
     const target = path.isAbsolute(name) ? name : path.join(absRoot, name);
+    if (!isWithin(absRoot, physicalPath(target))) throw new Error(`Configuration path leaves repository: ${name}`);
     if (!fs.existsSync(target) || fs.readFileSync(target, 'utf8') !== content) {
       plan.set(name, { content, mode });
     }

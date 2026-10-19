@@ -48,7 +48,7 @@ it('package shims resolve the real executable without recursing and preserve arg
   expect(JSON.parse(execFileSync(shim, ['--version'], { env, encoding: 'utf8', timeout: 5000 }))).toEqual(['--version']);
   const installed = JSON.parse(execFileSync(shim, ['install', 'some package'], { env, encoding: 'utf8', timeout: 5000 }));
   expect(installed.slice(-3)).toEqual(['npm', 'install', 'some package']);
-  expect(installed).toContain(root);
+  expect(installed).toContain(fs.realpathSync(root));
 });
 
 

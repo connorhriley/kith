@@ -28,7 +28,10 @@ try {
   assert.equal(run(process.execPath, [cli, 'mutex', '--agent', 'packaged-command', '--', process.execPath, '-e', 'process.stdout.write(process.argv[1])', 'literal ; argument'], install), 'literal ; argument');
   run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
-    import { KithEngine } from 'kith';
+    import { AstAnalyzer, KithEngine } from 'kith';
+    const merged = AstAnalyzer.checkAdditiveMergeability('module.ts', '', 'export function one() {}\\n', 'export function two() {}\\n');
+    assert.equal(merged.autoMergeable, true);
+    assert(merged.mergedContent.includes('function two'));
     const engine = new KithEngine(process.cwd());
     try {
       engine.fencing.registerAgent({ id: 'package-smoke' });

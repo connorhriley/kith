@@ -1,3 +1,5 @@
+import { additiveSource, assertUniqueJsonKeys } from './additive-source.js';
+import { repositoryFile } from './repository.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,10 +45,8 @@ export class AstAnalyzer {
     filePath: string,
     sourceContent?: string
   ): FileAstAnalysis {
-    const absPath = path.isAbsolute(filePath)
-      ? filePath
-      : path.join(repoRoot, filePath);
-    const relPath = path.relative(repoRoot, absPath).replace(/\\/g, '/');
+    const relPath = repositoryFile(repoRoot, filePath);
+    const absPath = path.join(repoRoot, relPath);
     const content = sourceContent ?? (fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf8') : '');
     const fileHash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
 
@@ -305,13 +305,13 @@ export class AstAnalyzer {
 
     for (const candidate of candidates) {
       if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-        return path.relative(repoRoot, candidate).replace(/\\/g, '/');
+        try { return repositoryFile(repoRoot, candidate); } catch { return null; }
       }
     }
 
     // Even if target file hasn't been flushed to disk yet, infer `.ts` relative path
     const inferred = `${baseTarget}.ts`;
-    return path.relative(repoRoot, inferred).replace(/\\/g, '/');
+    try { return repositoryFile(repoRoot, inferred); } catch { return null; }
   }
 
   /**
@@ -325,12 +325,15 @@ export class AstAnalyzer {
     contentA: string,
     contentB: string
   ): { autoMergeable: boolean; mergedContent?: string; reason: string } {
+    if ([baseContent, contentA, contentB].some(text => Buffer.byteLength(text) > 1_048_576 || text.includes('\0'))) {
+      return { autoMergeable: false, reason: 'Binary or oversized conflict requires explicit resolution' };
+    }
     // Case 1: JSON files (e.g. package.json, tsconfig.json)
     if (filePath.endsWith('.json')) {
       try {
-        const baseObj = JSON.parse(baseContent || '{}') as Record<string, unknown>;
-        const objA = JSON.parse(contentA) as Record<string, unknown>;
-        const objB = JSON.parse(contentB) as Record<string, unknown>;
+        const baseObj = AstAnalyzer.parseMergeJson(baseContent || '{}') as Record<string, unknown>;
+        const objA = AstAnalyzer.parseMergeJson(contentA) as Record<string, unknown>;
+        const objB = AstAnalyzer.parseMergeJson(contentB) as Record<string, unknown>;
         const merged = AstAnalyzer.tryAdditiveJsonMerge(baseObj, objA, objB);
         if (merged !== null) {
           return {
@@ -344,64 +347,21 @@ export class AstAnalyzer {
       }
     }
 
-    // Case 2: Source files where both agents preserved all base lines/exports and added disjoint symbols
-    const baseExports = new Map(
-      AstAnalyzer.extractExports(baseContent).map((e) => [e.symbolName, e.astHash])
-    );
-    const exportsA = new Map(
-      AstAnalyzer.extractExports(contentA).map((e) => [e.symbolName, e.astHash])
-    );
-    const exportsB = new Map(
-      AstAnalyzer.extractExports(contentB).map((e) => [e.symbolName, e.astHash])
-    );
+    if (filePath.endsWith('.json')) return { autoMergeable: false, reason: 'JSON changes are not strictly additive objects' };
+    return additiveSource(filePath, baseContent, contentA, contentB);
+  }
 
-    if (exportsA.size === 0 && exportsB.size === 0) {
-      return { autoMergeable: false, reason: 'No AST export structure to verify additive merge' };
-    }
-
-    // Ensure neither agent deleted or mutated a base export in incompatible ways
-    for (const [sym, baseHash] of baseExports.entries()) {
-      const hashA = exportsA.get(sym);
-      const hashB = exportsB.get(sym);
-      if (!hashA || !hashB) {
-        return { autoMergeable: false, reason: `Base symbol '${sym}' was removed by one agent` };
+  private static parseMergeJson(text: string): unknown {
+    // JSON.parse deliberately accepts duplicate keys and rounds large integers.
+    // Neither transformation is appropriate during conflict resolution.
+    const value: unknown = JSON.parse(text, (_key, child: unknown) => {
+      if (typeof child === 'number' && (Object.is(child, -0) || !Number.isFinite(child) || Number.isInteger(child) && !Number.isSafeInteger(child))) {
+        throw new Error('JSON number would lose precision');
       }
-      if (hashA !== baseHash && hashB !== baseHash && hashA !== hashB) {
-        return {
-          autoMergeable: false,
-          reason: `Both agents modified symbol '${sym}' with conflicting signatures`,
-        };
-      }
-    }
-
-    // Ensure newly added symbols by A and B are disjoint
-    const addedByA = Array.from(exportsA.keys()).filter((k) => !baseExports.has(k));
-    const addedByB = Array.from(exportsB.keys()).filter((k) => !baseExports.has(k));
-
-    if (addedByA.length === 0 || addedByB.length === 0) {
-      return { autoMergeable: false, reason: 'Modifications touch shared implementation body' };
-    }
-
-    for (const sym of addedByA) {
-      if (exportsB.has(sym)) {
-        return {
-          autoMergeable: false,
-          reason: `Both agents added conflicting definitions for symbol '${sym}'`,
-        };
-      }
-    }
-
-    // Export fingerprints do not prove that existing implementations were preserved.
-    // Only accept exact append-only content, and retain complete appended blocks.
-    if (!contentA.startsWith(baseContent) || !contentB.startsWith(baseContent)) {
-      return { autoMergeable: false, reason: 'Source edits are not strictly append-only' };
-    }
-    const mergedContent = contentA.trimEnd() + '\n' + contentB.slice(baseContent.length) + '\n';
-    return {
-      autoMergeable: true,
-      mergedContent,
-      reason: `Disjoint additive exports (${addedByA.join(', ')} + ${addedByB.join(', ')})`,
-    };
+      return child;
+    });
+    assertUniqueJsonKeys(text);
+    return value;
   }
 
   private static tryAdditiveJsonMerge(

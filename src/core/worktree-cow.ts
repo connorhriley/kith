@@ -1,3 +1,4 @@
+import { physicalPath } from './repository.js';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -134,6 +135,11 @@ export class CoWWorktreeManager {
     const worktreePath = path.join(this.coordDb.coordDir, 'worktrees', safeId);
 
     if (!fs.existsSync(worktreePath)) return false;
+    const registered = this.fencing.getAgent(agentId)?.worktree_path;
+    if (!registered || physicalPath(registered) !== physicalPath(worktreePath)
+      || this.fencing.listAgents(true).some(agent => agent.id !== agentId && agent.worktree_path && physicalPath(agent.worktree_path) === physicalPath(worktreePath))) {
+      throw new Error('Refusing to remove a worktree that is not exclusively registered to this agent.');
+    }
     const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=normal', '--ignored=matching'], {
       cwd: worktreePath, encoding: 'utf8',
     });

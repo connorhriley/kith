@@ -167,7 +167,7 @@ export class IntentAndTaskEngine {
 
       const now = Date.now();
       const normGlobs = params.scopeGlobs.map((g) =>
-        LockEngine.normalizePattern(this.coordDb.repoRoot, g)
+        LockEngine.normalizePattern(this.fencing.getAgent(params.agentId)?.worktree_path ?? this.coordDb.repoRoot, g)
       );
 
       this.coordDb.db

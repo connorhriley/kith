@@ -2,6 +2,11 @@
 
 ## Unreleased — native clients and hosted checks
 
+- Share coordination automatically across Git subdirectories, symlink aliases, linked checkouts and separate Git directories. Preserve selected-checkout Git operations, register linked session roots, inspect the invoking pre-commit index and refuse orphaned legacy checkout-local state.
+- Resolve physical paths before containment checks, reject external/dangling/looping symlinks and redirected coordination/configuration writes, skip source symlinks/nested repositories, and support literal framework route filenames.
+- Replace sample-based glob overlap with exact intersection of a documented grammar (`*`, `?`, whole-segment `**`, including dotfiles). Reject unsupported requests; retain exclusion for legacy scopes, wildcard aliases and changed symlink layouts.
+- Resolve source conflicts with a lazily loaded TypeScript parser and a narrow appended-declaration policy. Keep imports, initialization, top-level execution, binding collisions, invalid syntax and ambiguous Git stages/modes as conflicts. Preserve executable modes and NUL-delimited Git filenames; reject duplicate/lossy JSON values.
+
 - Fix startup on stock Node 22.13.0, which lacks SQLite FTS5. Detect optional full-text support, retain normal contract/name/type hints without it, and rebuild the derived index safely when switching runtimes. Expose runtime capabilities in CLI/MCP status.
 
 - Add `kith_run_with_mutex` for sandboxed MCP clients unable to inspect process identities in their native shell. Preserve ownership, renewable supervision and actual exit codes; cancel commands on request cancellation or connection loss before closing coordination state. Translate stdio EOF into graceful cancellation; the MCP SDK alone does not emit a close callback for stdin EOF. Commands run with server permissions and need client approval.

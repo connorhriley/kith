@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
-import picomatch from 'picomatch';
+import { scopeSegments, scopesOverlap } from './glob.js';
+import { caseSensitivePaths, isWithin, physicalPath, repositoryFile } from './repository.js';
 import { CoordDatabase } from './db.js';
 import { FencingAndAgentManager, StaleFencingTokenError } from './fencing.js';
 
@@ -32,113 +34,102 @@ export interface AcquireLockResult {
 }
 
 export class LockEngine {
+  private readonly pathCase = new Map<string, boolean>();
   constructor(
     private readonly coordDb: CoordDatabase,
     private readonly fencing: FencingAndAgentManager
   ) {}
 
   public static normalizePattern(repoRoot: string, rawPattern: string): string {
-    let p = rawPattern.trim().replace(/\\/g, '/');
-    if (p.startsWith('symbol:')) {
-      const hash = p.indexOf('#');
-      if (hash < 0) throw new Error('Symbol scope must include #symbolName');
-      return `symbol:${LockEngine.normalizePattern(repoRoot, p.slice(7, hash))}${p.slice(hash)}`;
+    if (rawPattern.startsWith('file:')) return LockEngine.literalScope(LockEngine.normalizeFile(repoRoot, rawPattern.slice(5)));
+    if (rawPattern.startsWith('symbol:')) {
+      const hash = rawPattern.indexOf('#');
+      const name = rawPattern.slice(hash + 1);
+      if (hash < 0 || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) throw new Error('Symbol scope must include #symbolName');
+      const file = LockEngine.normalizeFile(repoRoot, rawPattern.slice(7, hash));
+      return `symbol:${file}#${name}`;
     }
-    const normRoot = path.resolve(repoRoot).replace(/\\/g, '/').replace(/\/+$/, '');
-    if (p.startsWith(normRoot + '/')) p = p.slice(normRoot.length + 1);
-    else if (path.posix.isAbsolute(p)) throw new Error(`Scope is outside repository: ${rawPattern}`);
-    p = path.posix.normalize(p);
-    if (!p || p === '.' || p === '..' || p.startsWith('../')) {
-      throw new Error(`Invalid repository scope: ${rawPattern}`);
-    }
-    return p;
+    if (!rawPattern || /[\\\x00-\x1f\x7f]/u.test(rawPattern)) throw new Error(`Invalid repository scope: ${rawPattern}`);
+    const root = physicalPath(repoRoot);
+    const parts = rawPattern.split('/');
+    const magic = parts.findIndex(p => /[?*]/u.test(p));
+    // Resolve the literal prefix before normalizing .., so symlink/.. cannot escape.
+    const prefix = magic < 0 ? rawPattern : parts.slice(0, magic).join('/') || '.';
+    const absolute = physicalPath(path.isAbsolute(prefix) ? prefix : root + '/' + prefix);
+    if (!isWithin(root, absolute)) throw new Error(`Scope is outside repository: ${rawPattern}`);
+    const relative = path.relative(root, absolute).split(path.sep).join('/');
+    const suffix = magic < 0 ? '' : parts.slice(magic).join('/');
+    const normalized = [relative, suffix].filter(Boolean).join('/');
+    scopeSegments(normalized);
+    return normalized;
   }
 
-  /**
-   * Determines whether two file paths or glob patterns can match any common file.
-   * Handles concrete-to-glob, glob-to-concrete, and glob-to-glob intersections.
-   */
-  public static patternsOverlap(rawA: string, rawB: string): boolean {
-    const a = rawA.replace(/\\/g, '/').replace(/^\.\//, '');
-    const b = rawB.replace(/\\/g, '/').replace(/^\.\//, '');
+  public static normalizeFile(repoRoot: string, file: string): string {
+    const normalized = repositoryFile(repoRoot, file);
+    scopeSegments(normalized, true);
+    return normalized;
+  }
 
-    if (a === b) return true;
-
-    // Symbol locks (`symbol:src/auth.ts#verifyToken`)
-    if (a.startsWith('symbol:') || b.startsWith('symbol:')) {
-      if (a.startsWith('symbol:') && b.startsWith('symbol:')) {
-        return a === b;
-      }
-      const symFile = (a.startsWith('symbol:') ? a : b).slice('symbol:'.length).split('#')[0];
-      const otherPattern = a.startsWith('symbol:') ? b : a;
-      return LockEngine.patternsOverlap(symFile, otherPattern);
-    }
-
+  private static literalScope(file: string): string {
     try {
-      if (picomatch.isMatch(a, b) || picomatch.isMatch(b, a)) {
-        return true;
-      }
-    } catch {
-      // Fallback to segment intersection below
-    }
+      scopeSegments(file);
+      if (!/[?*]/u.test(file) && !file.startsWith('symbol:') && !file.startsWith('file:')) return file;
+    } catch { /* Explicit literal scopes support filenames containing reserved glob syntax. */ }
+    return 'file:' + file;
+  }
 
-    // Generate concrete sample paths from each pattern and test against the other
-    const samplesA = LockEngine.generateSamplePaths(a);
-    const samplesB = LockEngine.generateSamplePaths(b);
+  private rootForAgent(agentId: string): string {
+    return this.fencing.getAgent(agentId)?.worktree_path ?? this.coordDb.repoRoot;
+  }
 
-    try {
-      const matchA = picomatch(a);
-      const matchB = picomatch(b);
-      for (const sA of samplesA) {
-        if (matchB(sA)) return true;
-      }
-      for (const sB of samplesB) {
-        if (matchA(sB)) return true;
-      }
-    } catch {
-      // Ignore regex errors
-    }
-
-    // Segment-by-segment prefix intersection check
-    const segsA = a.split('/');
-    const segsB = b.split('/');
-    const minLen = Math.min(segsA.length, segsB.length);
-
-    for (let i = 0; i < minLen; i++) {
-      const sa = segsA[i];
-      const sb = segsB[i];
-      if (sa === '**' || sb === '**') {
-        return true;
-      }
-      if (sa === sb) continue;
-      const segOverlap =
-        picomatch.isMatch(sa.replace(/\*/g, 'x'), sb) ||
-        picomatch.isMatch(sb.replace(/\*/g, 'x'), sa);
-      if (!segOverlap) {
-        return false;
+  // A wildcard can traverse an alias that maps to a different scope. If exact
+  // lexical comparison was disjoint, retain exclusion when such aliases exist.
+  private wildcardHasAliases(pattern: string): boolean {
+    if (pattern.startsWith('symbol:') || pattern.startsWith('file:')) return false;
+    const segments = scopeSegments(pattern);
+    const first = segments.findIndex(s => /[?*]/u.test(s));
+    if (first < 0) return false;
+    const prefix = segments.slice(0, first).join('/');
+    const roots = new Set([this.coordDb.repoRoot, ...this.fencing.listAgents(true).map(a => a.worktree_path).filter((p): p is string => Boolean(p))]);
+    const pending = [...roots].map(root => ({ root, relative: prefix }));
+    let budget = 10_000;
+    while (pending.length) {
+      const { root, relative } = pending.pop()!;
+      const dir = path.join(root, relative);
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; return true; }
+      for (const entry of entries) {
+        if (--budget < 0) return true;
+        const file = relative ? relative + '/' + entry.name : entry.name;
+        if (entry.isSymbolicLink()) return true;
+        const fold = (value: string) => value.normalize('NFC').toLowerCase().replace(/ς/g, 'σ');
+        if (!LockEngine.patternsOverlap(fold(pattern), fold(file)) && !LockEngine.patternsOverlap(fold(pattern), fold(file + '/**'))) continue;
+        if (entry.isDirectory()) pending.push({ root, relative: file });
       }
     }
-
     return false;
   }
 
-  private static generateSamplePaths(pattern: string): string[] {
-    const base = pattern
-      .replace(/\/\*\*\/?/g, '/nested/dir/')
-      .replace(/\*\*/g, 'nested/dir')
-      .replace(/\*\.([a-zA-Z0-9]+)/g, 'sample.$1')
-      .replace(/\*/g, 'sample')
-      .replace(/\?/g, 'a')
-      .replace(/\{([^,}]+),[^}]*\}/g, '$1');
-
-    const shallow = pattern
-      .replace(/\/\*\*\//g, '/')
-      .replace(/\/\*\*$/g, '/file.ts')
-      .replace(/\*\*/g, 'file.ts')
-      .replace(/\*\.([a-zA-Z0-9]+)/g, 'sample.$1')
-      .replace(/\*/g, 'sample');
-
-    return [base, shallow, `${base}/index.ts`, `${shallow}.ts`];
+  /** Exact overlap for the documented scope grammar; legacy unsupported locks block conservatively. */
+  public static patternsOverlap(rawA: string, rawB: string): boolean {
+    const decode = (value: string) => {
+      if (value.startsWith('symbol:')) {
+        const match = /^symbol:(.+)#([A-Za-z_$][A-Za-z0-9_$]*)$/.exec(value);
+        if (!match) throw new Error('Invalid symbol scope');
+        scopeSegments(match[1], true);
+        return { file: match[1], symbol: match[2], literal: true };
+      }
+      const literal = value.startsWith('file:');
+      const file = literal ? value.slice(5) : value;
+      scopeSegments(file, literal);
+      return { file, symbol: null, literal };
+    };
+    try {
+      const a = decode(rawA), b = decode(rawB);
+      if (a.symbol && b.symbol) return a.file === b.file && a.symbol === b.symbol;
+      return scopesOverlap(a.file, b.file, a.literal, b.literal);
+    } catch { return true; }
   }
 
   /**
@@ -161,7 +152,7 @@ export class LockEngine {
     const now = Date.now();
     const expiresAt = now + (params.leaseDurationMs ?? FencingAndAgentManager.DEFAULT_LEASE_MS);
     const normalizedPatterns = Array.from(
-      new Set(params.patterns.map((p) => LockEngine.normalizePattern(this.coordDb.repoRoot, p)))
+      new Set(params.patterns.map((p) => LockEngine.normalizePattern(this.rootForAgent(params.agentId), lockType === 'file' && !p.startsWith('file:') ? 'file:' + p : p)))
     );
 
     return this.coordDb.withTransaction(() => {
@@ -182,7 +173,7 @@ export class LockEngine {
             continue;
           }
 
-          if (LockEngine.patternsOverlap(reqPattern, existing.pattern)) {
+          if (this.overlapsExisting(reqPattern, existing.pattern)) {
             const owner = this.fencing.getAgent(existing.owner_agent_id);
             const activeTask = this.coordDb.db
               .prepare(
@@ -226,7 +217,7 @@ export class LockEngine {
           .run(params.agentId, pattern);
 
         const id = `lock_${crypto.randomBytes(6).toString('hex')}`;
-        const inferredType = pattern.startsWith('symbol:')
+        const inferredType = pattern.startsWith('file:') ? 'file' : pattern.startsWith('symbol:')
           ? 'symbol'
           : pattern.includes('*') || pattern.includes('?') || pattern.includes('{')
             ? 'glob'
@@ -299,7 +290,8 @@ export class LockEngine {
   } {
     this.fencing.reapDeadAgents();
     this.fencing.assertSession(params.agentId);
-    const normPath = LockEngine.normalizePattern(this.coordDb.repoRoot, params.filePath);
+    const normPath = LockEngine.normalizeFile(this.rootForAgent(params.agentId), params.filePath);
+    const requested = LockEngine.literalScope(normPath);
     const now = Date.now();
 
     const activeLocks = this.coordDb.db
@@ -307,7 +299,7 @@ export class LockEngine {
       .all(now) as unknown as LockRecord[];
 
     for (const lock of activeLocks) {
-      if (LockEngine.patternsOverlap(normPath, lock.pattern)) {
+      if (this.overlapsExisting(requested, lock.pattern)) {
         if (lock.owner_agent_id !== params.agentId) {
           const activeTask = this.coordDb.db
             .prepare(
@@ -348,7 +340,7 @@ export class LockEngine {
           if (
             !params.patterns ||
             params.patterns.some(
-              (p) => LockEngine.normalizePattern(this.coordDb.repoRoot, p) === lock.pattern
+              (p) => LockEngine.normalizePattern(this.rootForAgent(params.agentId), p) === lock.pattern
             )
           ) {
             this.fencing.verifyFencingToken(lock.pattern, params.fencingToken, lock.fencing_token);
@@ -365,7 +357,7 @@ export class LockEngine {
 
       let count = 0;
       for (const rawPattern of params.patterns) {
-        const norm = LockEngine.normalizePattern(this.coordDb.repoRoot, rawPattern);
+        const norm = LockEngine.normalizePattern(this.rootForAgent(params.agentId), rawPattern);
         const res = this.coordDb.db
           .prepare(`DELETE FROM locks WHERE owner_agent_id = ? AND pattern = ?`)
           .run(params.agentId, norm);
@@ -373,6 +365,27 @@ export class LockEngine {
       }
       return count;
     });
+  }
+
+  private overlapsExisting(requested: string, existing: string): boolean {
+    try {
+      const normalized = LockEngine.normalizePattern(this.coordDb.repoRoot, existing);
+      const roots = [this.coordDb.repoRoot, ...this.fencing.listAgents(true).map(a => a.worktree_path).filter((p): p is string => Boolean(p))];
+      const insensitive = roots.some(root => {
+        if (!this.pathCase.has(root)) this.pathCase.set(root, caseSensitivePaths(root));
+        return !this.pathCase.get(root);
+      });
+      const fold = (scope: string) => {
+        const hash = scope.startsWith('symbol:') ? scope.lastIndexOf('#') : -1;
+        const file = hash < 0 ? scope : scope.slice(0, hash);
+        return file.normalize('NFC').toLowerCase().replace(/ς/g, 'σ') + (hash < 0 ? '' : scope.slice(hash));
+      };
+      const overlap = (a: string, b: string) => LockEngine.patternsOverlap(a, b)
+        || insensitive && LockEngine.patternsOverlap(fold(a), fold(b));
+      return overlap(requested, existing) || overlap(requested, normalized)
+        || this.wildcardHasAliases(requested) || this.wildcardHasAliases(normalized);
+    }
+    catch { return true; }
   }
 
   public listLocks(): LockRecord[] {

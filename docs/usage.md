@@ -13,7 +13,7 @@ kith complete --agent auth-worker
 unset KITH_AGENT_ID KITH_SESSION_TOKEN
 ```
 
-A second agent requesting an overlapping exclusive scope receives a conflict and a nonzero exit status. Quote globs so the shell does not expand them. Scopes are comma-separated. Leases default to five minutes; heartbeat during longer sessions. Dead or expired sessions release coordination resources when another operation runs the reaper. Active supervised command guards survive expiry until the command group stops. See [sessions and mutexes](sessions-and-mutexes.md) for ownership, cancellation, and upgrade details.
+A second agent requesting an overlapping exclusive scope receives a conflict and a nonzero exit status. Quote globs so the shell does not expand them. Scopes are comma-separated. Use `file:src/routes/[id]/page.tsx` for a literal filename containing glob syntax; see [scope grammar and discovery](path-and-scope-rules.md). Leases default to five minutes; heartbeat during longer sessions. Dead or expired sessions release coordination resources when another operation runs the reaper. Active supervised command guards survive expiry until the command group stops. See [sessions and mutexes](sessions-and-mutexes.md) for ownership, cancellation, and upgrade details.
 
 For stronger filesystem separation, use a worktree:
 
@@ -29,7 +29,7 @@ kith session end
 unset KITH_AGENT_ID KITH_SESSION_TOKEN
 ```
 
-Completion checkpoints uncommitted worktree changes and integrates into the branch currently checked out in the main repository. The target must be clean. A verification failure leaves the target unchanged and the worktree available for repair. Successful completion also keeps the worktree for inspection; removal is explicit and refuses dirty, untracked, or ignored work. Existing branches are never reset to create a worktree. Hydration tries filesystem clones and falls back to an independent copy; cost depends on the filesystem and dependency size.
+Completion checkpoints uncommitted worktree changes and integrates into the branch currently checked out in the selected repository checkout (`--repo` when supplied). The target must be clean. A verification failure leaves the target unchanged and the worktree available for repair. Successful completion also keeps the worktree for inspection; removal is explicit and refuses dirty, untracked, or ignored work. Existing branches are never reset to create a worktree. Hydration tries filesystem clones and falls back to an independent copy; cost depends on the filesystem and dependency size.
 
 A verification command is optional. Without one, integration checks Git mergeability only. Choose a command that actually checks your project.
 

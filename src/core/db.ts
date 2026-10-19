@@ -2,6 +2,7 @@ import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
+import { discoverRepository, isWithin, physicalPath } from './repository.js';
 import { tokenizeIdentifier } from './identifier-tokens.js';
 
 const require = createRequire(import.meta.url);
@@ -21,20 +22,33 @@ export class CoordDatabase {
   public readonly db: DatabaseSyncType;
   public readonly supportsFts5: boolean;
   public readonly repoRoot: string;
+  public readonly commonGitDir: string | null;
+  public readonly isLinkedWorktree: boolean;
   public readonly coordDir: string;
   public readonly dbPath: string;
   private inTransaction = false;
 
   constructor(repoRoot: string, customDbPath?: string) {
-    this.repoRoot = path.resolve(repoRoot);
-    this.coordDir = path.join(this.repoRoot, '.coord');
+    const layout = discoverRepository(repoRoot);
+    this.repoRoot = layout.checkoutRoot;
+    this.commonGitDir = layout.commonGitDir;
+    this.isLinkedWorktree = layout.isLinkedWorktree;
+    if (layout.coordDir !== path.join(this.repoRoot, '.coord') && fs.existsSync(path.join(this.repoRoot, '.coord', 'state.db'))) {
+      throw new Error('Legacy checkout-local coordination state found. Stop clients and preserve that .coord directory before consolidating shared state.');
+    }
+    this.coordDir = layout.coordDir;
+    if (physicalPath(this.coordDir) !== this.coordDir) throw new Error('Coordination directory must not be a symlink');
     fs.mkdirSync(this.coordDir, { recursive: true, mode: 0o700 });
-    fs.mkdirSync(path.join(this.coordDir, 'shadow-index'), { recursive: true });
-    fs.mkdirSync(path.join(this.coordDir, 'quarantine'), { recursive: true });
-    fs.mkdirSync(path.join(this.coordDir, 'snapshots'), { recursive: true });
-    fs.mkdirSync(path.join(this.coordDir, 'worktrees'), { recursive: true });
+    for (const name of ['shadow-index', 'quarantine', 'snapshots', 'worktrees']) {
+      const target = path.join(this.coordDir, name);
+      if (!isWithin(this.coordDir, physicalPath(target)) || physicalPath(target) !== target) {
+        throw new Error(`Coordination subdirectory must not be a symlink: ${name}`);
+      }
+      fs.mkdirSync(target, { recursive: true });
+    }
 
     this.dbPath = customDbPath ?? path.join(this.coordDir, 'state.db');
+    if (!customDbPath && physicalPath(this.dbPath) !== this.dbPath) throw new Error('Coordination database must not be a symlink');
     this.db = new DatabaseSync(this.dbPath);
 
     try {

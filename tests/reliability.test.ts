@@ -195,7 +195,7 @@ it('does not integrate when verification overlaps external target edits', () => 
 
 it('normalizes lexical path aliases and rejects scopes outside the repository', () => {
   expect(LockEngine.normalizePattern(root, 'src/../locked.ts')).toBe('locked.ts');
-  expect(() => LockEngine.normalizePattern(root, '../outside.ts')).toThrow('scope');
+  expect(() => LockEngine.normalizePattern(root, '../outside.ts')).toThrow(/scope/i);
   expect(() => LockEngine.normalizePattern(root, '/outside/file.ts')).toThrow('outside');
 });
 
@@ -261,7 +261,7 @@ it('appends valid Codex project settings without rewriting comments or unrelated
   const content = fs.readFileSync(file, 'utf8');
   expect(content.startsWith(original)).toBe(true);
   const config = parseToml(content) as any;
-  expect(config.mcp_servers.kith.args).toEqual(['mcp', '--repo', root]);
+  expect(config.mcp_servers.kith.args).toEqual(['mcp', '--repo', fs.realpathSync(root)]);
   expect(config.mcp_servers.kith.env_vars).toEqual(['KITH_AGENT_ID', 'KITH_SESSION_TOKEN']);
   expect(config.mcp_servers.other.command).toBe('other');
   expect(initializeKithRepository(root, 'kith', { integrations: ['codex'] }).configuredFiles).toEqual([]);

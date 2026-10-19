@@ -1,3 +1,4 @@
+import { discoverRepository } from '../core/repository.js';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { LockEngine } from '../core/locks.js';
@@ -45,7 +46,7 @@ export class HookHandler {
 
     const agent = this.engine.fencing.getAgent(params.agentId);
     if (params.filePath && agent?.worktree_path) {
-      params = { ...params, filePath: LockEngine.normalizePattern(agent.worktree_path, params.filePath) };
+      params = { ...params, filePath: LockEngine.normalizeFile(agent.worktree_path, params.filePath) };
     }
     const tool = params.toolName.toLowerCase();
 
@@ -126,7 +127,7 @@ export class HookHandler {
   }): { allowed: boolean; exitCode: number; warnings: string[]; deltaFooter: string } {
     const agent = this.engine.fencing.getAgent(params.agentId);
     if (params.filePath && agent?.worktree_path) {
-      params = { ...params, filePath: LockEngine.normalizePattern(agent.worktree_path, params.filePath) };
+      params = { ...params, filePath: LockEngine.normalizeFile(agent.worktree_path, params.filePath) };
     }
     const tool = params.toolName.toLowerCase();
     const warnings: string[] = [];
@@ -178,17 +179,19 @@ export class HookHandler {
   /**
    * Git `pre-commit` hook handler: ensures none of the staged files are locked by another live agent.
    */
-  public handleGitPreCommit(agentId: string): {
+  public handleGitPreCommit(agentId: string, indexCwd = this.engine.fencing.getAgent(agentId)?.worktree_path ?? this.engine.coordDb.repoRoot): {
     allowed: boolean;
     exitCode: number;
     violations: string[];
   } {
     let stagedFiles: string[] = [];
     try {
+      const layout = discoverRepository(indexCwd);
+      if (!layout.commonGitDir || layout.commonGitDir !== this.engine.coordDb.commonGitDir) throw new Error('Git index belongs to a different repository');
       const out = execFileSync(
         'git',
         ['diff', '--cached', '--name-only', '-z'],
-        { cwd: this.engine.coordDb.repoRoot, encoding: 'utf8' }
+        { cwd: layout.checkoutRoot, encoding: 'utf8' }
       );
       stagedFiles = out.split('\0').filter(Boolean);
     } catch {

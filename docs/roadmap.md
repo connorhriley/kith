@@ -14,12 +14,12 @@ Capability-owned session generations now protect agent-scoped mutation boundarie
 
 These gates are covered locally. Version-specific native Codex and Claude CLI runs are recorded in [client validation](client-validation.md). Other releases, GUI discovery, and persisted project trust need separate validation.
 
-## 3. Remaining correctness gaps — next
+## 3. Path, scope and merge hardening — implemented; recovery next
 
-- Replace heuristic glob intersections with a specified supported grammar and property/adversarial tests. Gate: no missed intersections in the supported grammar.
+- Exact scope-language intersection for literals, `*`, `?` and whole-segment `**`, with generated witness checks, dotfile coverage, explicit literal-file scopes and conservative handling of legacy unsupported scopes.
 - Redesign shared-tree Bash attribution before considering automatic restoration as a default. Gate: sibling edits cannot be reverted by another agent's post-hook.
-- Centralize repository/common-Git-directory discovery and path containment, including symlinks. Gate: clients launched from subdirectories and linked worktrees use the intended shared state.
-- Make additive merge classification conservative for imports, top-level side effects, JSON removals, unsupported syntax, and file modes. Gate: ambiguous cases remain conflicts.
+- Shared common-Git-directory discovery from roots, subdirectories, linked worktrees, symlink aliases and separate Git directories; physical containment, external-link refusal, literal framework paths and invoking-index Git guards have regression coverage.
+- Parsed append-only declaration resolution rejects imports, initializers, top-level execution, name collisions, cross-branch bindings, unsupported syntax, lossy JSON and ambiguous Git stages/modes. Actual Git conflicts cover symlink refusal and unusual filenames.
 - Add robust schema migrations and backup/recovery tests. Gate: supported upgrades preserve state or fail without modifying it.
 
 ## 4. Broaden integration validation

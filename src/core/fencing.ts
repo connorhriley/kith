@@ -107,11 +107,12 @@ export class FencingAndAgentManager {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'active', ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET name=excluded.name, client=excluded.client, pid=excluded.pid,
           pid_start_time=excluded.pid_start_time, pgid=excluded.pgid, status='active',
+          worktree_path=COALESCE(agents.worktree_path, excluded.worktree_path),
           shadow_tree_sha=NULL, last_seen_event_id=excluded.last_seen_event_id,
           registered_at=excluded.registered_at, last_heartbeat_at=excluded.last_heartbeat_at,
           lease_expires_at=excluded.lease_expires_at
       `).run(params.id, params.name ?? existing?.name ?? params.id, params.client ?? 'unknown',
-        pid, start, params.pgid ?? pid, params.worktreePath ?? null, params.branch ?? null,
+        pid, start, params.pgid ?? pid, params.worktreePath ?? (this.coordDb.isLinkedWorktree ? this.coordDb.repoRoot : null), params.branch ?? null,
         latest, now, now, now + leaseMs);
       this.coordDb.db.prepare('INSERT OR REPLACE INTO agent_sessions(agent_id, token_hash, epoch) VALUES (?, ?, ?)')
         .run(params.id, this.hash(token), epoch);

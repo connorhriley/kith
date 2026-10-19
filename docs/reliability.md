@@ -1,6 +1,6 @@
 # Reliability contract and recovery
 
-Kith is a cooperative local coordinator. It does not provide an OS sandbox, distributed consensus, or proof that two changes are semantically compatible. Source analysis and glob intersections are heuristic. Earlier prototype claims about deterministic prevention, zero disk cost, and fixed millisecond bounds were not supported by benchmarks.
+Kith is a cooperative local coordinator. It does not provide an OS sandbox, distributed consensus, or proof that two changes are semantically compatible. Contract analysis is advisory. Scope intersection is exact within the documented grammar; unsupported scopes are rejected. Earlier prototype claims about deterministic prevention, zero disk cost, and fixed millisecond bounds were not supported by benchmarks.
 
 ## Behavior covered by regression tests
 
@@ -9,7 +9,7 @@ Kith is a cooperative local coordinator. It does not provide an OS sandbox, dist
 - Setup previews without writes, preserves unrelated JSON settings, and rejects malformed config before writing selected configuration.
 - Worktree creation refuses an existing path or branch; removal refuses local, untracked, or ignored changes.
 - Integration refuses a dirty target and concurrent Kith integrations; verification failures preserve the target.
-- Additive merges preserve complete appended blocks and reject base JSON deletions/modifications.
+- Conflict resolution accepts only parsed, disjoint appended named declarations or lossless additive JSON objects. Imports, initializers, executable top-level additions, binding collisions, missing Git stages and changed/symlink modes remain conflicts.
 - Shadow-tree deletions reach Git; invalid merge inputs surface errors.
 - Bash recovery preserves current workspace bytes by default and saves before/after copies.
 - Event pagination does not acknowledge unseen events.
@@ -51,3 +51,8 @@ The SQLite implementation requires Node's unflagged SQLite API: [Node SQLite doc
 Node 22.13.0 makes `node:sqlite` available without a flag, but its stock SQLite build has no FTS5 module. Kith detects available modules per connection. Contracts, dependency reports, name/type duplicate hints, tasks, locks and supervised commands work without FTS5; only the optional full-text similarity boost is absent. CLI/MCP status exposes `runtime.node` and `runtime.fts5`.
 
 The contracts table remains authoritative. A runtime without FTS5 leaves any existing virtual index intact and marks it dirty when contracts change. A capable runtime rebuilds that derived index transactionally, including updates and deletions, before using it again. No session or workspace reset is needed when switching supported runtimes. This is not a database backup or repair mechanism for corrupted state.
+
+
+## Paths, scopes and merge boundaries
+
+See [path and scope rules](path-and-scope-rules.md) for repository discovery, literal route filenames, supported glob grammar, symlink handling and conservative resolution. These checks assume cooperating writers: a process replacing filesystem links between a check and a write can race path checks. Hardlink aliases and a hostile filesystem writer are outside the containment boundary. Git itself can merge non-conflicting edits without Kith's conflict resolver; project verification still determines whether that combined change works.
