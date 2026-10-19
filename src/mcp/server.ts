@@ -11,25 +11,58 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
   const server = new McpServer({
     name: 'kith-coordinator',
     version: '1.0.0',
+  }, { instructions: process.env.KITH_AGENT_ID
+    ? `This server shares a session with CLI/hooks. Use agentId '${process.env.KITH_AGENT_ID}'. Its inherited capability is handled internally; do not request or log it.`
+    : 'Start with kith_begin_work or kith_start_session and a unique agentId. This connection retains its granted capability. Another connection needs the session token to resume that ID. Keep tokens private.'
   });
+
+  const tokenFor = (args: { agentId: string; sessionToken?: string }) => args.sessionToken ??
+    (process.env.KITH_AGENT_ID === args.agentId ? process.env.KITH_SESSION_TOKEN : undefined);
+  const owned = new Set<string>();
+  const register = (args: { agentId: string; client?: string; sessionToken?: string; leaseDurationMs?: number }) => {
+    const result = engine.fencing.registerAgent({ id: args.agentId, client: args.client ?? 'mcp',
+      sessionToken: tokenFor(args), leaseDurationMs: args.leaseDurationMs });
+    if (result.agent.pid === process.pid) owned.add(args.agentId);
+    return result;
+  };
+  const authorize = (args: { agentId: string; sessionToken?: string }) => {
+    const token = tokenFor(args);
+    if (token) engine.fencing.resumeSession(args.agentId, token);
+    engine.fencing.heartbeat(args.agentId);
+  };
+  server.server.onclose = () => {
+    for (const id of owned) {
+      try { engine.fencing.abandonAgentSession(id); } catch { /* Expired or already completed. */ }
+    }
+    engine.close();
+  };
 
   const formatReply = (agentId: string | undefined, payload: unknown) => {
     const delta = agentId ? engine.consumeAgentDelta(agentId).formattedFooter : '';
+    const data = payload as Record<string, unknown>;
     return {
       content: [
-        {
-          type: 'text' as const,
-          text: JSON.stringify(payload, null, 2) + delta,
-        },
+        { type: 'text' as const, text: JSON.stringify(data, null, 2) },
+        ...(delta ? [{ type: 'text' as const, text: delta }] : []),
       ],
+      structuredContent: data,
+      isError: data.ok === false,
     };
   };
+
+  server.tool('kith_start_session', 'Create a capability-owned session or resume one with its token.', {
+    agentId: z.string(), sessionToken: z.string().optional(), leaseDurationMs: z.number().optional(),
+  }, async (args) => formatReply(undefined, { ok: true, ...register(args) }));
+  server.tool('kith_heartbeat', 'Renew an active, owned session. Expired sessions cannot be revived.', {
+    agentId: z.string(), sessionToken: z.string().optional(),
+  }, async (args) => { authorize(args); return formatReply(args.agentId, { ok: true, agent: engine.fencing.getAgent(args.agentId) }); });
 
   server.tool(
     'kith_begin_work',
     'Register an agent session, verify no scope lock or semantic duplicate intent conflicts exist with sibling agents, acquire monotonic fencing-token locks, and optionally spawn an instant Copy-on-Write git worktree.',
     {
       agentId: z.string().describe('Unique identifier for this agent session (e.g. claude-1, codex-auth)'),
+      sessionToken: z.string().optional(),
       client: z.string().optional().describe('Client name (claude-code, antigravity, codex, cursor)'),
       title: z.string().describe('Short title of the task or intent'),
       intentSummary: z.string().optional().describe('Detailed description of what will be built or modified'),
@@ -38,11 +71,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       force: z.boolean().optional().describe('Bypass semantic overlap warning if intentional'),
     },
     async (args) => {
-      const reg = engine.fencing.registerAgent({
-        id: args.agentId,
-        name: args.agentId,
-        client: args.client ?? 'mcp',
-      });
+      const reg = register(args);
 
       const intentRes = engine.intents.declareIntent({
         agentId: args.agentId,
@@ -62,6 +91,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       return formatReply(args.agentId, {
         ok: intentRes.ok,
         agent: reg.agent,
+        sessionToken: reg.sessionToken,
         fencingToken: intentRes.fencingToken,
         task: intentRes.task,
         locks: intentRes.locks,
@@ -79,15 +109,13 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     'Atomically claim the highest-priority unblocked task from the DAG task queue and lock its declared file scope.',
     {
       agentId: z.string().describe('Agent ID claiming the task'),
+      sessionToken: z.string().optional(),
       client: z.string().optional(),
     },
     async (args) => {
-      engine.fencing.registerAgent({
-        id: args.agentId,
-        client: args.client ?? 'mcp',
-      });
+      const session = register(args);
       const res = engine.intents.claimNextTask(args.agentId);
-      return formatReply(args.agentId, res);
+      return formatReply(args.agentId, { ...res, sessionToken: session.sessionToken });
     }
   );
 
@@ -113,12 +141,13 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     'Acquire exclusive or shared fencing-token locks on file paths, globs, or symbols.',
     {
       agentId: z.string(),
+      sessionToken: z.string().optional(),
       patterns: z.array(z.string()),
       mode: z.enum(['exclusive', 'shared']).optional(),
       reason: z.string().optional(),
     },
     async (args) => {
-      engine.fencing.heartbeat(args.agentId);
+      authorize(args);
       const res = engine.locks.acquireLocks(args);
       return formatReply(args.agentId, res);
     }
@@ -129,10 +158,12 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     'Analyze a modified file to extract AST contracts, check transitive import blast radius, detect semantic duplicate utilities, and run a live dirty-tree git merge-tree conflict check.',
     {
       agentId: z.string(),
+      sessionToken: z.string().optional(),
       filePath: z.string(),
       content: z.string().optional(),
     },
     async (args) => {
+      authorize(args);
       const res = engine.processPostFileEdit({
         agentId: args.agentId,
         filePath: args.filePath,
@@ -147,6 +178,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     'Explicitly publish a shared interface, function signature, API route, or schema to the Contract Blackboard.',
     {
       agentId: z.string(),
+      sessionToken: z.string().optional(),
       filePath: z.string(),
       symbolName: z.string(),
       kind: z.enum(['function', 'type', 'interface', 'class', 'schema', 'route', 'const']),
@@ -154,6 +186,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       docComment: z.string().optional(),
     },
     async (args) => {
+      authorize(args);
       const contract = engine.depGraph.publishExplicitContract(args);
       return formatReply(args.agentId, { ok: true, contract });
     }
@@ -164,10 +197,12 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     'Lease a collision-free local TCP port for running dev servers or test suites in parallel.',
     {
       agentId: z.string(),
+      sessionToken: z.string().optional(),
       serviceName: z.string(),
       basePort: z.number().optional(),
     },
     async (args) => {
+      authorize(args);
       const portRes = await engine.broker.acquirePort(args);
       return formatReply(args.agentId, portRes);
     }
@@ -178,8 +213,10 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     'Retrieve live coordination state: active agents, file locks, tasks, contracts, dirty-tree conflicts, and leased ports/mutexes.',
     {
       agentId: z.string().optional(),
+      sessionToken: z.string().optional(),
     },
     async (args) => {
+      if (args.agentId) authorize({ ...args, agentId: args.agentId });
       const state = {
         fencingEpoch: engine.coordDb.currentFencingEpoch(),
         agents: engine.fencing.listAgents(true),
@@ -200,12 +237,14 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     'Complete an agent task, optionally run the Speculative Merge Train to verify and merge its worktree branch, and release all locks and resources.',
     {
       agentId: z.string(),
+      sessionToken: z.string().optional(),
       taskId: z.string().optional(),
       fencingToken: z.number().optional(),
       mergeBranch: z.string().optional().describe('If work was done on a worktree/branch, run Speculative Merge Train to integrate it'),
       verificationCmd: z.string().optional().describe('Command to run in speculative merge tree (e.g. "npm run typecheck")'),
     },
     async (args) => {
+      authorize(args);
       const agent = engine.fencing.getAgent(args.agentId);
       let mergeResult = null;
 
@@ -225,9 +264,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
           });
         }
 
-        if (agent?.worktree_path) {
-          engine.worktrees.removeWorktree(args.agentId);
-        }
+        // Preserve the worktree for inspection, consistent with CLI completion.
       }
 
       const completedTasks = engine.intents.completeTask({

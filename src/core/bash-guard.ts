@@ -88,7 +88,8 @@ export class BashMerkleGuard {
   }
 
   private getSnapshotFilePath(agentId: string): string {
-    const safeId = agentId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const epoch = this.fencing.assertSession(agentId);
+    const safeId = crypto.createHash('sha256').update(`${agentId}:${epoch}`).digest('hex');
     return path.join(this.coordDb.coordDir, 'snapshots', `${safeId}.json`);
   }
 
@@ -130,20 +131,21 @@ export class BashMerkleGuard {
     fs.writeFileSync(
       snapPath,
       JSON.stringify({ timestamp: Date.now(), rootDir, entries }),
-      'utf8'
+      { encoding: 'utf8', mode: 0o600 }
     );
     return snapPath;
   }
 
   /**
    * Compares workspace state after a Bash command completes against the pre-Bash Merkle snapshot.
-   * Automatically reverts and quarantines any edits to files locked by sibling agents,
+   * Saves recovery copies of edits to files locked by sibling agents. Restoration is opt-in,
    * and indexes authorized modifications into the AST Contract Blackboard & Dirty-Tree Conflict Radar.
    */
   public verifyPostBashAndQuarantine(params: {
     agentId: string;
     command: string;
     rootDir?: string;
+    restoreLockedFiles?: boolean;
   }): BashGuardPostReport {
     const snapPath = this.getSnapshotFilePath(params.agentId);
     if (!fs.existsSync(snapPath)) {
@@ -193,6 +195,7 @@ export class BashMerkleGuard {
           rootDir,
           relPath,
           unauthorizedBuf: buf,
+          restoreLockedFiles: params.restoreLockedFiles ?? false,
           prevEntry: prev ?? null,
           reason: access.reason ?? 'Locked by another agent',
         });
@@ -216,6 +219,7 @@ export class BashMerkleGuard {
             rootDir,
             relPath,
             unauthorizedBuf: null,
+            restoreLockedFiles: params.restoreLockedFiles ?? false,
             prevEntry: prev,
             reason: access.reason ?? 'Deleted file locked by another agent',
           });
@@ -238,7 +242,7 @@ export class BashMerkleGuard {
       for (const relFile of authorizedModifiedFiles) {
         const absFile = path.join(rootDir, relFile);
         if (fs.existsSync(absFile) && /\.(ts|tsx|js|jsx|mjs|py)$/.test(relFile)) {
-          this.depGraph.recordFileModification(params.agentId, relFile);
+          this.depGraph.recordFileModification(params.agentId, relFile, fs.readFileSync(absFile, 'utf8'));
         }
       }
       this.shadowGit.probeAllActiveConflicts(
@@ -261,6 +265,7 @@ export class BashMerkleGuard {
     rootDir: string;
     relPath: string;
     unauthorizedBuf: Buffer | null;
+    restoreLockedFiles: boolean;
     prevEntry: FileSnapshotEntry | null;
     reason: string;
   }): QuarantineRecord {
@@ -270,22 +275,25 @@ export class BashMerkleGuard {
     const patchPath = path.join(
       this.coordDb.coordDir,
       'quarantine',
-      `${now}_${params.agentId}_${safeName}.quarantine`
+      `${id}_${safeName}.quarantine`
     );
 
     if (params.unauthorizedBuf) {
-      fs.writeFileSync(patchPath, params.unauthorizedBuf);
+      fs.writeFileSync(patchPath, params.unauthorizedBuf, { mode: 0o600 });
     } else {
-      fs.writeFileSync(patchPath, `[DELETED BY COMMAND: ${params.command}]\n`, 'utf8');
+      fs.writeFileSync(patchPath, `[DELETED BY COMMAND: ${params.command}]\n`, { encoding: 'utf8', mode: 0o600 });
     }
 
+    if (params.prevEntry?.backupContentBase64 !== undefined) {
+      fs.writeFileSync(patchPath + '.before', Buffer.from(params.prevEntry.backupContentBase64, 'base64'), { mode: 0o600 });
+    }
     const absTarget = path.join(params.rootDir, params.relPath);
-    if (params.prevEntry === null) {
+    if (params.restoreLockedFiles && params.prevEntry === null) {
       // Newly created unauthorized file -> remove it
       if (fs.existsSync(absTarget)) {
         fs.unlinkSync(absTarget);
       }
-    } else if (params.prevEntry.backupContentBase64 !== undefined) {
+    } else if (params.restoreLockedFiles && params.prevEntry?.backupContentBase64 !== undefined) {
       // Restore exact pre-command bytes
       fs.mkdirSync(path.dirname(absTarget), { recursive: true });
       fs.writeFileSync(

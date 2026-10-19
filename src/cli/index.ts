@@ -1,18 +1,19 @@
 #!/usr/bin/env node
+import { SessionOwnershipError } from '../core/fencing.js';
 import { KithEngine } from '../core/engine.js';
 import { runKithMcpStdioServer } from '../mcp/server.js';
 import { runLiveDashboard } from '../tui/dashboard.js';
 import { HookHandler } from './hook-handler.js';
-import { initializeKithRepository } from './init.js';
+import { INTEGRATIONS, Integration, initializeKithRepository } from './init.js';
 
 function parseFlags(argv: string[]): {
   positional: string[];
   flags: Record<string, string | boolean>;
-  passthroughCmd: string;
+  passthroughCmd: string[];
 } {
   const dashDashIdx = argv.indexOf('--');
   const mainArgs = dashDashIdx >= 0 ? argv.slice(0, dashDashIdx) : argv;
-  const passthroughCmd = dashDashIdx >= 0 ? argv.slice(dashDashIdx + 1).join(' ') : '';
+  const passthroughCmd = dashDashIdx >= 0 ? argv.slice(dashDashIdx + 1) : [];
 
   const positional: string[] = [];
   const flags: Record<string, string | boolean> = {};
@@ -26,7 +27,7 @@ function parseFlags(argv: string[]): {
       } else {
         const key = arg.slice(2);
         const next = mainArgs[i + 1];
-        if (next && !next.startsWith('--')) {
+        if (!['once', 'force', 'worktree', 'raw', 'dry-run', 'help', 'version', 'shell', 'new'].includes(key) && next && !next.startsWith('--')) {
           flags[key] = next;
           i++;
         } else {
@@ -47,8 +48,17 @@ async function main(): Promise<void> {
   const subCmd = positional[1];
   const repoRoot = typeof flags.repo === 'string' ? flags.repo : process.cwd();
 
+  if (flags.version || cmd === 'version') { console.log('1.0.0'); return; }
+  if (flags.help || cmd === 'help') { printHelp(); return; }
+
   if (cmd === 'init') {
-    const report = initializeKithRepository(repoRoot);
+    const integrations = typeof flags.only === 'string' ? flags.only.split(',') : undefined;
+    if (integrations?.some((name) => !INTEGRATIONS.includes(name as Integration))) {
+      throw new Error(`--only accepts: ${INTEGRATIONS.join(', ')}`);
+    }
+    const report = initializeKithRepository(repoRoot, 'kith', {
+      dryRun: Boolean(flags['dry-run']), integrations: integrations as Integration[] | undefined,
+    });
     console.log(JSON.stringify({ ok: true, ...report }, null, 2));
     return;
   }
@@ -63,8 +73,53 @@ async function main(): Promise<void> {
     return;
   }
 
+  const commands = ['session', 'status', 'begin', 'complete', 'heartbeat', 'task', 'lock', 'contract', 'worktree', 'port', 'mutex', 'hook'];
+  if (!commands.includes(cmd)) throw new Error(`Unknown command '${cmd}'. Run kith help.`);
+  const subcommands: Record<string, string[]> = {
+    session: ['start', 'end'],
+    task: ['add', 'claim', 'list'], lock: ['acquire', 'release', 'list'],
+    contract: ['publish', 'list'], worktree: ['spawn', 'remove', 'list'],
+    hook: ['pre', 'post', 'pre-commit'],
+  };
+  if (subcommands[cmd] && (!subCmd || !subcommands[cmd].includes(subCmd))) {
+    throw new Error(`Expected kith ${cmd} ${subcommands[cmd].join('|')}`);
+  }
   const engine = new KithEngine(repoRoot);
+  const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? `cli-${process.pid}`);
+  const sessionToken = cmd === 'session' && subCmd === 'start' && flags.new ? undefined : typeof flags['session-token'] === 'string' ? flags['session-token']
+    : (!process.env.KITH_AGENT_ID || process.env.KITH_AGENT_ID === agentId) ? process.env.KITH_SESSION_TOKEN : undefined;
+  const authorize = () => {
+    if (!sessionToken) throw new SessionOwnershipError(agentId);
+    engine.fencing.resumeSession(agentId, sessionToken);
+  };
+  const register = () => engine.fencing.registerAgent({ id: agentId,
+    client: String(flags.client ?? 'cli'), pid: typeof flags['owner-pid'] === 'string' ? Number(flags['owner-pid'])
+      : cmd === 'mutex' && !sessionToken ? process.pid : process.ppid,
+    sessionToken, leaseDurationMs: typeof flags['lease-ms'] === 'string' ? Number(flags['lease-ms']) : undefined,
+  });
   try {
+    if (cmd === 'session') {
+      if (subCmd === 'end') {
+        authorize(); engine.fencing.abandonAgentSession(agentId);
+        console.log(JSON.stringify({ ok: true })); return;
+      }
+      if (flags.shell && typeof flags['owner-pid'] !== 'string') {
+        throw new Error('Shell exports require --owner-pid "$$" so command substitution cannot anchor the session to a transient subshell.');
+      }
+      const session = register();
+      if (flags.shell) {
+        const quote = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
+        console.log(`export KITH_AGENT_ID=${quote(agentId)}\nexport KITH_SESSION_TOKEN=${quote(session.sessionToken)}`);
+      } else console.log(JSON.stringify(session, null, 2));
+      return;
+    }
+    if (cmd === 'heartbeat') {
+      authorize();
+      if (!engine.fencing.heartbeat(agentId)) throw new Error('Active --agent <id> required');
+      console.log(JSON.stringify({ ok: true, agent: engine.fencing.getAgent(agentId) }, null, 2));
+      return;
+    }
+
     if (cmd === 'status') {
       const state = {
         fencingEpoch: engine.coordDb.currentFencingEpoch(),
@@ -82,15 +137,11 @@ async function main(): Promise<void> {
     }
 
     if (cmd === 'begin') {
-      const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? `cli-${process.pid}`);
       const title = String(flags.title ?? flags.intent ?? 'Active work');
       const scopeRaw = typeof flags.scope === 'string' ? flags.scope : '';
       const scopeGlobs = scopeRaw ? scopeRaw.split(',').map((s) => s.trim()) : ['**'];
 
-      engine.fencing.registerAgent({
-        id: agentId,
-        client: String(flags.client ?? 'cli'),
-      });
+      const session = register();
 
       const res = engine.intents.declareIntent({
         agentId,
@@ -105,13 +156,13 @@ async function main(): Promise<void> {
         worktree = engine.worktrees.spawnWorktree({ agentId });
       }
 
-      console.log(JSON.stringify({ ...res, worktree }, null, 2));
+      console.log(JSON.stringify({ ...res, worktree, sessionToken: session.sessionToken }, null, 2));
       process.exitCode = res.ok ? 0 : 1;
       return;
     }
 
     if (cmd === 'complete') {
-      const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? '');
+      authorize();
       if (!agentId) {
         console.error('Error: --agent <id> is required for `kith complete`');
         process.exitCode = 1;
@@ -135,9 +186,7 @@ async function main(): Promise<void> {
           process.exitCode = 1;
           return;
         }
-        if (agent?.worktree_path) {
-          engine.worktrees.removeWorktree(agentId);
-        }
+        // Keep the worktree for inspection; removal is an explicit, non-destructive operation.
       }
 
       const completedTasks = engine.intents.completeTask({ agentId });
@@ -169,10 +218,9 @@ async function main(): Promise<void> {
         return;
       }
       if (subCmd === 'claim') {
-        const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? `cli-${process.pid}`);
-        engine.fencing.registerAgent({ id: agentId, client: 'cli' });
+        const session = register();
         const res = engine.intents.claimNextTask(agentId);
-        console.log(JSON.stringify(res, null, 2));
+        console.log(JSON.stringify({ ...res, sessionToken: session.sessionToken }, null, 2));
         process.exitCode = res.claimed ? 0 : 1;
         return;
       }
@@ -181,19 +229,19 @@ async function main(): Promise<void> {
     }
 
     if (cmd === 'lock') {
-      const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? `cli-${process.pid}`);
       if (subCmd === 'acquire') {
         const patterns = String(flags.patterns ?? flags.scope ?? '')
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
-        engine.fencing.registerAgent({ id: agentId, client: 'cli' });
+        const session = register();
         const res = engine.locks.acquireLocks({ agentId, patterns });
-        console.log(JSON.stringify(res, null, 2));
+        console.log(JSON.stringify({ ...res, sessionToken: session.sessionToken }, null, 2));
         process.exitCode = res.ok ? 0 : 1;
         return;
       }
       if (subCmd === 'release') {
+        authorize();
         const released = engine.locks.releaseLocks({ agentId });
         console.log(JSON.stringify({ ok: true, released }, null, 2));
         return;
@@ -204,7 +252,7 @@ async function main(): Promise<void> {
 
     if (cmd === 'contract') {
       if (subCmd === 'publish') {
-        const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? `cli-${process.pid}`);
+        authorize();
         const contract = engine.depGraph.publishExplicitContract({
           agentId,
           filePath: String(flags.file ?? 'unknown'),
@@ -220,17 +268,17 @@ async function main(): Promise<void> {
     }
 
     if (cmd === 'worktree') {
-      const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? `cli-${process.pid}`);
       if (subCmd === 'spawn') {
-        engine.fencing.registerAgent({ id: agentId, client: 'cli' });
+        const session = register();
         const wt = engine.worktrees.spawnWorktree({
           agentId,
           branch: typeof flags.branch === 'string' ? flags.branch : undefined,
         });
-        console.log(JSON.stringify({ ok: true, worktree: wt }, null, 2));
+        console.log(JSON.stringify({ ok: true, worktree: wt, sessionToken: session.sessionToken }, null, 2));
         return;
       }
       if (subCmd === 'remove') {
+        authorize();
         engine.worktrees.removeWorktree(agentId);
         console.log(JSON.stringify({ ok: true }, null, 2));
         return;
@@ -240,35 +288,52 @@ async function main(): Promise<void> {
     }
 
     if (cmd === 'port') {
-      const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? `cli-${process.pid}`);
       const serviceName = String(flags.service ?? flags.name ?? 'web');
       const basePort = typeof flags.base === 'string' ? Number(flags.base) : 3100;
-      engine.fencing.registerAgent({ id: agentId, client: 'cli' });
+      const session = register();
       const res = await engine.broker.acquirePort({ agentId, serviceName, basePort });
       if (flags.raw) {
         console.log(res.port);
       } else {
-        console.log(JSON.stringify(res, null, 2));
+        console.log(JSON.stringify({ ...res, sessionToken: session.sessionToken }, null, 2));
       }
       return;
     }
 
     if (cmd === 'mutex') {
-      const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? `cli-${process.pid}`);
       const mutexName = String(flags.name ?? 'default-mutex');
-      const commandToRun = passthroughCmd || String(flags.cmd ?? '');
+      const commandToRun = passthroughCmd.length ? passthroughCmd : String(flags.cmd ?? '');
       if (!commandToRun) {
         console.error('Error: provide a command after `--` for `kith mutex`');
         process.exitCode = 1;
         return;
       }
-      engine.fencing.registerAgent({ id: agentId, client: 'cli' });
-      const res = engine.broker.executeWithMutex({
-        agentId,
-        mutexName,
-        command: commandToRun,
-      });
-      if (res.stdout) process.stdout.write(res.stdout);
+      register();
+      const controller = new AbortController();
+      let interrupted: NodeJS.Signals | undefined;
+      const interrupt = (signal: NodeJS.Signals) => { interrupted = signal; controller.abort(); };
+      const sigint = () => interrupt('SIGINT');
+      const sigterm = () => interrupt('SIGTERM');
+      process.on('SIGINT', sigint); process.on('SIGTERM', sigterm);
+      try {
+        const res = await engine.broker.executeWithMutex({
+          agentId, mutexName, command: commandToRun, signal: controller.signal,
+          leaseDurationMs: typeof flags['lease-ms'] === 'string' ? Number(flags['lease-ms']) : undefined,
+          timeoutMs: typeof flags['wait-ms'] === 'string' ? Number(flags['wait-ms']) : undefined,
+          commandTimeoutMs: typeof flags['timeout-ms'] === 'string' ? Number(flags['timeout-ms']) : undefined,
+          onStdout: (chunk) => process.stdout.write(chunk), onStderr: (chunk) => process.stderr.write(chunk),
+        });
+        process.exitCode = res.exitCode;
+      } catch (err) {
+        if (interrupted) process.exitCode = interrupted === 'SIGINT' ? 130 : 143;
+        else throw err;
+      } finally {
+        process.off('SIGINT', sigint); process.off('SIGTERM', sigterm);
+        if (!sessionToken) {
+          try { engine.fencing.completeAgentSession(agentId); }
+          catch (err) { if (!(err instanceof SessionOwnershipError)) throw err; }
+        }
+      }
       return;
     }
 
@@ -279,6 +344,8 @@ async function main(): Promise<void> {
         stdinPayload,
         typeof flags.agent === 'string' ? flags.agent : undefined
       );
+      if (!sessionToken) throw new SessionOwnershipError(agentId);
+      engine.fencing.resumeSession(agentId, sessionToken);
       const toolName = String(
         flags.tool ?? stdinPayload?.tool_name ?? 'Edit'
       );
@@ -286,6 +353,7 @@ async function main(): Promise<void> {
         typeof flags.file === 'string'
           ? flags.file
           : stdinPayload?.tool_input?.file_path ??
+            stdinPayload?.tool_input?.notebook_path ??
             stdinPayload?.tool_input?.target_file ??
             stdinPayload?.tool_input?.path;
       const command =
@@ -322,7 +390,7 @@ async function main(): Promise<void> {
             console.log(
               JSON.stringify({
                 systemMessage: msg,
-                additionalContext: msg,
+                hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: msg },
               })
             );
           }
@@ -343,12 +411,18 @@ async function main(): Promise<void> {
         return;
       }
     }
+  } finally {
+    engine.close();
+  }
+}
 
-    console.log(`Kith (v1.0.0) — Zero-Trust Parallel Agent Coordination Engine
+function printHelp(): void {
+  console.log(`Kith (v1.0.0) — Parallel Agent Coordination (experimental)
 
 Usage:
-  kith init                                       Auto-configure repo (Claude, Cursor, Antigravity, Codex, Git hooks)
+  kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure integrations (supports --dry-run and --only)
   kith top [--once]                               Launch live TUI dashboard
+  kith heartbeat --agent <id>                   Refresh agent and resource leases
   kith status                                     Output JSON coordination state
   kith mcp                                        Start stdio MCP server
   kith begin --agent <id> --title <t> --scope <g> Declare intent, check overlaps, lock scope
@@ -356,17 +430,15 @@ Usage:
   kith task add|claim|list                        Manage orchestrated DAG task queue
   kith lock acquire|release|list                  Manage fencing-token file/glob locks
   kith contract publish|list                      Manage Contract Blackboard
-  kith worktree spawn|remove|list                 Manage instant CoW git worktrees
+  kith worktree spawn|remove|list                 Manage isolated Git worktrees
   kith port --agent <id> --service <name>         Lease collision-free TCP port
-  kith mutex --agent <id> --name <m> -- <cmd>     Serialize commands via FIFO mutex
-  kith hook pre|post|pre-commit                   Zero-trust tool & git hook handlers
+  kith mutex --agent <id> --name <m> -- <cmd>     Serialize commands via mutex
+  kith hook pre|post|pre-commit                   Tool & git hook handlers
 `);
-  } finally {
-    engine.close();
-  }
 }
 
 main().catch((err) => {
   console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
+  const args = process.argv.slice(2);
+  process.exitCode = args.includes('hook') && args.includes('pre') ? 2 : 1;
 });

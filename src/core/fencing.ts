@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { CoordDatabase } from './db.js';
 
 export interface AgentRecord {
@@ -18,337 +20,213 @@ export interface AgentRecord {
   lease_expires_at: number;
 }
 
-export class StaleFencingTokenError extends Error {
-  public readonly providedToken: number;
-  public readonly expectedToken: number;
-  public readonly resourceId: string;
-
-  constructor(resourceId: string, providedToken: number, expectedToken: number) {
-    super(
-      `Stale fencing token for '${resourceId}': provided token ${providedToken} < current token ${expectedToken}. Your lock/session was preempted or expired.`
-    );
-    this.name = 'StaleFencingTokenError';
-    this.resourceId = resourceId;
-    this.providedToken = providedToken;
-    this.expectedToken = expectedToken;
+export class SessionOwnershipError extends Error {
+  constructor(agentId: string) {
+    super(`No valid active session capability for '${agentId}'. Start a session, or resume it with its session token.`);
+    this.name = 'SessionOwnershipError';
   }
 }
 
+export class StaleFencingTokenError extends Error {
+  constructor(public readonly resourceId: string, public readonly providedToken: number, public readonly expectedToken: number) {
+    super(`Fencing token mismatch for '${resourceId}': provided ${providedToken}, expected ${expectedToken}.`);
+    this.name = 'StaleFencingTokenError';
+  }
+}
+
+interface SessionRow { token_hash: string; epoch: number }
+export interface SessionRegistration { agent: AgentRecord; fencingToken: number; sessionToken: string; sessionEpoch: number }
+
 export class FencingAndAgentManager {
-  public static readonly DEFAULT_LEASE_MS = 5 * 60 * 1000; // 5 minutes TTL fallback
+  public static readonly DEFAULT_LEASE_MS = 5 * 60 * 1000;
+  private readonly capabilities = new Map<string, string>();
 
   constructor(private readonly coordDb: CoordDatabase) {}
 
-  /**
-   * Captures the OS kernel process start time (`lstart`) for a given PID.
-   * Prevents PID-reuse false positives when checking if an agent process is still alive.
-   */
+  public static validateLease(duration: number): number {
+    if (!Number.isSafeInteger(duration) || duration < 100 || duration > 86_400_000) {
+      throw new Error('Lease duration must be an integer between 100 and 86400000 milliseconds');
+    }
+    return duration;
+  }
+
+  /** A real kernel process identity; tests must not supply liveness sentinels. */
   public static getProcessStartTime(pid: number): string | null {
-    if (pid <= 0) return null;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return null;
     try {
-      process.kill(pid, 0);
-    } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code === 'ESRCH') {
-        return null;
+      if (process.platform === 'linux') {
+        const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+        return `linux:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
       }
-    }
-
-    try {
       const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: 1500,
+        encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500,
+        env: { ...process.env, LC_ALL: 'C' },
       }).trim();
-      return out.length > 0 ? out : null;
-    } catch {
-      return null;
-    }
+      return out || null;
+    } catch { return null; }
   }
 
-  /**
-   * Checks whether a recorded (pid, pid_start_time) process is still alive at the OS level.
-   */
   public static isProcessAlive(pid: number, expectedStartTime: string): boolean {
-    if (expectedStartTime === 'simulated-alive') {
-      return true;
-    }
-    if (expectedStartTime === 'simulated-dead') {
-      return false;
-    }
-    if (pid <= 0) return false;
-    try {
-      process.kill(pid, 0);
-    } catch (err: unknown) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code === 'ESRCH') {
-        return false;
-      }
-    }
-
-    const currentStart = FencingAndAgentManager.getProcessStartTime(pid);
-    if (!currentStart) return false;
-    return currentStart === expectedStartTime;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+    try { process.kill(pid, 0); }
+    catch (err) { if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false; }
+    const current = this.getProcessStartTime(pid);
+    // Failure to inspect a live process is not evidence that its locks can be stolen.
+    return current === null || current === expectedStartTime;
   }
 
-  /**
-   * Registers or refreshes an agent session.
-   */
   public registerAgent(params: {
-    id: string;
-    name?: string;
-    client?: string;
-    pid?: number;
-    pidStartTime?: string;
-    pgid?: number;
-    worktreePath?: string | null;
-    branch?: string | null;
-    leaseDurationMs?: number;
-  }): { agent: AgentRecord; fencingToken: number } {
+    id: string; name?: string; client?: string; pid?: number; pgid?: number;
+    worktreePath?: string | null; branch?: string | null; leaseDurationMs?: number;
+    sessionToken?: string;
+  }): SessionRegistration {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(params.id)) throw new Error('Invalid agent ID');
+    const leaseMs = FencingAndAgentManager.validateLease(params.leaseDurationMs ?? FencingAndAgentManager.DEFAULT_LEASE_MS);
     this.reapDeadAgents();
-
-    const pid = params.pid ?? (process.ppid || process.pid);
-    const pidStartTime =
-      params.pidStartTime ??
-      FencingAndAgentManager.getProcessStartTime(pid) ??
-      'simulated-alive';
-    const pgid = params.pgid ?? pid;
-    const now = Date.now();
-    const leaseMs = params.leaseDurationMs ?? FencingAndAgentManager.DEFAULT_LEASE_MS;
-    const leaseExpiresAt = now + leaseMs;
-
     return this.coordDb.withTransaction(() => {
-      const token = this.coordDb.nextFencingToken();
-      const latestEvent = this.coordDb.db
-        .prepare(`SELECT COALESCE(MAX(id), 0) AS max_id FROM events`)
-        .get() as { max_id: number };
-
       const existing = this.getAgent(params.id);
-      if (existing) {
-        this.coordDb.db
-          .prepare(`
-            UPDATE agents
-            SET name = ?,
-                client = ?,
-                pid = ?,
-                pid_start_time = ?,
-                pgid = ?,
-                worktree_path = COALESCE(?, worktree_path),
-                branch = COALESCE(?, branch),
-                status = 'active',
-                last_heartbeat_at = ?,
-                lease_expires_at = ?
-            WHERE id = ?
-          `)
-          .run(
-            params.name ?? existing.name,
-            params.client ?? existing.client,
-            pid,
-            pidStartTime,
-            pgid,
-            params.worktreePath ?? null,
-            params.branch ?? null,
-            now,
-            leaseExpiresAt,
-            params.id
-          );
-      } else {
-        this.coordDb.db
-          .prepare(`
-            INSERT INTO agents (
-              id, name, client, pid, pid_start_time, pgid,
-              worktree_path, branch, shadow_tree_sha, status,
-              last_seen_event_id, registered_at, last_heartbeat_at, lease_expires_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'active', ?, ?, ?, ?)
-          `)
-          .run(
-            params.id,
-            params.name ?? params.id,
-            params.client ?? 'unknown',
-            pid,
-            pidStartTime,
-            pgid,
-            params.worktreePath ?? null,
-            params.branch ?? null,
-            latestEvent.max_id,
-            now,
-            now,
-            leaseExpiresAt
-          );
+      const supplied = params.sessionToken ?? this.capabilities.get(params.id);
+      if (existing?.status === 'active') {
+        const epoch = this.assertSession(params.id, supplied);
+        // Resuming never changes the process anchor or session generation.
+        this.capabilities.set(params.id, supplied!);
+        this.heartbeat(params.id, leaseMs);
+        return { agent: this.getAgent(params.id)!, fencingToken: epoch, sessionToken: supplied!, sessionEpoch: epoch };
       }
-
-      this.coordDb.logEvent(params.id, 'agent_registered', {
-        client: params.client ?? 'unknown',
-        pid,
-        fencingToken: token,
-      });
-
-      return {
-        agent: this.getAgent(params.id)!,
-        fencingToken: token,
-      };
+      if (params.sessionToken !== undefined) throw new SessionOwnershipError(params.id);
+      const pid = params.pid ?? process.pid;
+      const start = FencingAndAgentManager.getProcessStartTime(pid);
+      if (!start) throw new Error(`Cannot determine start time of live session owner PID ${pid}`);
+      const now = Date.now();
+      const epoch = this.coordDb.nextFencingToken();
+      const token = crypto.randomBytes(32).toString('base64url');
+      const latest = (this.coordDb.db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM events').get() as { id: number }).id;
+      this.coordDb.db.prepare(`
+        INSERT INTO agents (id, name, client, pid, pid_start_time, pgid, worktree_path, branch,
+          shadow_tree_sha, status, last_seen_event_id, registered_at, last_heartbeat_at, lease_expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'active', ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET name=excluded.name, client=excluded.client, pid=excluded.pid,
+          pid_start_time=excluded.pid_start_time, pgid=excluded.pgid, status='active',
+          shadow_tree_sha=NULL, last_seen_event_id=excluded.last_seen_event_id,
+          registered_at=excluded.registered_at, last_heartbeat_at=excluded.last_heartbeat_at,
+          lease_expires_at=excluded.lease_expires_at
+      `).run(params.id, params.name ?? existing?.name ?? params.id, params.client ?? 'unknown',
+        pid, start, params.pgid ?? pid, params.worktreePath ?? null, params.branch ?? null,
+        latest, now, now, now + leaseMs);
+      this.coordDb.db.prepare('INSERT OR REPLACE INTO agent_sessions(agent_id, token_hash, epoch) VALUES (?, ?, ?)')
+        .run(params.id, this.hash(token), epoch);
+      this.capabilities.set(params.id, token);
+      this.coordDb.logEvent(params.id, 'agent_registered', { client: params.client ?? 'unknown', pid, sessionEpoch: epoch });
+      return { agent: this.getAgent(params.id)!, fencingToken: epoch, sessionToken: token, sessionEpoch: epoch };
     });
   }
 
-  public heartbeat(agentId: string, leaseDurationMs?: number): AgentRecord | null {
-    const now = Date.now();
-    const leaseMs = leaseDurationMs ?? FencingAndAgentManager.DEFAULT_LEASE_MS;
-    const expiresAt = now + leaseMs;
+  public resumeSession(agentId: string, sessionToken: string): number {
+    const epoch = this.assertSession(agentId, sessionToken);
+    this.capabilities.set(agentId, sessionToken);
+    return epoch;
+  }
 
+  public assertSession(agentId: string, sessionToken = this.capabilities.get(agentId)): number {
+    const agent = this.getAgent(agentId);
+    const session = this.coordDb.db.prepare('SELECT token_hash, epoch FROM agent_sessions WHERE agent_id = ?')
+      .get(agentId) as SessionRow | undefined;
+    if (!agent || agent.status !== 'active' || agent.lease_expires_at <= Date.now() || !session ||
+        !sessionToken || this.hash(sessionToken) !== session.token_hash ||
+        !FencingAndAgentManager.isProcessAlive(agent.pid, agent.pid_start_time)) {
+      throw new SessionOwnershipError(agentId);
+    }
+    return session.epoch;
+  }
+
+  public sessionEnvironment(agentId: string): NodeJS.ProcessEnv {
+    this.assertSession(agentId);
+    return { ...process.env, KITH_AGENT_ID: agentId, KITH_SESSION_TOKEN: this.capabilities.get(agentId)! };
+  }
+
+  public heartbeat(agentId: string, leaseDurationMs = FencingAndAgentManager.DEFAULT_LEASE_MS): AgentRecord {
+    const lease = FencingAndAgentManager.validateLease(leaseDurationMs);
     return this.coordDb.withTransaction(() => {
-      const existing = this.getAgent(agentId);
-      if (!existing) return null;
-
-      this.coordDb.db
-        .prepare(`
-          UPDATE agents
-          SET last_heartbeat_at = ?, lease_expires_at = ?, status = 'active'
-          WHERE id = ?
-        `)
-        .run(now, expiresAt, agentId);
-
-      this.coordDb.db
-        .prepare(`
-          UPDATE locks
-          SET expires_at = MAX(expires_at, ?)
-          WHERE owner_agent_id = ?
-        `)
-        .run(expiresAt, agentId);
-
-      this.coordDb.db
-        .prepare(`
-          UPDATE resources
-          SET expires_at = MAX(expires_at, ?)
-          WHERE owner_agent_id = ?
-        `)
-        .run(expiresAt, agentId);
-
-      return this.getAgent(agentId);
+      this.assertSession(agentId);
+      const now = Date.now();
+      const expires = now + lease;
+      this.coordDb.db.prepare('UPDATE agents SET last_heartbeat_at=?, lease_expires_at=? WHERE id=?').run(now, expires, agentId);
+      this.coordDb.db.prepare('UPDATE locks SET expires_at=MAX(expires_at, ?) WHERE owner_agent_id=? AND expires_at>?')
+        .run(expires, agentId, now);
+      // Mutex renewal requires its exact acquisition token, not just a session heartbeat.
+      this.coordDb.db.prepare("UPDATE resources SET expires_at=MAX(expires_at, ?) WHERE type='port' AND owner_agent_id=? AND expires_at>?")
+        .run(expires, agentId, now);
+      return this.getAgent(agentId)!;
     });
   }
 
   public getAgent(agentId: string): AgentRecord | null {
-    const row = this.coordDb.db
-      .prepare(`SELECT * FROM agents WHERE id = ?`)
-      .get(agentId) as AgentRecord | undefined;
-    return row ?? null;
+    return (this.coordDb.db.prepare('SELECT * FROM agents WHERE id=?').get(agentId) as AgentRecord | undefined) ?? null;
   }
 
   public listAgents(onlyActive = false): AgentRecord[] {
     this.reapDeadAgents();
-    if (onlyActive) {
-      return this.coordDb.db
-        .prepare(`SELECT * FROM agents WHERE status = 'active' ORDER BY registered_at ASC`)
-        .all() as unknown as AgentRecord[];
-    }
-    return this.coordDb.db
-      .prepare(`SELECT * FROM agents ORDER BY registered_at DESC`)
-      .all() as unknown as AgentRecord[];
+    return this.coordDb.db.prepare(onlyActive
+      ? "SELECT * FROM agents WHERE status='active' ORDER BY registered_at"
+      : 'SELECT * FROM agents ORDER BY registered_at DESC').all() as unknown as AgentRecord[];
   }
 
-  /**
-   * Scans all active agents, verifies OS process liveness `(pid, pid_start_time)` and lease TTL,
-   * and atomically reclaims locks, ports, mutexes, and tasks from dead or expired sessions.
-   */
   public reapDeadAgents(): string[] {
-    const now = Date.now();
-    const activeAgents = this.coordDb.db
-      .prepare(`SELECT * FROM agents WHERE status = 'active'`)
-      .all() as unknown as AgentRecord[];
-
-    const deadIds: string[] = [];
-
-    for (const agent of activeAgents) {
-      const leaseExpired = agent.lease_expires_at < now;
-      const pidAlive = FencingAndAgentManager.isProcessAlive(
-        agent.pid,
-        agent.pid_start_time
-      );
-
-      if (!pidAlive || leaseExpired) {
-        deadIds.push(agent.id);
-      }
-    }
-
-    if (deadIds.length === 0) {
-      return [];
-    }
-
-    this.coordDb.withTransaction(() => {
-      for (const agentId of deadIds) {
-        this.reclaimAgentResourcesInternal(agentId, 'dead', 'process_died_or_lease_expired');
-      }
+    const agents = this.coordDb.db.prepare("SELECT * FROM agents WHERE status='active'").all() as unknown as AgentRecord[];
+    const liveness = new Map<string, boolean>();
+    const candidates = agents.filter((a) => {
+      const key = `${a.pid}:${a.pid_start_time}`;
+      if (!liveness.has(key)) liveness.set(key, FencingAndAgentManager.isProcessAlive(a.pid, a.pid_start_time));
+      return a.lease_expires_at <= Date.now() || !liveness.get(key);
     });
-
-    return deadIds;
+    if (!candidates.length) return [];
+    return this.coordDb.withTransaction(() => {
+      const reaped: string[] = [];
+      for (const previous of candidates) {
+        const current = this.getAgent(previous.id);
+        // Recheck after taking the writer lock: a heartbeat or replacement may have won.
+        if (!current || current.status !== 'active' || current.registered_at !== previous.registered_at ||
+            current.pid !== previous.pid || current.pid_start_time !== previous.pid_start_time) continue;
+        if (current.lease_expires_at > Date.now() && FencingAndAgentManager.isProcessAlive(current.pid, current.pid_start_time)) continue;
+        this.reclaim(current.id, 'dead', 'process_died_or_lease_expired');
+        reaped.push(current.id);
+      }
+      return reaped;
+    });
   }
 
   public completeAgentSession(agentId: string): void {
-    this.coordDb.withTransaction(() => {
-      this.reclaimAgentResourcesInternal(agentId, 'completed', 'session_completed');
-    });
+    this.coordDb.withTransaction(() => { this.assertSession(agentId); this.reclaim(agentId, 'completed', 'session_completed'); });
+    this.capabilities.delete(agentId);
   }
 
-  private reclaimAgentResourcesInternal(
-    agentId: string,
-    newStatus: 'dead' | 'completed',
-    reason: string
-  ): void {
-    const newEpoch = this.coordDb.nextFencingToken();
+  public abandonAgentSession(agentId: string): void {
+    this.coordDb.withTransaction(() => { this.assertSession(agentId); this.reclaim(agentId, 'dead', 'client_disconnected'); });
+    this.capabilities.delete(agentId);
+  }
+
+  private reclaim(agentId: string, status: 'dead' | 'completed', reason: string): void {
+    const epoch = this.coordDb.nextFencingToken();
     const now = Date.now();
-
-    this.coordDb.db
-      .prepare(`UPDATE agents SET status = ?, last_heartbeat_at = ? WHERE id = ?`)
-      .run(newStatus, now, agentId);
-
-    this.coordDb.db
-      .prepare(`DELETE FROM locks WHERE owner_agent_id = ?`)
-      .run(agentId);
-
-    this.coordDb.db
-      .prepare(`DELETE FROM resources WHERE owner_agent_id = ?`)
-      .run(agentId);
-
-    this.coordDb.db
-      .prepare(`DELETE FROM conflicts WHERE agent_a = ? OR agent_b = ?`)
-      .run(agentId, agentId);
-
-    if (newStatus === 'dead') {
-      // Return unfinished orchestrated tasks to queued so another live worker can pick them up
-      this.coordDb.db
-        .prepare(`
-          UPDATE tasks
-          SET status = 'queued', owner_agent_id = NULL, fencing_token = NULL, updated_at = ?
-          WHERE owner_agent_id = ? AND status = 'active'
-        `)
+    this.coordDb.db.prepare('UPDATE agents SET status=?, last_heartbeat_at=? WHERE id=?').run(status, now, agentId);
+    this.coordDb.db.prepare('DELETE FROM locks WHERE owner_agent_id=?').run(agentId);
+    this.coordDb.db.prepare('DELETE FROM resources WHERE owner_agent_id=?').run(agentId);
+    this.coordDb.db.prepare('DELETE FROM mutex_waiters WHERE owner_agent_id=?').run(agentId);
+    // Live command guards survive session expiry until their process group has stopped.
+    this.coordDb.db.prepare('DELETE FROM conflicts WHERE agent_a=? OR agent_b=?').run(agentId, agentId);
+    if (status === 'dead') {
+      this.coordDb.db.prepare("UPDATE tasks SET status='queued', owner_agent_id=NULL, fencing_token=NULL, updated_at=? WHERE owner_agent_id=? AND status='active'")
         .run(now, agentId);
     } else {
-      this.coordDb.db
-        .prepare(`
-          UPDATE tasks
-          SET status = 'done', updated_at = ?
-          WHERE owner_agent_id = ? AND status = 'active'
-        `)
+      this.coordDb.db.prepare("UPDATE tasks SET status='done', updated_at=? WHERE owner_agent_id=? AND status='active'")
         .run(now, agentId);
     }
-
-    this.coordDb.logEvent(agentId, `agent_${newStatus}`, {
-      reason,
-      newFencingEpoch: newEpoch,
-    });
+    this.coordDb.logEvent(agentId, `agent_${status}`, { reason, newFencingEpoch: epoch });
   }
 
-  /**
-   * Deterministically verifies that a fencing token presented by an agent is >= the active lock's token.
-   */
-  public verifyFencingToken(
-    resourceId: string,
-    providedToken: number,
-    expectedToken: number
-  ): void {
-    if (providedToken < expectedToken) {
-      throw new StaleFencingTokenError(resourceId, providedToken, expectedToken);
-    }
+  public verifyFencingToken(resourceId: string, provided: number, expected: number): void {
+    if (provided !== expected) throw new StaleFencingTokenError(resourceId, provided, expected);
   }
+
+  private hash(token: string): string { return crypto.createHash('sha256').update(token).digest('hex'); }
 }

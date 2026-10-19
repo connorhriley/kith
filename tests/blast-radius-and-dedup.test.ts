@@ -43,8 +43,8 @@ describe('Pillar 3 & 4: Import-Graph Blast Radius, Zero-Touch Contracts & FTS5 D
   });
 
   it('detects transitive 2-hop breaking changes and alerts downstream locked agents', () => {
-    engine.fencing.registerAgent({ id: 'agent-auth', pidStartTime: 'simulated-alive' });
-    engine.fencing.registerAgent({ id: 'agent-checkout', pidStartTime: 'simulated-alive' });
+    engine.fencing.registerAgent({ id: 'agent-auth' });
+    engine.fencing.registerAgent({ id: 'agent-checkout' });
 
     // agent-checkout locks src/routes/checkout.ts (2 hops downstream of src/lib/auth.ts)
     engine.locks.acquireLocks({
@@ -80,8 +80,8 @@ describe('Pillar 3 & 4: Import-Graph Blast Radius, Zero-Touch Contracts & FTS5 D
   });
 
   it('catches semantic duplicate helper functions across different files via FTS5 + AST fingerprints', () => {
-    engine.fencing.registerAgent({ id: 'agent-a', pidStartTime: 'simulated-alive' });
-    engine.fencing.registerAgent({ id: 'agent-b', pidStartTime: 'simulated-alive' });
+    engine.fencing.registerAgent({ id: 'agent-a' });
+    engine.fencing.registerAgent({ id: 'agent-b' });
 
     // Agent A creates formatCurrency in src/lib/currency.ts
     const codeA = `// Formats cents into display currency string\nexport function formatCurrency(cents: number, currencyCode: string): string {\n  return \`\${currencyCode} \${(cents / 100).toFixed(2)}\`;\n}\n`;

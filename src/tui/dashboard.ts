@@ -33,7 +33,7 @@ export function renderDashboardFrame(engine: KithEngine): string {
     `${ANSI.bold}${ANSI.cyan}╔══════════════════════════════════════════════════════════════════════════════════════╗${ANSI.reset}`
   );
   lines.push(
-    `${ANSI.bold}${ANSI.cyan}║  KITH — ZERO-TRUST PARALLEL AGENT COORDINATOR${ANSI.reset}     ${ANSI.dim}Fencing Epoch: #${epoch} | Agents: ${agents.length}${ANSI.reset}  ${ANSI.bold}${ANSI.cyan}║${ANSI.reset}`
+    `${ANSI.bold}${ANSI.cyan}║  KITH — PARALLEL AGENT COORDINATOR${ANSI.reset}     ${ANSI.dim}Fencing Epoch: #${epoch} | Agents: ${agents.length}${ANSI.reset}  ${ANSI.bold}${ANSI.cyan}║${ANSI.reset}`
   );
   lines.push(
     `${ANSI.bold}${ANSI.cyan}╚══════════════════════════════════════════════════════════════════════════════════════╝${ANSI.reset}`

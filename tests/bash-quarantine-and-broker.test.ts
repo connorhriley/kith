@@ -8,7 +8,7 @@ import { initializeKithRepository } from '../src/cli/init.js';
 import { KithEngine } from '../src/index.js';
 import { renderDashboardFrame } from '../src/tui/dashboard.js';
 
-describe('Pillar 1 & Broker: Bash Merkle Quarantine, Port/Mutex Broker, Auto-Installer & TUI', () => {
+describe('Bash Merkle Quarantine, Port/Mutex Broker, Auto-Installer & TUI', () => {
   let tmpDir: string;
   let engine: KithEngine;
 
@@ -29,9 +29,9 @@ describe('Pillar 1 & Broker: Bash Merkle Quarantine, Port/Mutex Broker, Auto-Ins
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('reverts and quarantines unauthorized file mutations made by Bash scripts while preserving locked files', () => {
-    engine.fencing.registerAgent({ id: 'owner-agent', pidStartTime: 'simulated-alive' });
-    engine.fencing.registerAgent({ id: 'rogue-agent', pidStartTime: 'simulated-alive' });
+  it('blocks direct writes and saves Bash recovery copies without reverting shared bytes', () => {
+    engine.fencing.registerAgent({ id: 'owner-agent' });
+    engine.fencing.registerAgent({ id: 'rogue-agent' });
 
     // owner-agent locks src/protected.ts
     engine.locks.acquireLocks({
@@ -71,7 +71,7 @@ describe('Pillar 1 & Broker: Bash Merkle Quarantine, Port/Mutex Broker, Auto-Ins
     // Simulate the bash script mutating src/protected.ts on disk
     fs.writeFileSync(path.join(tmpDir, 'src/protected.ts'), 'CORRUPTED BY BASH\n', 'utf8');
 
-    // PostToolUse hook detects the Merkle mismatch on a locked file, quarantines it, and restores original bytes!
+    // PostToolUse detects a locked-file change and saves recovery copies.
     const postBash = hook.handlePostToolUse({
       agentId: 'rogue-agent',
       toolName: 'Bash',
@@ -82,19 +82,20 @@ describe('Pillar 1 & Broker: Bash Merkle Quarantine, Port/Mutex Broker, Auto-Ins
     expect(postBash.exitCode).toBe(2);
     expect(postBash.warnings[0]).toContain('KITH BASH QUARANTINE');
 
-    // Verify original file contents were deterministically restored on disk!
+    // Shared-file restoration is disabled because changes cannot be safely attributed.
     const restoredContent = fs.readFileSync(path.join(tmpDir, 'src/protected.ts'), 'utf8');
-    expect(restoredContent).toBe(`export const SECRET_KEY = 'original-safe-value';\n`);
+    expect(restoredContent).toBe('CORRUPTED BY BASH\n');
 
     // Verify quarantined copy exists so work is still inspectable
     const quarantinedList = engine.bashGuard.listQuarantined();
     expect(quarantinedList).toHaveLength(1);
     expect(fs.readFileSync(quarantinedList[0].patch_path, 'utf8')).toBe('CORRUPTED BY BASH\n');
+    expect(fs.readFileSync(quarantinedList[0].patch_path + '.before', 'utf8')).toBe(`export const SECRET_KEY = 'original-safe-value';\n`);
   });
 
-  it('allocates collision-free TCP ports and serializes commands via FIFO mutexes', async () => {
-    engine.fencing.registerAgent({ id: 'agent-1', pidStartTime: 'simulated-alive' });
-    engine.fencing.registerAgent({ id: 'agent-2', pidStartTime: 'simulated-alive' });
+  it('allocates collision-free TCP ports and serializes commands via mutexes', async () => {
+    engine.fencing.registerAgent({ id: 'agent-1' });
+    engine.fencing.registerAgent({ id: 'agent-2' });
 
     const p1 = await engine.broker.acquirePort({
       agentId: 'agent-1',
@@ -145,10 +146,10 @@ describe('Pillar 1 & Broker: Bash Merkle Quarantine, Port/Mutex Broker, Auto-Ins
     expect(report.configuredFiles).toContain('.cursor/mcp.json');
     expect(report.configuredFiles).toContain('.agent/skills/kith/SKILL.md');
     expect(report.configuredFiles).toContain('AGENTS.md');
-    expect(report.configuredFiles).toContain('.git/hooks/pre-commit');
+    expect(report.configuredFiles.some((file) => file.endsWith('/hooks/pre-commit'))).toBe(true);
 
     const frame = renderDashboardFrame(engine);
-    expect(frame).toContain('KITH — ZERO-TRUST PARALLEL AGENT COORDINATOR');
+    expect(frame).toContain('KITH — PARALLEL AGENT COORDINATOR');
     expect(frame).toContain('LIVE DIRTY-TREE & BLAST-RADIUS RADAR');
   });
 });

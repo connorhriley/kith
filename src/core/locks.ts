@@ -39,11 +39,18 @@ export class LockEngine {
 
   public static normalizePattern(repoRoot: string, rawPattern: string): string {
     let p = rawPattern.trim().replace(/\\/g, '/');
-    const normRoot = repoRoot.replace(/\\/g, '/').replace(/\/+$/, '');
-    if (p.startsWith(normRoot + '/')) {
-      p = p.slice(normRoot.length + 1);
+    if (p.startsWith('symbol:')) {
+      const hash = p.indexOf('#');
+      if (hash < 0) throw new Error('Symbol scope must include #symbolName');
+      return `symbol:${LockEngine.normalizePattern(repoRoot, p.slice(7, hash))}${p.slice(hash)}`;
     }
-    p = p.replace(/^\.\//, '').replace(/^\/+/, '');
+    const normRoot = path.resolve(repoRoot).replace(/\\/g, '/').replace(/\/+$/, '');
+    if (p.startsWith(normRoot + '/')) p = p.slice(normRoot.length + 1);
+    else if (path.posix.isAbsolute(p)) throw new Error(`Scope is outside repository: ${rawPattern}`);
+    p = path.posix.normalize(p);
+    if (!p || p === '.' || p === '..' || p.startsWith('../')) {
+      throw new Error(`Invalid repository scope: ${rawPattern}`);
+    }
     return p;
   }
 
@@ -158,6 +165,7 @@ export class LockEngine {
     );
 
     return this.coordDb.withTransaction(() => {
+      this.fencing.assertSession(params.agentId);
       const existingLocks = this.coordDb.db
         .prepare(`SELECT * FROM locks WHERE expires_at > ?`)
         .all(now) as unknown as LockRecord[];
@@ -290,6 +298,7 @@ export class LockEngine {
     ownerIntent?: string | null;
   } {
     this.fencing.reapDeadAgents();
+    this.fencing.assertSession(params.agentId);
     const normPath = LockEngine.normalizePattern(this.coordDb.repoRoot, params.filePath);
     const now = Date.now();
 
@@ -329,6 +338,7 @@ export class LockEngine {
     fencingToken?: number;
   }): number {
     return this.coordDb.withTransaction(() => {
+      this.fencing.assertSession(params.agentId);
       const myLocks = this.coordDb.db
         .prepare(`SELECT * FROM locks WHERE owner_agent_id = ?`)
         .all(params.agentId) as unknown as LockRecord[];

@@ -26,7 +26,7 @@ export class CoordDatabase {
   constructor(repoRoot: string, customDbPath?: string) {
     this.repoRoot = path.resolve(repoRoot);
     this.coordDir = path.join(this.repoRoot, '.coord');
-    fs.mkdirSync(this.coordDir, { recursive: true });
+    fs.mkdirSync(this.coordDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(path.join(this.coordDir, 'shadow-index'), { recursive: true });
     fs.mkdirSync(path.join(this.coordDir, 'quarantine'), { recursive: true });
     fs.mkdirSync(path.join(this.coordDir, 'snapshots'), { recursive: true });
@@ -35,15 +35,15 @@ export class CoordDatabase {
     this.dbPath = customDbPath ?? path.join(this.coordDir, 'state.db');
     this.db = new DatabaseSync(this.dbPath);
 
-    this.configurePragmas();
-    this.migrate();
+    try { this.configurePragmas(); this.migrate(); }
+    catch (err) { this.db.close(); throw err; }
   }
 
   private configurePragmas(): void {
     this.db.exec(`
+      PRAGMA busy_timeout = 10000;
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
-      PRAGMA busy_timeout = 10000;
       PRAGMA foreign_keys = ON;
       PRAGMA temp_store = MEMORY;
     `);
@@ -203,6 +203,37 @@ export class CoordDatabase {
           payload_json TEXT NOT NULL
         );
       `);
+      const version = Number((this.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value: string }).value);
+      if (version > 2) throw new Error(`Unsupported future coordination schema: ${version}`);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+          agent_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, epoch INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS mutex_waiters (
+          ticket INTEGER PRIMARY KEY AUTOINCREMENT, mutex_name TEXT NOT NULL,
+          request_id TEXT NOT NULL, owner_agent_id TEXT NOT NULL, session_epoch INTEGER NOT NULL,
+          waiter_pid INTEGER NOT NULL, waiter_start TEXT NOT NULL, expires_at INTEGER NOT NULL,
+          UNIQUE(mutex_name, request_id)
+        );
+        CREATE TABLE IF NOT EXISTS mutex_runs (
+          mutex_name TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, owner_agent_id TEXT NOT NULL,
+          session_epoch INTEGER NOT NULL, fencing_token INTEGER NOT NULL,
+          supervisor_pid INTEGER NOT NULL, supervisor_start TEXT NOT NULL,
+          worker_pid INTEGER, worker_start TEXT
+        );
+      `);
+      if (version < 2) {
+        // Legacy sessions have no capability. Invalidate coordination ownership, never files.
+        this.db.exec(`
+          UPDATE tasks SET status='queued', owner_agent_id=NULL, fencing_token=NULL
+            WHERE status='active' AND owner_agent_id IN (SELECT id FROM agents);
+          DELETE FROM locks;
+          DELETE FROM resources;
+          DELETE FROM conflicts;
+          UPDATE agents SET status='dead' WHERE status='active';
+          UPDATE meta SET value='2' WHERE key='schema_version';
+        `);
+      }
     });
   }
 

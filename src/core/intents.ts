@@ -106,6 +106,7 @@ export class IntentAndTaskEngine {
     const threshold = params.similarityThreshold ?? 0.52;
 
     return this.coordDb.withTransaction(() => {
+      this.fencing.assertSession(params.agentId);
       const activeTasks = this.listTasks({ status: 'active' }).filter(
         (t) => t.owner_agent_id !== params.agentId
       );
@@ -291,6 +292,7 @@ export class IntentAndTaskEngine {
     this.fencing.reapDeadAgents();
 
     return this.coordDb.withTransaction(() => {
+      this.fencing.assertSession(agentId);
       const allTasks = this.listTasks();
       const taskById = new Map(allTasks.map((t) => [t.id, t]));
       const queued = allTasks
@@ -366,6 +368,7 @@ export class IntentAndTaskEngine {
     releaseLocks?: boolean;
   }): TaskRecord[] {
     return this.coordDb.withTransaction(() => {
+      this.fencing.assertSession(params.agentId);
       const rows = params.taskId
         ? [this.getTask(params.taskId)].filter((t): t is TaskRecord => t !== null)
         : this.listTasks({ status: 'active' }).filter((t) => t.owner_agent_id === params.agentId);
@@ -374,7 +377,7 @@ export class IntentAndTaskEngine {
       const completed: TaskRecord[] = [];
 
       for (const task of rows) {
-        if (task.owner_agent_id && task.owner_agent_id !== params.agentId) {
+        if (task.status !== 'active' || task.owner_agent_id !== params.agentId) {
           throw new Error(
             `Task '${task.id}' is owned by '${task.owner_agent_id}', not '${params.agentId}'.`
           );

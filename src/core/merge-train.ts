@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { AstAnalyzer } from './ast-analyzer.js';
+import { FencingAndAgentManager } from './fencing.js';
 import { CoordDatabase } from './db.js';
 
 export interface MergeTrainEntry {
@@ -27,7 +28,7 @@ export interface SpeculativeMergeResult {
 }
 
 export class SpeculativeMergeTrain {
-  constructor(private readonly coordDb: CoordDatabase) {}
+  constructor(private readonly coordDb: CoordDatabase, private readonly fencing: FencingAndAgentManager) {}
 
   /**
    * Enqueues and executes a Bors-style speculative integration test in an isolated staging
@@ -42,31 +43,14 @@ export class SpeculativeMergeTrain {
     verificationCmd?: string | null;
     commitMessage?: string;
   }): SpeculativeMergeResult {
+    this.fencing.assertSession(params.agentId);
+    const sessionEnv = this.fencing.sessionEnvironment(params.agentId);
     const now = Date.now();
     const id = `mrg_${crypto.randomBytes(6).toString('hex')}`;
     const token = this.coordDb.nextFencingToken();
 
-    // 1. If the agent's worktree has uncommitted changes, commit them to its branch first
-    if (params.worktreePath && fs.existsSync(params.worktreePath)) {
-      const statusOut = execFileSync('git', ['status', '--porcelain'], {
-        cwd: params.worktreePath,
-        encoding: 'utf8',
-      }).trim();
-      if (statusOut.length > 0) {
-        execFileSync('git', ['add', '-A'], { cwd: params.worktreePath, stdio: 'ignore' });
-        execFileSync(
-          'git',
-          [
-            'commit',
-            '-m',
-            params.commitMessage ?? `feat(${params.agentId}): automated worktree checkpoint`,
-          ],
-          { cwd: params.worktreePath, stdio: 'ignore' }
-        );
-      }
-    }
-
     this.coordDb.withTransaction(() => {
+      this.fencing.assertSession(params.agentId);
       this.coordDb.db
         .prepare(`
           INSERT INTO merge_queue (
@@ -88,15 +72,47 @@ export class SpeculativeMergeTrain {
         );
     });
 
-    const stageDir = path.join(this.coordDb.coordDir, 'worktrees', '_merge_train_stage');
+    const stageDir = path.join(this.coordDb.coordDir, 'worktrees', `_merge_train_${id}`);
     const autoResolvedFiles: string[] = [];
+    const lockPath = path.join(this.coordDb.coordDir, 'merge-train.lock');
+    let lockFd: number | undefined;
 
     try {
+      try {
+        lockFd = fs.openSync(lockPath, 'wx', 0o600);
+        fs.writeFileSync(lockFd, JSON.stringify({ pid: process.pid, entryId: id }));
+      } catch {
+        throw new Error('Merge train is busy. If its owner crashed, inspect .coord/merge-train.lock before removing it.');
+      }
+      const baseHead = this.gitHead(this.coordDb.repoRoot);
+      const targetBranch = this.gitBranch(this.coordDb.repoRoot);
+      if (!targetBranch) throw new Error('Merge target must be on a branch, not a detached HEAD.');
+      this.requireCleanTarget();
+      // 1. If the agent's worktree has uncommitted changes, commit them to its branch first
+      if (params.worktreePath && fs.existsSync(params.worktreePath)) {
+        const statusOut = execFileSync('git', ['status', '--porcelain'], {
+          cwd: params.worktreePath,
+          encoding: 'utf8',
+        }).trim();
+        if (statusOut.length > 0) {
+          execFileSync('git', ['add', '-A'], { cwd: params.worktreePath, env: sessionEnv, stdio: 'ignore' });
+          execFileSync(
+            'git',
+            [
+              'commit',
+              '-m',
+              params.commitMessage ?? `feat(${params.agentId}): automated worktree checkpoint`,
+            ],
+            { cwd: params.worktreePath, env: sessionEnv, stdio: 'ignore' }
+          );
+        }
+      }
+
       // Clean up any previous staging worktree
       this.cleanupStageWorktree(stageDir);
 
       // Create detached staging worktree at repoRoot's HEAD
-      execFileSync('git', ['worktree', 'add', '--detach', stageDir, 'HEAD'], {
+      execFileSync('git', ['worktree', 'add', '--detach', stageDir, baseHead], {
         cwd: this.coordDb.repoRoot,
         stdio: 'ignore',
       });
@@ -114,7 +130,7 @@ export class SpeculativeMergeTrain {
           'git',
           ['merge', '--no-ff', '-m', `Merge branch '${params.branch}' (${params.agentId})`, params.branch],
           {
-            cwd: stageDir,
+            cwd: stageDir, env: sessionEnv,
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'pipe'],
           }
@@ -124,7 +140,7 @@ export class SpeculativeMergeTrain {
         const unmergedOut = execFileSync(
           'git',
           ['diff', '--name-only', '--diff-filter=U'],
-          { cwd: stageDir, encoding: 'utf8' }
+          { cwd: stageDir, env: sessionEnv, encoding: 'utf8' }
         ).trim();
 
         const conflictedFiles = unmergedOut.split(/\r?\n/).filter(Boolean);
@@ -151,7 +167,7 @@ export class SpeculativeMergeTrain {
           }
 
           fs.writeFileSync(path.join(stageDir, relFile), check.mergedContent, 'utf8');
-          execFileSync('git', ['add', relFile], { cwd: stageDir, stdio: 'ignore' });
+          execFileSync('git', ['add', relFile], { cwd: stageDir, env: sessionEnv, stdio: 'ignore' });
           autoResolvedFiles.push(relFile);
         }
 
@@ -162,7 +178,7 @@ export class SpeculativeMergeTrain {
             '-m',
             `Merge branch '${params.branch}' (${params.agentId}) [AST auto-resolved: ${autoResolvedFiles.join(', ')}]`,
           ],
-          { cwd: stageDir, stdio: 'ignore' }
+          { cwd: stageDir, env: sessionEnv, stdio: 'ignore' }
         );
       }
 
@@ -171,7 +187,7 @@ export class SpeculativeMergeTrain {
       if (params.verificationCmd) {
         try {
           const out = execSync(params.verificationCmd, {
-            cwd: stageDir,
+            cwd: stageDir, env: sessionEnv,
             encoding: 'utf8',
             stdio: ['ignore', 'pipe', 'pipe'],
             timeout: 120_000,
@@ -189,10 +205,16 @@ export class SpeculativeMergeTrain {
 
       // 4. Advance the main repository to the verified speculative commit
       const verifiedSha = execFileSync('git', ['rev-parse', 'HEAD'], {
-        cwd: stageDir,
+        cwd: stageDir, env: sessionEnv,
         encoding: 'utf8',
       }).trim();
 
+      if (this.gitHead(this.coordDb.repoRoot) !== baseHead ||
+          this.gitBranch(this.coordDb.repoRoot) !== targetBranch) {
+        throw new Error('Merge target changed during verification. Retry against the new target.');
+      }
+      this.fencing.assertSession(params.agentId);
+      this.requireCleanTarget();
       execFileSync('git', ['merge', '--ff-only', verifiedSha], {
         cwd: this.coordDb.repoRoot,
         stdio: 'ignore',
@@ -253,6 +275,30 @@ export class SpeculativeMergeTrain {
         mergedCommitSha: null,
         diagnostics,
       };
+    } finally {
+      if (lockFd !== undefined) {
+        fs.closeSync(lockFd);
+        fs.unlinkSync(lockPath);
+      }
+    }
+  }
+
+  private gitHead(cwd: string): string {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+  }
+
+  private gitBranch(cwd: string): string {
+    return execFileSync('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  }
+
+  private requireCleanTarget(): void {
+    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], {
+      cwd: this.coordDb.repoRoot, encoding: 'utf8',
+    });
+    if (status.split(/\r?\n/).some((line) => line && line !== '?? .coord/')) {
+      throw new Error('Merge target has local changes. Commit or preserve them before integrating.');
     }
   }
 

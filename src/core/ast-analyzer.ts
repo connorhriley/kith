@@ -383,7 +383,7 @@ export class AstAnalyzer {
     }
 
     for (const sym of addedByA) {
-      if (exportsB.has(sym) && exportsB.get(sym) !== exportsA.get(sym)) {
+      if (exportsB.has(sym)) {
         return {
           autoMergeable: false,
           reason: `Both agents added conflicting definitions for symbol '${sym}'`,
@@ -391,18 +391,12 @@ export class AstAnalyzer {
       }
     }
 
-    // Verify both files strictly append or insert disjoint lines relative to base
-    const baseLines = new Set(
-      baseContent
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean)
-    );
-    const extraLinesB = contentB
-      .split(/\r?\n/)
-      .filter((l) => l.trim().length > 0 && !baseLines.has(l.trim()));
-
-    const mergedContent = contentA.trimEnd() + '\n\n' + extraLinesB.join('\n') + '\n';
+    // Export fingerprints do not prove that existing implementations were preserved.
+    // Only accept exact append-only content, and retain complete appended blocks.
+    if (!contentA.startsWith(baseContent) || !contentB.startsWith(baseContent)) {
+      return { autoMergeable: false, reason: 'Source edits are not strictly append-only' };
+    }
+    const mergedContent = contentA.trimEnd() + '\n' + contentB.slice(baseContent.length) + '\n';
     return {
       autoMergeable: true,
       mergedContent,
@@ -415,50 +409,39 @@ export class AstAnalyzer {
     a: Record<string, unknown>,
     b: Record<string, unknown>
   ): Record<string, unknown> | null {
-    const result: Record<string, unknown> = { ...base };
-    const allKeys = new Set([...Object.keys(base), ...Object.keys(a), ...Object.keys(b)]);
-
-    for (const key of allKeys) {
-      const vBase = base[key];
-      const vA = a[key];
-      const vB = b[key];
-
-      if (JSON.stringify(vA) === JSON.stringify(vB)) {
-        if (vA !== undefined) result[key] = vA;
-        continue;
+    const isObject = (value: unknown): value is Record<string, unknown> =>
+      value !== null && typeof value === 'object' && !Array.isArray(value);
+    if (!isObject(base) || !isObject(a) || !isObject(b)) return null;
+    const result: Record<string, unknown> = {};
+    const has = (obj: Record<string, unknown>, key: string) => Object.hasOwn(obj, key);
+    const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+    for (const key of new Set([...Object.keys(base), ...Object.keys(a), ...Object.keys(b)])) {
+      const original = base[key];
+      const left = a[key];
+      const right = b[key];
+      if (has(base, key)) {
+        if (!has(a, key) || !has(b, key)) return null;
+        if (isObject(original) && isObject(left) && isObject(right)) {
+          const nested = AstAnalyzer.tryAdditiveJsonMerge(original, left, right);
+          if (!nested) return null;
+          Object.defineProperty(result, key, { value: nested, enumerable: true });
+        } else {
+          if (!equal(original, left) || !equal(original, right)) return null;
+          Object.defineProperty(result, key, { value: original, enumerable: true });
+        }
+      } else if (has(a, key) && has(b, key)) {
+        let value = left;
+        if (!equal(left, right)) {
+          if (!isObject(left) || !isObject(right)) return null;
+          const nested = AstAnalyzer.tryAdditiveJsonMerge({}, left, right);
+          if (!nested) return null;
+          value = nested;
+        }
+        Object.defineProperty(result, key, { value, enumerable: true });
+      } else {
+        Object.defineProperty(result, key, { value: has(a, key) ? left : right, enumerable: true });
       }
-      if (JSON.stringify(vA) === JSON.stringify(vBase)) {
-        if (vB !== undefined) result[key] = vB;
-        else delete result[key];
-        continue;
-      }
-      if (JSON.stringify(vB) === JSON.stringify(vBase)) {
-        if (vA !== undefined) result[key] = vA;
-        else delete result[key];
-        continue;
-      }
-
-      if (
-        typeof vA === 'object' &&
-        vA !== null &&
-        !Array.isArray(vA) &&
-        typeof vB === 'object' &&
-        vB !== null &&
-        !Array.isArray(vB)
-      ) {
-        const sub = AstAnalyzer.tryAdditiveJsonMerge(
-          (typeof vBase === 'object' && vBase !== null ? vBase : {}) as Record<string, unknown>,
-          vA as Record<string, unknown>,
-          vB as Record<string, unknown>
-        );
-        if (sub === null) return null;
-        result[key] = sub;
-        continue;
-      }
-
-      return null;
     }
-
     return result;
   }
 

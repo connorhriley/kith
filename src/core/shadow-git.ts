@@ -66,7 +66,8 @@ export class ShadowGitEngine {
 
   private getShadowIndexPath(agentId: string): string {
     const safeId = agentId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return path.join(this.coordDb.coordDir, 'shadow-index', `${safeId}.index`);
+    const epoch = this.fencing.assertSession(agentId);
+    return path.join(this.coordDb.coordDir, 'shadow-index', `${safeId}-${epoch}.index`);
   }
 
   /**
@@ -80,6 +81,7 @@ export class ShadowGitEngine {
     modifiedFiles?: Array<{ filePath: string; content?: string }>;
     worktreeDir?: string;
   }): string | null {
+    this.fencing.assertSession(params.agentId);
     const targetDir = params.worktreeDir ?? this.coordDb.repoRoot;
     if (!this.isGitRepository(targetDir)) return null;
 
@@ -120,14 +122,12 @@ export class ShadowGitEngine {
 
         if (content === null) {
           // File was deleted
-          try {
-            execFileSync('git', [' update-index', '--force-remove', relPath], {
+          {
+            execFileSync('git', ['update-index', '--force-remove', '--', relPath], {
               cwd: targetDir,
               env,
               stdio: 'ignore',
             });
-          } catch {
-            // Ignore if not in index
           }
         } else {
           const blobSha = execFileSync('git', ['hash-object', '-w', '--stdin'], {
@@ -164,9 +164,10 @@ export class ShadowGitEngine {
       }
     ).trim();
 
-    this.coordDb.db
-      .prepare(`UPDATE agents SET shadow_tree_sha = ? WHERE id = ?`)
-      .run(shadowCommitSha, params.agentId);
+    this.coordDb.withTransaction(() => {
+      this.fencing.assertSession(params.agentId);
+      this.coordDb.db.prepare(`UPDATE agents SET shadow_tree_sha = ? WHERE id = ?`).run(shadowCommitSha, params.agentId);
+    });
 
     return shadowCommitSha;
   }
@@ -199,11 +200,10 @@ export class ShadowGitEngine {
     let lastMergedTreeSha: string | null = null;
 
     // Clear outdated text/ast conflicts for this agent before re-probing
-    this.coordDb.db
-      .prepare(
-        `DELETE FROM conflicts WHERE (agent_a = ? OR agent_b = ?) AND severity IN ('text_conflict', 'ast_conflict', 'auto_mergeable')`
-      )
-      .run(agentId, agentId);
+    this.coordDb.withTransaction(() => {
+      this.fencing.assertSession(agentId);
+      this.coordDb.db.prepare(`DELETE FROM conflicts WHERE (agent_a = ? OR agent_b = ?) AND severity IN ('text_conflict', 'ast_conflict', 'auto_mergeable')`).run(agentId, agentId);
+    });
 
     for (const peer of activeAgents) {
       if (!peer.shadow_tree_sha) continue;
@@ -239,6 +239,7 @@ export class ShadowGitEngine {
     agentB: string,
     commitB: string
   ): DirtyMergeProbeResult {
+    this.fencing.assertSession(agentA);
     try {
       const stdout = execFileSync(
         'git',
@@ -281,6 +282,9 @@ export class ShadowGitEngine {
         }
       }
 
+      if (stageBlobsByFile.size === 0) {
+        throw new Error(`git merge-tree failed without a usable conflict result: ${err instanceof Error ? err.message : String(err)}`);
+      }
       const conflicts: ConflictRecord[] = [];
       const autoMergeableFiles: string[] = [];
       const now = Date.now();
@@ -323,6 +327,8 @@ export class ShadowGitEngine {
           detected_at: now,
         };
 
+        this.coordDb.withTransaction(() => {
+          this.fencing.assertSession(agentA);
         this.coordDb.db
           .prepare(`
             INSERT OR REPLACE INTO conflicts (
@@ -339,10 +345,12 @@ export class ShadowGitEngine {
             JSON.stringify(record.details),
             now
           );
+        });
 
         conflicts.push(record);
       }
 
+      this.fencing.assertSession(agentA);
       if (conflicts.some((c) => c.severity !== 'auto_mergeable')) {
         this.coordDb.logEvent(agentA, 'dirty_merge_conflict', {
           peerAgent: agentB,

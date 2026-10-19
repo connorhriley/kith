@@ -1,7 +1,7 @@
 {
   "name": "kith",
   "version": "1.0.0",
-  "description": "Zero-trust parallel agent coordination engine: fencing locks, live dirty-tree git merge-tree conflict detection, AST blast-radius radar, semantic deduplication, CoW worktrees, and speculative merge train.",
+  "description": "Local coordination for parallel coding agents: scoped locks, task queues, contract-change hints, isolated worktrees, and verification before integration.",
   "type": "module",
   "bin": {
     "kith": "./dist/cli/index.js",
@@ -11,23 +11,35 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "docs",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+    "CHANGELOG.md",
+    "assets/brand"
   ],
   "engines": {
-    "node": ">=22.5.0"
+    "node": "^22.13.0 || >=24.0.0"
   },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "NODE_OPTIONS='--no-warnings' vitest run",
-    "test:watch": "NODE_OPTIONS='--no-warnings' vitest",
-    "typecheck": "tsc --noEmit"
+    "test": "tsup && vitest run",
+    "test:watch": "tsup && vitest",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm typecheck && pnpm test",
+    "prepack": "tsup",
+    "test:package": "pnpm build && node scripts/smoke-package.mjs",
+    "demo": "pnpm build && node examples/two-agents.mjs",
+    "test:clients": "pnpm build && node scripts/validate-native-clients.mjs"
   },
   "keywords": [
     "ai-agents",
@@ -43,8 +55,9 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10.2",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "picomatch": "^4.0.2",
+    "smol-toml": "^1.9.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {
@@ -53,5 +66,14 @@
     "tsup": "^8.4.0",
     "typescript": "^5.8.2",
     "vitest": "^3.0.7"
+  },
+  "packageManager": "pnpm@10.20.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/connorhriley/kith.git"
+  },
+  "homepage": "https://github.com/connorhriley/kith#readme",
+  "bugs": {
+    "url": "https://github.com/connorhriley/kith/issues"
   }
 }

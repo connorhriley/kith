@@ -1,83 +1,137 @@
-# Kith (`kith`)
+<p align="center">
+  <img src="assets/brand/readme-header.png" alt="Kith — Parallel agents. Shared direction. Local coordination for coding agents." width="100%">
+</p>
 
-**Zero-trust parallel agent coordination engine.**
-Prevent concurrent AI coding agents (**Claude Code**, **Antigravity**, **Codex CLI**, **Cursor**) from duplicating work, colliding on files, drifting on shared contracts, or thrashing local ports and toolchains.
+# Kith
 
----
+Kith helps coding agents coordinate work in the same local repository. Give each agent a scope, detect overlapping work, and inspect shared state through the CLI, terminal dashboard, or MCP.
 
-## Why Kith?
+- **Claim a scope.** Register a task and check for overlapping exclusive scopes.
+- **See shared work.** Inspect sessions, tasks, and coordination state.
+- **Work in isolation.** Create agent worktrees and integrate completed work, with an optional project verification command.
 
-Running parallel coding agents on the same repository fails in predictable ways:
-1. **Prompt instructions get ignored:** Agents forget to check markdown handoff files or run bash scripts (`sed`, `python`, `git checkout`) that overwrite sibling agents' uncommitted work.
-2. **Duplicate utilities & overlapping work:** Two agents both notice a missing helper (`formatCurrency` vs `formatMoney`) and implement incompatible versions in different files.
-3. **Silent contract drift (Transitive Blast Radius):** Agent A changes the signature of `verifyToken` in `src/lib/auth.ts` while Agent B is writing code in `src/routes/checkout.ts` two import hops away.
-4. **Late merge conflicts:** Standard `git worktree` setups isolate files on disk, so conflicts aren't discovered until 45 minutes later when branches are merged.
+[Quick start](#try-it-from-source) · [Integrations](docs/integrations.md) · [Reliability](docs/reliability.md) · [Contributing](CONTRIBUTING.md)
 
-**Kith solves all four deterministically at the OS, Git plumbing, AST, and Hook layer—with zero external servers or Docker containers.**
+**Status: experimental.** Kith has useful coordination primitives and regression tests, but needs field testing before use on irreplaceable work. It is designed for cooperating agents on one machine. Hooks and fencing checks are not an OS security boundary.
 
----
+## Try it from source
 
-## Six Bulletproof Pillars
+Requirements: Git 2.38+ and Node.js 22.13+ on the 22.x line, or Node.js 24+. Development targets macOS and Linux; Windows support is not yet validated. Node's SQLite module may emit an experimental warning.
 
-1. **Zero-Trust Enforcement (`Pre/PostToolUse` Hooks + Merkle Bash Quarantine + `PATH` Shims):**
-   - Intercepts `Edit`/`Write`/`MultiEdit` before touching disk if another agent holds a fencing lock on the target scope.
-   - Captures a **Merkle snapshot** before every `Bash` execution. If a script modifies a file locked by another agent, Kith **automatically reverts the file to its exact pre-command bytes** and saves the unauthorized change into `.coord/quarantine/`.
-   - Blocks destructive `git reset --hard` / `git clean -fd` in shared workspaces and serializes `npm`/`pnpm`/`yarn install` via FIFO mutex shims.
-2. **Sub-15ms Live Dirty-Tree Conflict Radar (`GIT_INDEX_FILE` + `git merge-tree` + AST Filter):**
-   - Maintains an ephemeral shadow Git index per agent (`.coord/shadow-index/<agent>.index`) without touching `.git/index`.
-   - Runs `git merge-tree --write-tree` across **uncommitted files** on every edit, using an AST additive filter so disjoint exports added to `index.ts` or keys added to `package.json` are marked `AUTO-MERGEABLE`.
-3. **Import-Graph Blast Radius & Zero-Touch Contract Blackboard:**
-   - Automatically extracts exported functions, types, interfaces, schemas, and routes on every file edit.
-   - Traces the repository's transitive import graph (up to 4 hops) and immediately alerts downstream agents when an upstream signature changes.
-4. **Semantic Duplicate-Work Prevention (SQLite FTS5 BM25 + AST Type Fingerprinting):**
-   - Combines SQLite FTS5, domain synonym normalization, and structural parameter/return-type fingerprints to warn agents when they create a symbol that duplicates an existing export or a sibling agent's new helper.
-5. **Instant Copy-on-Write Worktrees & Bors-Style Speculative Merge Train:**
-   - Spawns isolated worktrees hydrated via **APFS `cp -cR` (macOS) / Reflink (Linux)** in `<100ms` with zero extra disk usage.
-   - Integrates completed branches in a detached speculative staging worktree, auto-resolves AST-additive conflicts, and runs verification (`tsc --noEmit` / tests) before fast-forwarding `main`.
-6. **Monotonic Fencing Tokens & `(pid, lstart)` Process Liveness Reaper:**
-   - Every lock and resource lease carries a strictly increasing `fencing_token` to reject zombie split-brain writes.
-   - Verifies kernel process start timestamps (`ps -o lstart=`) to reclaim locks, ports, and tasks from crashed terminals in `<50ms`.
-
----
-
-## Quick Start (1-Command Install)
-
-```bash
-npx kith init
+```sh
+# From this checkout
+corepack enable
+pnpm install --frozen-lockfile
+pnpm check
+pnpm link --global
+kith help
 ```
 
-Running `kith init` in any repository automatically configures:
-- `.claude/settings.json` (MCP server + `PreToolUse` / `PostToolUse` hooks)
-- `.cursor/mcp.json` (MCP server)
-- `.agent/skills/kith/SKILL.md` (Antigravity / generic agent skill)
-- `AGENTS.md` (Codex / CLI instructions)
-- `.git/hooks/pre-commit` & `.coord/bin/{npm,pnpm,yarn}` shims
+The repository has no configured upstream remote. Package-name ownership and registry publication have not been verified; use the source checkout until a release channel is established.
 
----
+In a disposable Git repository, preview setup before applying it:
 
-## CLI Usage (`kith` / `coord`)
+```sh
+kith init --dry-run
+kith init --only claude,agents
+```
 
-```bash
-# Launch live TUI dashboard
-kith top
+`--only` accepts `claude,cursor,agents,git,shims`. Without it, all are selected. Setup preserves unrelated settings, existing hooks, and MCP servers; invalid JSON stops setup before configuration writes. Review the returned file list and warnings. Claude MCP configuration lives in `.mcp.json`; hooks live in `.claude/settings.json`. Existing Git pre-commit hooks are left for you to integrate with your hook manager.
 
-# Peer-to-Peer Mode: declare intent, check semantic & glob overlaps, and lock scope
-kith begin --agent claude-1 --title "Refactor JWT middleware" --scope "src/auth/**"
+Hook and MCP configurations execute `kith`, so make sure it is installed on the client process's `PATH`. Restart the client after changing configuration. See [integration details](docs/integrations.md).
 
-# Spawn an isolated Copy-on-Write worktree
-kith begin --agent codex-2 --title "Billing webhooks" --scope "src/billing/**" --worktree
+## Coordinate two agents
 
-# Orchestrator Mode: add DAG tasks with dependencies and claim next unblocked task
-kith task add --id schema --title "Add Drizzle billing schema" --scope "src/db/**"
-kith task add --id api --title "Add billing endpoints" --depends-on schema --scope "src/api/**"
+Run commands from the repository root, or pass `--repo /absolute/path`. Create a capability-owned session and share its environment with CLI commands and hooks. An agent ID alone cannot resume another session.
+
+```sh
+eval "$(kith session start --agent auth-worker --owner-pid "$$" --shell)"
+kith begin --agent auth-worker --title "Refresh auth middleware" --scope "src/auth/**"
+kith status
+kith heartbeat --agent auth-worker
+kith complete --agent auth-worker
+unset KITH_AGENT_ID KITH_SESSION_TOKEN
+```
+
+A second agent requesting an overlapping exclusive scope receives a conflict and a nonzero exit status. Quote globs so the shell does not expand them. Scopes are comma-separated. Leases default to five minutes; heartbeat during longer sessions. Dead or expired sessions release coordination resources when another operation runs the reaper. Active supervised command guards survive expiry until the command group stops. See [sessions and mutexes](docs/sessions-and-mutexes.md) for ownership, cancellation, and upgrade details.
+
+For stronger filesystem separation, use a worktree:
+
+```sh
+eval "$(kith session start --agent billing-worker --owner-pid "$$" --shell)"
+kith begin --agent billing-worker --title "Billing webhooks" --scope "src/billing/**" --worktree
+# Edit in the worktreePath returned in the JSON result.
+kith complete --agent billing-worker --verify "pnpm typecheck"
+# Open a new maintenance generation after the completed session.
+eval "$(kith session start --agent billing-worker --new --owner-pid "$$" --shell)"
+kith worktree remove --agent billing-worker
+kith session end
+unset KITH_AGENT_ID KITH_SESSION_TOKEN
+```
+
+Completion checkpoints uncommitted worktree changes and integrates into the branch currently checked out in the main repository. The target must be clean. A verification failure leaves the target unchanged and the worktree available for repair. Successful completion also keeps the worktree for inspection; removal is explicit and refuses dirty, untracked, or ignored work. Existing branches are never reset to create a worktree. Hydration tries filesystem clones and falls back to an independent copy; cost depends on the filesystem and dependency size.
+
+A verification command is optional. Without one, integration checks Git mergeability only. Choose a command that actually checks your project.
+
+## Runnable client example
+
+Run `pnpm demo` from the checkout. It starts two real MCP stdio clients, edits separate Git worktrees in a disposable repository, reports the files, and verifies/integrates both branches. No model API calls are involved.
+
+## Other workflows
+
+```sh
+# Task dependencies
+kith task add --id schema --title "Billing schema" --scope "src/db/**"
+kith task add --id api --title "Billing endpoints" --depends-on schema --scope "src/api/**"
 kith task claim --agent worker-1
 
-# Lease a collision-free local TCP port
-kith port --agent claude-1 --service web
+# Inspect the dashboard once, or omit --once for a live view
+kith top --once
 
-# Serialize package installs or migrations across parallel agents
-kith mutex --agent claude-1 --name install -- pnpm install
+# Allocate a cooperating client's port; start your service promptly
+kith port --agent worker-1 --service web
 
-# Complete work & run Speculative Merge Train with verification gate
-kith complete --agent codex-2 --verify "pnpm run typecheck"
+# Serialize commands; argument boundaries are preserved after --
+kith mutex --agent worker-1 --name package-install -- pnpm install
+
+# Start the MCP stdio server
+kith mcp
 ```
+
+The `coord` executable is an alias for `kith`. The library exports `KithEngine` and its component classes for custom integrations:
+
+```js
+import { KithEngine } from 'kith';
+const kith = new KithEngine('/absolute/path/to/repository');
+try {
+  kith.fencing.registerAgent({ id: 'custom-worker' });
+  const result = kith.locks.acquireLocks({
+    agentId: 'custom-worker', patterns: ['src/auth/**'],
+  });
+  console.log(result);
+} finally {
+  kith.close();
+}
+```
+
+## Capabilities and limits
+
+| Capability | Practical boundary |
+| --- | --- |
+| Scoped file, glob, and symbol locks | Cooperative checks; glob intersections use heuristics and need more adversarial coverage |
+| Task claims and fencing tokens | SQLite writer transactions; callers must check results and present tokens where supported |
+| Contract and dependency hints | Lightweight source parsing, not a compiler or a complete type-system analysis |
+| Duplicate-symbol hints | FTS and structural heuristics; false positives and misses are possible |
+| Dirty-tree conflict probes | Git shadow indexes; Git failures surface as errors; automatic additive merges still need project verification |
+| Bash mutation quarantine | Recovery copies with exclusions and size limits; automatic restoration is disabled by default |
+| Port leases | Unique among live Kith reservations; no socket is held for the eventual service |
+| Command mutexes | Renewed leases, persistent FIFO tickets, and guarded process groups; protected work must stay in the supervised group |
+| Merge integration | Serialized Kith integrations and isolated staging; external Git writers must still coordinate |
+
+See the [reliability contract](docs/reliability.md), [architecture](docs/architecture.md), and [roadmap](docs/roadmap.md) before extending or deploying Kith.
+
+## Contribute
+
+Review [unreleased changes and migration notes](CHANGELOG.md). Start with [CONTRIBUTING.md](CONTRIBUTING.md). Run `pnpm check`; it typechecks, builds the distributable, and runs unit, Git integration, CLI/MCP end-to-end, supervision failure, and 50-process contention tests. CI is configured for macOS/Linux and supported Node versions; a local run does not establish that the CI matrix has passed.
+
+Licensed under [MIT](LICENSE). See [SECURITY.md](SECURITY.md) for reporting guidance and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for participation expectations.

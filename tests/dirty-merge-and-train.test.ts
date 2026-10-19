@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KithEngine } from '../src/index.js';
 
-describe('Pillar 2 & 5: Dirty-Tree Shadow Git (`git merge-tree`), CoW Worktrees & Speculative Merge Train', () => {
+describe('Dirty-Tree Shadow Git (`git merge-tree`), CoW Worktrees & Speculative Merge Train', () => {
   let tmpDir: string;
   let engine: KithEngine;
 
@@ -38,9 +38,9 @@ describe('Pillar 2 & 5: Dirty-Tree Shadow Git (`git merge-tree`), CoW Worktrees 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('detects live dirty-tree conflicts across uncommitted files in <15ms via GIT_INDEX_FILE + git merge-tree', () => {
-    engine.fencing.registerAgent({ id: 'agent-1', pidStartTime: 'simulated-alive' });
-    engine.fencing.registerAgent({ id: 'agent-2', pidStartTime: 'simulated-alive' });
+  it('detects live dirty-tree conflicts across uncommitted files via GIT_INDEX_FILE + git merge-tree', () => {
+    engine.fencing.registerAgent({ id: 'agent-1' });
+    engine.fencing.registerAgent({ id: 'agent-2' });
 
     // Agent 1 makes an uncommitted edit to calculateTotal in src/shared.ts
     engine.processPostFileEdit({
@@ -63,8 +63,8 @@ describe('Pillar 2 & 5: Dirty-Tree Shadow Git (`git merge-tree`), CoW Worktrees 
   });
 
   it('filters out false-positive line conflicts when two agents append disjoint exports to the same file', () => {
-    engine.fencing.registerAgent({ id: 'agent-1', pidStartTime: 'simulated-alive' });
-    engine.fencing.registerAgent({ id: 'agent-2', pidStartTime: 'simulated-alive' });
+    engine.fencing.registerAgent({ id: 'agent-1' });
+    engine.fencing.registerAgent({ id: 'agent-2' });
 
     // Agent 1 appends helperAlpha to src/index.ts
     engine.processPostFileEdit({
@@ -86,8 +86,8 @@ describe('Pillar 2 & 5: Dirty-Tree Shadow Git (`git merge-tree`), CoW Worktrees 
   });
 
   it('spawns Copy-on-Write worktrees, auto-resolves additive conflicts in Speculative Merge Train, and gates on verification', () => {
-    engine.fencing.registerAgent({ id: 'wt-agent-1', pidStartTime: 'simulated-alive' });
-    engine.fencing.registerAgent({ id: 'wt-agent-2', pidStartTime: 'simulated-alive' });
+    engine.fencing.registerAgent({ id: 'wt-agent-1' });
+    engine.fencing.registerAgent({ id: 'wt-agent-2' });
 
     const wt1 = engine.worktrees.spawnWorktree({ agentId: 'wt-agent-1' });
     const wt2 = engine.worktrees.spawnWorktree({ agentId: 'wt-agent-2' });
@@ -129,7 +129,7 @@ describe('Pillar 2 & 5: Dirty-Tree Shadow Git (`git merge-tree`), CoW Worktrees 
     expect(finalMainIndex).toContain('fromAgentTwo');
 
     // Now test verification failure gate: if verificationCmd fails, main is NOT modified!
-    engine.fencing.registerAgent({ id: 'wt-broken', pidStartTime: 'simulated-alive' });
+    engine.fencing.registerAgent({ id: 'wt-broken' });
     const wtBroken = engine.worktrees.spawnWorktree({ agentId: 'wt-broken' });
     fs.writeFileSync(
       path.join(wtBroken.worktreePath, 'src/broken.ts'),

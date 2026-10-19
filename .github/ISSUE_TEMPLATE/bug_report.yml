@@ -1,0 +1,19 @@
+name: Bug report
+description: A reproducible reliability or usability problem
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Include expected behavior and the smallest reproducible example. Redact source and secrets.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Environment
+      description: OS, Node and Git versions, Kith revision, client, and whether worktrees or hooks were involved.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction and diagnostics
+      description: Commands, exit statuses, and redacted output. Do not upload .coord or private source files.

@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -22,7 +24,6 @@ describe('Pillar 1 & 6: Monotonic Fencing Tokens, Dead-PID Reaper, Glob Locks & 
     const regA = engine.fencing.registerAgent({
       id: 'claude-1',
       client: 'claude-code',
-      pidStartTime: 'simulated-alive',
     });
 
     const lock1 = engine.locks.acquireLocks({
@@ -61,8 +62,8 @@ describe('Pillar 1 & 6: Monotonic Fencing Tokens, Dead-PID Reaper, Glob Locks & 
   });
 
   it('detects glob-to-glob, glob-to-file, and symbol lock overlaps across agents', () => {
-    engine.fencing.registerAgent({ id: 'agent-a', pidStartTime: 'simulated-alive' });
-    engine.fencing.registerAgent({ id: 'agent-b', pidStartTime: 'simulated-alive' });
+    engine.fencing.registerAgent({ id: 'agent-a' });
+    engine.fencing.registerAgent({ id: 'agent-b' });
 
     const acqA = engine.locks.acquireLocks({
       agentId: 'agent-a',
@@ -95,12 +96,12 @@ describe('Pillar 1 & 6: Monotonic Fencing Tokens, Dead-PID Reaper, Glob Locks & 
     expect(acqB3.ok).toBe(true);
   });
 
-  it('automatically reaps locks and re-queues tasks when an agent PID dies', () => {
-    // Register agent-crash with a simulated dead process
+  it('automatically reaps locks and re-queues tasks when an agent PID dies', async () => {
+    const processOwner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    // Use an actual process identity and death, not a production sentinel.
     engine.fencing.registerAgent({
       id: 'agent-crash',
-      pid: 999991,
-      pidStartTime: 'simulated-alive',
+      pid: processOwner.pid!
     });
 
     const t1 = engine.intents.addTask({
@@ -114,15 +115,12 @@ describe('Pillar 1 & 6: Monotonic Fencing Tokens, Dead-PID Reaper, Glob Locks & 
     expect(claimed.claimed).toBe(true);
     expect(engine.locks.listLocks()).toHaveLength(1);
 
-    // Simulate process death for agent-crash
-    engine.coordDb.db
-      .prepare(`UPDATE agents SET pid_start_time = 'simulated-dead' WHERE id = 'agent-crash'`)
-      .run();
+    processOwner.kill('SIGKILL');
+    await once(processOwner, 'exit');
 
     // Live agent-rescuer arrives and claims next task -> dead agent is reaped automatically!
     engine.fencing.registerAgent({
-      id: 'agent-rescuer',
-      pidStartTime: 'simulated-alive',
+      id: 'agent-rescuer'
     });
 
     const rescued = engine.intents.claimNextTask('agent-rescuer');
@@ -132,8 +130,8 @@ describe('Pillar 1 & 6: Monotonic Fencing Tokens, Dead-PID Reaper, Glob Locks & 
   });
 
   it('prevents semantic duplicate intents in P2P mode even when file globs differ', () => {
-    engine.fencing.registerAgent({ id: 'claude-1', pidStartTime: 'simulated-alive' });
-    engine.fencing.registerAgent({ id: 'codex-2', pidStartTime: 'simulated-alive' });
+    engine.fencing.registerAgent({ id: 'claude-1' });
+    engine.fencing.registerAgent({ id: 'codex-2' });
 
     const res1 = engine.intents.declareIntent({
       agentId: 'claude-1',
@@ -176,7 +174,7 @@ describe('Pillar 1 & 6: Monotonic Fencing Tokens, Dead-PID Reaper, Glob Locks & 
       })
     ).toThrow(/cannot depend on itself/);
 
-    engine.fencing.registerAgent({ id: 'worker-1', pidStartTime: 'simulated-alive' });
+    engine.fencing.registerAgent({ id: 'worker-1' });
     const firstClaim = engine.intents.claimNextTask('worker-1');
     expect(firstClaim.claimed).toBe(true);
     expect(firstClaim.task?.id).toBe('schema');

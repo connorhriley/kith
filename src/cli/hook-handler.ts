@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import { LockEngine } from '../core/locks.js';
 import { KithEngine } from '../core/engine.js';
 
 export interface HookInputPayload {
@@ -8,6 +9,7 @@ export interface HookInputPayload {
   tool_name?: string;
   tool_input?: {
     file_path?: string;
+    notebook_path?: string;
     path?: string;
     target_file?: string;
     command?: string;
@@ -39,12 +41,17 @@ export class HookHandler {
     filePath?: string;
     command?: string;
   }): { allowed: boolean; exitCode: number; message: string } {
-    this.engine.fencing.registerAgent({
-      id: params.agentId,
-      client: 'hook',
-    });
+    this.engine.fencing.assertSession(params.agentId);
 
+    const agent = this.engine.fencing.getAgent(params.agentId);
+    if (params.filePath && agent?.worktree_path) {
+      params = { ...params, filePath: LockEngine.normalizePattern(agent.worktree_path, params.filePath) };
+    }
     const tool = params.toolName.toLowerCase();
+
+    if ((tool.includes('edit') || tool.includes('write') || tool.includes('replace')) && !params.filePath) {
+      return { allowed: false, exitCode: 2, message: '[KITH LOCK GUARD] Missing file path in edit hook payload.' };
+    }
 
     // 1. Pre-Edit / Pre-Write File Lock Enforcement
     if (
@@ -65,13 +72,16 @@ export class HookHandler {
       }
 
       // Auto-acquire an advisory/exclusive file lock if the file was unlocked so sibling agents see it immediately
-      this.engine.locks.acquireLocks({
+      const acquired = this.engine.locks.acquireLocks({
         agentId: params.agentId,
         patterns: [params.filePath],
         lockType: 'file',
         reason: `Auto-locked on ${params.toolName}`,
       });
 
+      if (!acquired.ok) {
+        return { allowed: false, exitCode: 2, message: '[KITH LOCK GUARD] Another agent acquired the file lock. Retry after resolving the conflict.' };
+      }
       return { allowed: true, exitCode: 0, message: '' };
     }
 
@@ -114,6 +124,10 @@ export class HookHandler {
     filePath?: string;
     command?: string;
   }): { allowed: boolean; exitCode: number; warnings: string[]; deltaFooter: string } {
+    const agent = this.engine.fencing.getAgent(params.agentId);
+    if (params.filePath && agent?.worktree_path) {
+      params = { ...params, filePath: LockEngine.normalizePattern(agent.worktree_path, params.filePath) };
+    }
     const tool = params.toolName.toLowerCase();
     const warnings: string[] = [];
 
@@ -139,7 +153,7 @@ export class HookHandler {
       if (!report.allowed) {
         for (const v of report.quarantinedViolations) {
           warnings.push(
-            `[KITH BASH QUARANTINE] Reverted unauthorized edit to '${v.file_path}' caused by command '${v.command}'. ${v.reason}. Quarantined backup saved to '${v.patch_path}'.`
+            `[KITH BASH QUARANTINE] Detected a change to locked file '${v.file_path}' during command '${v.command}'. Current workspace bytes were preserved. ${v.reason}. Recovery copies saved to '${v.patch_path}' (and .before when available).`
           );
         }
         const deltaFooter = this.engine.consumeAgentDelta(params.agentId).formattedFooter;
@@ -173,12 +187,12 @@ export class HookHandler {
     try {
       const out = execFileSync(
         'git',
-        ['diff', '--cached', '--name-only'],
+        ['diff', '--cached', '--name-only', '-z'],
         { cwd: this.engine.coordDb.repoRoot, encoding: 'utf8' }
-      ).trim();
-      stagedFiles = out.split(/\r?\n/).filter(Boolean);
+      );
+      stagedFiles = out.split('\0').filter(Boolean);
     } catch {
-      return { allowed: true, exitCode: 0, violations: [] };
+      return { allowed: false, exitCode: 1, violations: ['Unable to read the Git index.'] };
     }
 
     const violations: string[] = [];
@@ -204,9 +218,11 @@ export class HookHandler {
     try {
       const raw = fs.readFileSync(0, 'utf8').trim();
       if (!raw) return undefined;
-      return JSON.parse(raw) as HookInputPayload;
-    } catch {
-      return undefined;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Expected a JSON object');
+      return parsed as HookInputPayload;
+    } catch (err) {
+      throw new Error(`Cannot read hook input: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

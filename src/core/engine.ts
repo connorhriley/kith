@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { AstAnalyzer, ExtractedSymbol } from './ast-analyzer.js';
 import { BashMerkleGuard } from './bash-guard.js';
 import { ResourceBroker } from './broker.js';
@@ -18,7 +20,7 @@ import { CoWWorktreeManager } from './worktree-cow.js';
 export interface AgentUnreadDelta {
   events: CoordEvent[];
   activeConflicts: ConflictRecord[];
-   formattedFooter: string;
+  formattedFooter: string;
 }
 
 export interface PostFileEditHookResult {
@@ -48,11 +50,11 @@ export class KithEngine {
     this.fencing = new FencingAndAgentManager(this.coordDb);
     this.locks = new LockEngine(this.coordDb, this.fencing);
     this.intents = new IntentAndTaskEngine(this.coordDb, this.fencing, this.locks);
-    this.depGraph = new DependencyAndContractEngine(this.coordDb, this.locks);
+    this.depGraph = new DependencyAndContractEngine(this.coordDb, this.locks, this.fencing);
     this.dedup = new SemanticDeduplicator(this.coordDb);
     this.shadowGit = new ShadowGitEngine(this.coordDb, this.fencing);
     this.worktrees = new CoWWorktreeManager(this.coordDb, this.fencing);
-    this.mergeTrain = new SpeculativeMergeTrain(this.coordDb);
+    this.mergeTrain = new SpeculativeMergeTrain(this.coordDb, this.fencing);
     this.bashGuard = new BashMerkleGuard(
       this.coordDb,
       this.fencing,
@@ -77,11 +79,16 @@ export class KithEngine {
     worktreeDir?: string;
   }): PostFileEditHookResult {
     this.fencing.heartbeat(params.agentId);
+    const targetRoot = params.worktreeDir ?? this.fencing.getAgent(params.agentId)?.worktree_path ?? this.coordDb.repoRoot;
+    const file = LockEngine.normalizePattern(targetRoot, params.filePath);
+    const access = this.locks.checkFileWriteAccess({ agentId: params.agentId, filePath: file });
+    if (!access.allowed) throw new Error(access.reason);
+    const content = params.content ?? (fs.existsSync(path.join(targetRoot, file)) ? fs.readFileSync(path.join(targetRoot, file), 'utf8') : '');
 
     const analysis = AstAnalyzer.analyzeSource(
-      params.worktreeDir ?? this.coordDb.repoRoot,
-      params.filePath,
-      params.content
+      targetRoot,
+      file,
+      content
     );
 
     const duplicates = this.dedup.findDuplicateSymbols({
@@ -92,13 +99,13 @@ export class KithEngine {
     const contractReport = this.depGraph.recordFileModification(
       params.agentId,
       analysis.filePath,
-      params.content
+      content
     );
 
     const mergeProbe = this.shadowGit.probeAllActiveConflicts(
       params.agentId,
-      [{ filePath: analysis.filePath, content: params.content }],
-      params.worktreeDir
+      [{ filePath: analysis.filePath, content }],
+      targetRoot
     );
 
     const warnings: string[] = [];
@@ -142,20 +149,18 @@ export class KithEngine {
    * and formats a concise context-delta footer to append to MCP/CLI responses.
    */
   public consumeAgentDelta(agentId: string): AgentUnreadDelta {
+    this.fencing.assertSession(agentId);
     const agent = this.fencing.getAgent(agentId);
     const sinceId = agent?.last_seen_event_id ?? 0;
-    const allNewEvents = this.coordDb
-      .getEventsSince(sinceId, 50)
-      .filter((e) => e.agent_id !== agentId);
+    const page = this.coordDb.getEventsSince(sinceId, 50);
+    const allNewEvents = page.filter((e) => e.agent_id !== agentId);
 
-    const latestIdRow = this.coordDb.db
-      .prepare(`SELECT COALESCE(MAX(id), 0) AS max_id FROM events`)
-      .get() as { max_id: number };
-
-    if (agent && latestIdRow.max_id > sinceId) {
-      this.coordDb.db
-        .prepare(`UPDATE agents SET last_seen_event_id = ? WHERE id = ?`)
-        .run(latestIdRow.max_id, agentId);
+    const deliveredId = page.at(-1)?.id ?? sinceId;
+    if (agent && deliveredId > sinceId) {
+      this.coordDb.withTransaction(() => {
+        this.fencing.assertSession(agentId);
+        this.coordDb.db.prepare(`UPDATE agents SET last_seen_event_id = ? WHERE id = ?`).run(deliveredId, agentId);
+      });
     }
 
     const activeConflicts = this.shadowGit
@@ -193,11 +198,12 @@ export class KithEngine {
     return {
       events: allNewEvents,
       activeConflicts,
-      formattedFooter,
+     formattedFooter,
     };
   }
 
   public close(): void {
+    if (this.broker.hasActiveCommands()) throw new Error('Await or cancel active mutex commands before closing Kith');
     this.coordDb.close();
   }
 }

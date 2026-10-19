@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { AstAnalyzer, ExtractedSymbol, SymbolKind } from './ast-analyzer.js';
+import { FencingAndAgentManager } from './fencing.js';
 import { CoordDatabase } from './db.js';
 import { LockEngine } from './locks.js';
 
@@ -41,7 +42,8 @@ export interface FileModificationReport {
 export class DependencyAndContractEngine {
   constructor(
     private readonly coordDb: CoordDatabase,
-    private readonly lockEngine: LockEngine
+    private readonly lockEngine: LockEngine,
+    private readonly fencing: FencingAndAgentManager
   ) {}
 
   public static tokenizeIdentifier(name: string): string {
@@ -108,6 +110,7 @@ export class DependencyAndContractEngine {
     const now = Date.now();
 
     return this.coordDb.withTransaction(() => {
+      if (agentId) this.fencing.assertSession(agentId);
       // 1. Update outgoing import edges in `file_deps`
       this.coordDb.db
         .prepare(`DELETE FROM file_deps WHERE source_file = ?`)
@@ -296,6 +299,7 @@ export class DependencyAndContractEngine {
       .slice(0, 16);
 
     return this.coordDb.withTransaction(() => {
+      this.fencing.assertSession(params.agentId);
       const prevRow = this.coordDb.db
         .prepare(`SELECT * FROM contracts WHERE file_path = ? AND symbol_name = ?`)
         .get(relPath, params.symbolName) as Record<string, unknown> | undefined;

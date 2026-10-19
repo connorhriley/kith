@@ -1,0 +1,13 @@
+name: Feature request
+description: A concrete workflow Kith should support
+body:
+  - type: textarea
+    attributes:
+      label: Workflow and problem
+      description: Who encounters this problem, and what makes the current workflow difficult?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Desired behavior and alternatives
+      description: Give a concrete example, expected outcome, and any workaround.
