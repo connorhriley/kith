@@ -1,0 +1,529 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+
+export type SymbolKind =
+  | 'function'
+  | 'type'
+  | 'interface'
+  | 'class'
+  | 'schema'
+  | 'route'
+  | 'const';
+
+export interface ExtractedSymbol {
+  symbolName: string;
+  kind: SymbolKind;
+  signature: string;
+  astHash: string;
+  paramsFingerprint: string;
+  docComment: string;
+}
+
+export interface ExtractedImport {
+  rawSpecifier: string;
+  resolvedPath: string | null;
+  importedSymbols: string[];
+}
+
+export interface FileAstAnalysis {
+  filePath: string;
+  fileHash: string;
+  exports: ExtractedSymbol[];
+  imports: ExtractedImport[];
+}
+
+export class AstAnalyzer {
+  /**
+   * Analyzes a source file's content to extract exported contracts (functions, types,
+   * interfaces, schemas, routes) and imported module dependencies.
+   */
+  public static analyzeSource(
+    repoRoot: string,
+    filePath: string,
+    sourceContent?: string
+  ): FileAstAnalysis {
+    const absPath = path.isAbsolute(filePath)
+      ? filePath
+      : path.join(repoRoot, filePath);
+    const relPath = path.relative(repoRoot, absPath).replace(/\\/g, '/');
+    const content = sourceContent ?? (fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf8') : '');
+    const fileHash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
+
+    const exports = AstAnalyzer.extractExports(content);
+    const imports = AstAnalyzer.extractImports(repoRoot, relPath, content);
+
+    return {
+      filePath: relPath,
+      fileHash,
+      exports,
+      imports,
+    };
+  }
+
+  public static extractExports(content: string): ExtractedSymbol[] {
+    const results = new Map<string, ExtractedSymbol>();
+    const lines = content.split(/\r?\n/);
+
+    const getPrecedingDoc = (lineIndex: number): string => {
+      const comments: string[] = [];
+      let i = lineIndex - 1;
+      while (i >= 0) {
+        const trimmed = lines[i].trim();
+        if (
+          trimmed.startsWith('//') ||
+          trimmed.startsWith('*') ||
+          trimmed.startsWith('/*') ||
+          trimmed.startsWith('*/') ||
+          trimmed.startsWith('#')
+        ) {
+          comments.unshift(
+            trimmed
+              .replace(/^(\/\/+|\/\*+|\*+\/|#|\*)\s?/, '')
+              .trim()
+          );
+          i--;
+        } else if (trimmed === '') {
+          break;
+        } else {
+          break;
+        }
+      }
+      return comments.filter(Boolean).join(' ').slice(0, 240);
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('/*')) continue;
+
+      // 1. Exported TS/JS function: export [async] function name<T>(params): ReturnType
+      const fnMatch = trimmed.match(
+        /^export\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)\s*(?::\s*([^{;]+))?/
+      );
+      if (fnMatch) {
+        const [, name, rawParams, rawReturn] = fnMatch;
+        const cleanReturn = (rawReturn ?? 'unknown').trim();
+        const sig = `function ${name}(${AstAnalyzer.normalizeWhitespace(rawParams)}): ${cleanReturn}`;
+        const kind: SymbolKind = /^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/.test(name)
+          ? 'route'
+          : 'function';
+        results.set(name, {
+          symbolName: name,
+          kind,
+          signature: sig,
+          astHash: AstAnalyzer.hashSignature(sig),
+          paramsFingerprint: AstAnalyzer.computeParamsFingerprint(rawParams, cleanReturn),
+          docComment: getPrecedingDoc(i),
+        });
+        continue;
+      }
+
+      // 2. Exported arrow function: export const name = [async] (params): ReturnType =>
+      const arrowMatch = trimmed.match(
+        /^export\s+const\s+([A-Za-z0-9_$]+)\s*(?::\s*[^=]+)?=\s*(?:async\s+)?(?:\(([^)]*)\)|([A-Za-z0-9_$]+))\s*(?::\s*([^=]+?))?\s*=>/
+      );
+      if (arrowMatch) {
+        const [, name, tupleParams, singleParam, rawReturn] = arrowMatch;
+        const rawParams = tupleParams ?? singleParam ?? '';
+        const cleanReturn = (rawReturn ?? 'unknown').trim();
+        const sig = `function ${name}(${AstAnalyzer.normalizeWhitespace(rawParams)}): ${cleanReturn}`;
+        results.set(name, {
+          symbolName: name,
+          kind: 'function',
+          signature: sig,
+          astHash: AstAnalyzer.hashSignature(sig),
+          paramsFingerprint: AstAnalyzer.computeParamsFingerprint(rawParams, cleanReturn),
+          docComment: getPrecedingDoc(i),
+        });
+        continue;
+      }
+
+      // 3. Exported interface: export interface Name { ... }
+      const ifaceMatch = trimmed.match(
+        /^export\s+interface\s+([A-Za-z0-9_$]+)(?:\s*<[^>]*>)?(?:\s+extends\s+[^{]+)?\s*\{/
+      );
+      if (ifaceMatch) {
+        const name = ifaceMatch[1];
+        const bodyFields = AstAnalyzer.extractBracedBlockSummary(lines, i);
+        const sig = `interface ${name} { ${bodyFields} }`;
+        results.set(name, {
+          symbolName: name,
+          kind: 'interface',
+          signature: sig,
+          astHash: AstAnalyzer.hashSignature(sig),
+          paramsFingerprint: `interface:${AstAnalyzer.extractFieldTypesFingerprint(bodyFields)}`,
+          docComment: getPrecedingDoc(i),
+        });
+        continue;
+      }
+
+      // 4. Exported type alias: export type Name = ...
+      const typeMatch = trimmed.match(/^export\s+type\s+([A-Za-z0-9_$]+)(?:\s*<[^>]*>)?\s*=\s*(.+)$/);
+      if (typeMatch) {
+        const [, name, rhs] = typeMatch;
+        const fullRhs = rhs.includes('{') && !rhs.includes('}')
+          ? `{ ${AstAnalyzer.extractBracedBlockSummary(lines, i)} }`
+          : rhs.replace(/;$/, '').trim();
+        const sig = `type ${name} = ${AstAnalyzer.normalizeWhitespace(fullRhs)}`;
+        results.set(name, {
+          symbolName: name,
+          kind: 'type',
+          signature: sig,
+          astHash: AstAnalyzer.hashSignature(sig),
+          paramsFingerprint: `type:${AstAnalyzer.normalizeWhitespace(fullRhs)}`,
+          docComment: getPrecedingDoc(i),
+        });
+        continue;
+      }
+
+      // 5. Exported class: export class Name
+      const classMatch = trimmed.match(
+        /^export\s+(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z0-9_$]+)/
+      );
+      if (classMatch) {
+        const name = classMatch[1];
+        const sig = `class ${name}`;
+        results.set(name, {
+          symbolName: name,
+          kind: 'class',
+          signature: sig,
+          astHash: AstAnalyzer.hashSignature(sig),
+          paramsFingerprint: `class:${name}`,
+          docComment: getPrecedingDoc(i),
+        });
+        continue;
+      }
+
+      // 6. Exported Zod/Valibot/Drizzle schema or constant: export const NameSchema = ...
+      const constMatch = trimmed.match(
+        /^export\s+const\s+([A-Za-z0-9_$]+)\s*(?::\s*([^=]+))?\s*=\s*(.+)$/
+      );
+      if (constMatch) {
+        const [, name, explicitType, rhs] = constMatch;
+        const isSchema = /Schema$|z\.|pgTable|sqliteTable|mysqlTable/.test(name + rhs);
+        const kind: SymbolKind = isSchema ? 'schema' : 'const';
+        const sig = `const ${name}: ${(explicitType ?? rhs.slice(0, 60)).replace(/;$/, '').trim()}`;
+        results.set(name, {
+          symbolName: name,
+          kind,
+          signature: sig,
+          astHash: AstAnalyzer.hashSignature(sig),
+          paramsFingerprint: `${kind}:${name}`,
+          docComment: getPrecedingDoc(i),
+        });
+        continue;
+      }
+
+      // 7. Python top-level function: def name(params) -> ReturnType:
+      const pyFnMatch = line.match(
+        /^(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*(?:->\s*([^:]+))?:/
+      );
+      if (pyFnMatch && !pyFnMatch[1].startsWith('_')) {
+        const [, name, rawParams, rawRet] = pyFnMatch;
+        const ret = (rawRet ?? 'Any').trim();
+        const sig = `def ${name}(${AstAnalyzer.normalizeWhitespace(rawParams)}) -> ${ret}`;
+        results.set(name, {
+          symbolName: name,
+          kind: 'function',
+          signature: sig,
+          astHash: AstAnalyzer.hashSignature(sig),
+          paramsFingerprint: AstAnalyzer.computeParamsFingerprint(rawParams, ret),
+          docComment: getPrecedingDoc(i),
+        });
+      }
+    }
+
+    return Array.from(results.values());
+  }
+
+  public static extractImports(
+    repoRoot: string,
+    sourceRelPath: string,
+    content: string
+  ): ExtractedImport[] {
+    const imports: ExtractedImport[] = [];
+    const importRegex =
+      /(?:import\s+(?:type\s+)?(?:(\{[^}]*\})|([A-Za-z0-9_$*]+))?\s*(?:,\s*(\{[^}]*\}))?\s*from\s+['"]([^'"]+)['"]|export\s+(?:\*|\{[^}]*\})\s+from\s+['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\))/g;
+
+    let match: RegExpExecArray | null;
+    while ((match = importRegex.exec(content)) !== null) {
+      const namedBlock = match[1] ?? match[3] ?? '';
+      const defaultIdent = match[2] ?? '';
+      const specifier = match[4] ?? match[5] ?? match[6] ?? '';
+      if (!specifier) continue;
+
+      const symbols: string[] = [];
+      if (defaultIdent) symbols.push(defaultIdent.trim());
+      if (namedBlock) {
+        const inner = namedBlock.replace(/[{}]/g, '');
+        for (const part of inner.split(',')) {
+          const clean = part.trim().split(/\s+as\s+/)[0].replace(/^type\s+/, '').trim();
+          if (clean) symbols.push(clean);
+        }
+      }
+
+      const resolvedPath = AstAnalyzer.resolveRelativeImport(
+        repoRoot,
+        sourceRelPath,
+        specifier
+      );
+
+      imports.push({
+        rawSpecifier: specifier,
+        resolvedPath,
+        importedSymbols: symbols,
+      });
+    }
+
+    return imports;
+  }
+
+  public static resolveRelativeImport(
+    repoRoot: string,
+    sourceRelPath: string,
+    specifier: string
+  ): string | null {
+    if (!specifier.startsWith('.')) {
+      return null;
+    }
+
+    const sourceDir = path.dirname(path.join(repoRoot, sourceRelPath));
+    // Strip .js / .jsx extension often used in TypeScript ESM imports
+    const baseTarget = path.resolve(sourceDir, specifier.replace(/\.(js|jsx|mjs|cjs)$/, ''));
+
+    const candidates = [
+      path.resolve(sourceDir, specifier),
+      `${baseTarget}.ts`,
+      `${baseTarget}.tsx`,
+      `${baseTarget}.js`,
+      `${baseTarget}.mjs`,
+      path.join(baseTarget, 'index.ts'),
+      path.join(baseTarget, 'index.tsx'),
+      path.join(baseTarget, 'index.js'),
+    ];
+
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return path.relative(repoRoot, candidate).replace(/\\/g, '/');
+      }
+    }
+
+    // Even if target file hasn't been flushed to disk yet, infer `.ts` relative path
+    const inferred = `${baseTarget}.ts`;
+    return path.relative(repoRoot, inferred).replace(/\\/g, '/');
+  }
+
+  /**
+   * Checks whether a 3-way merge conflict between two modified versions (`contentA` and `contentB`)
+   * over `baseContent` is strictly additive (e.g. both agents appended disjoint exports or JSON keys)
+   * and therefore auto-mergeable without human intervention.
+   */
+  public static checkAdditiveMergeability(
+    filePath: string,
+    baseContent: string,
+    contentA: string,
+    contentB: string
+  ): { autoMergeable: boolean; mergedContent?: string; reason: string } {
+    // Case 1: JSON files (e.g. package.json, tsconfig.json)
+    if (filePath.endsWith('.json')) {
+      try {
+        const baseObj = JSON.parse(baseContent || '{}') as Record<string, unknown>;
+        const objA = JSON.parse(contentA) as Record<string, unknown>;
+        const objB = JSON.parse(contentB) as Record<string, unknown>;
+        const merged = AstAnalyzer.tryAdditiveJsonMerge(baseObj, objA, objB);
+        if (merged !== null) {
+          return {
+            autoMergeable: true,
+            mergedContent: JSON.stringify(merged, null, 2) + '\n',
+            reason: 'Disjoint JSON keys added by both agents',
+          };
+        }
+      } catch {
+        // Not auto-mergeable JSON
+      }
+    }
+
+    // Case 2: Source files where both agents preserved all base lines/exports and added disjoint symbols
+    const baseExports = new Map(
+      AstAnalyzer.extractExports(baseContent).map((e) => [e.symbolName, e.astHash])
+    );
+    const exportsA = new Map(
+      AstAnalyzer.extractExports(contentA).map((e) => [e.symbolName, e.astHash])
+    );
+    const exportsB = new Map(
+      AstAnalyzer.extractExports(contentB).map((e) => [e.symbolName, e.astHash])
+    );
+
+    if (exportsA.size === 0 && exportsB.size === 0) {
+      return { autoMergeable: false, reason: 'No AST export structure to verify additive merge' };
+    }
+
+    // Ensure neither agent deleted or mutated a base export in incompatible ways
+    for (const [sym, baseHash] of baseExports.entries()) {
+      const hashA = exportsA.get(sym);
+      const hashB = exportsB.get(sym);
+      if (!hashA || !hashB) {
+        return { autoMergeable: false, reason: `Base symbol '${sym}' was removed by one agent` };
+      }
+      if (hashA !== baseHash && hashB !== baseHash && hashA !== hashB) {
+        return {
+          autoMergeable: false,
+          reason: `Both agents modified symbol '${sym}' with conflicting signatures`,
+        };
+      }
+    }
+
+    // Ensure newly added symbols by A and B are disjoint
+    const addedByA = Array.from(exportsA.keys()).filter((k) => !baseExports.has(k));
+    const addedByB = Array.from(exportsB.keys()).filter((k) => !baseExports.has(k));
+
+    if (addedByA.length === 0 || addedByB.length === 0) {
+      return { autoMergeable: false, reason: 'Modifications touch shared implementation body' };
+    }
+
+    for (const sym of addedByA) {
+      if (exportsB.has(sym) && exportsB.get(sym) !== exportsA.get(sym)) {
+        return {
+          autoMergeable: false,
+          reason: `Both agents added conflicting definitions for symbol '${sym}'`,
+        };
+      }
+    }
+
+    // Verify both files strictly append or insert disjoint lines relative to base
+    const baseLines = new Set(
+      baseContent
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+    );
+    const extraLinesB = contentB
+      .split(/\r?\n/)
+      .filter((l) => l.trim().length > 0 && !baseLines.has(l.trim()));
+
+    const mergedContent = contentA.trimEnd() + '\n\n' + extraLinesB.join('\n') + '\n';
+    return {
+      autoMergeable: true,
+      mergedContent,
+      reason: `Disjoint additive exports (${addedByA.join(', ')} + ${addedByB.join(', ')})`,
+    };
+  }
+
+  private static tryAdditiveJsonMerge(
+    base: Record<string, unknown>,
+    a: Record<string, unknown>,
+    b: Record<string, unknown>
+  ): Record<string, unknown> | null {
+    const result: Record<string, unknown> = { ...base };
+    const allKeys = new Set([...Object.keys(base), ...Object.keys(a), ...Object.keys(b)]);
+
+    for (const key of allKeys) {
+      const vBase = base[key];
+      const vA = a[key];
+      const vB = b[key];
+
+      if (JSON.stringify(vA) === JSON.stringify(vB)) {
+        if (vA !== undefined) result[key] = vA;
+        continue;
+      }
+      if (JSON.stringify(vA) === JSON.stringify(vBase)) {
+        if (vB !== undefined) result[key] = vB;
+        else delete result[key];
+        continue;
+      }
+      if (JSON.stringify(vB) === JSON.stringify(vBase)) {
+        if (vA !== undefined) result[key] = vA;
+        else delete result[key];
+        continue;
+      }
+
+      if (
+        typeof vA === 'object' &&
+        vA !== null &&
+        !Array.isArray(vA) &&
+        typeof vB === 'object' &&
+        vB !== null &&
+        !Array.isArray(vB)
+      ) {
+        const sub = AstAnalyzer.tryAdditiveJsonMerge(
+          (typeof vBase === 'object' && vBase !== null ? vBase : {}) as Record<string, unknown>,
+          vA as Record<string, unknown>,
+          vB as Record<string, unknown>
+        );
+        if (sub === null) return null;
+        result[key] = sub;
+        continue;
+      }
+
+      return null;
+    }
+
+    return result;
+  }
+
+  private static extractBracedBlockSummary(lines: string[], startIndex: number): string {
+    const fields: string[] = [];
+    let depth = 0;
+    for (let i = startIndex; i < Math.min(lines.length, startIndex + 35); i++) {
+      const line = lines[i];
+      for (const ch of line) {
+        if (ch === '{') depth++;
+        else if (ch === '}') depth--;
+      }
+      if (i > startIndex && depth >= 1) {
+        const clean = line.trim().replace(/;$/, '').replace(/,$/, '');
+        if (clean && !clean.startsWith('//') && clean !== '}') {
+          fields.push(clean);
+        }
+      }
+      if (depth <= 0 && i >= startIndex && line.includes('}')) {
+        break;
+      }
+    }
+    return fields.join('; ');
+  }
+
+  private static extractFieldTypesFingerprint(bodyFields: string): string {
+    return bodyFields
+      .split(';')
+      .map((f) => {
+        const parts = f.split(':');
+        return parts.length > 1 ? parts[1].trim().toLowerCase() : f.trim().toLowerCase();
+      })
+      .filter(Boolean)
+      .sort()
+      .join(',');
+  }
+
+  public static computeParamsFingerprint(rawParams: string, rawReturn: string): string {
+    const paramTypes = rawParams
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => {
+        const colonIdx = p.indexOf(':');
+        if (colonIdx === -1) return 'any';
+        return p
+          .slice(colonIdx + 1)
+          .replace(/=.*$/, '')
+          .trim()
+          .toLowerCase();
+      });
+
+    const retNorm = rawReturn
+      .replace(/^Promise<(.+)>$/, '$1')
+      .trim()
+      .toLowerCase();
+
+    return `(${paramTypes.join(',')})->${retNorm}`;
+  }
+
+  private static normalizeWhitespace(s: string): string {
+    return s.replace(/\s+/g, ' ').trim();
+  }
+
+  private static hashSignature(sig: string): string {
+    return crypto.createHash('sha256').update(sig).digest('hex').slice(0, 16);
+  }
+}

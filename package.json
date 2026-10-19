@@ -1,0 +1,57 @@
+{
+  "name": "kith",
+  "version": "1.0.0",
+  "description": "Zero-trust parallel agent coordination engine: fencing locks, live dirty-tree git merge-tree conflict detection, AST blast-radius radar, semantic deduplication, CoW worktrees, and speculative merge train.",
+  "type": "module",
+  "bin": {
+    "kith": "./dist/cli/index.js",
+    "coord": "./dist/cli/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "NODE_OPTIONS='--no-warnings' vitest run",
+    "test:watch": "NODE_OPTIONS='--no-warnings' vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "ai-agents",
+    "parallel-agents",
+    "mcp",
+    "claude-code",
+    "codex",
+    "antigravity",
+    "cursor",
+    "git-worktree",
+    "coordination",
+    "multi-agent"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10.2",
+    "picomatch": "^4.0.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/picomatch": "^4.0.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.7"
+  }
+}
