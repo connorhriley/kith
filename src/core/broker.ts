@@ -123,7 +123,7 @@ export class ResourceBroker {
         return { acquired: true, fencingToken: existing.fencing_token, holderAgentId: params.agentId, queuePosition: 0 };
       }
       const start = FencingAndAgentManager.getProcessStartTime(process.pid);
-      if (!start) throw new Error('Cannot inspect mutex waiter process');
+      if (!start) throw new Error('Cannot inspect mutex waiter process. Sandboxed MCP clients can use kith_run_with_mutex instead.');
       this.coordDb.db.prepare(`INSERT INTO mutex_waiters
         (mutex_name, request_id, owner_agent_id, session_epoch, waiter_pid, waiter_start, expires_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)

@@ -184,3 +184,81 @@ it('bootstraps capabilities portably through real shell command substitution', (
   }
   expect(run(['session', 'start', '--agent', 'missing-owner', '--shell']).stderr).toContain('--owner-pid');
 });
+
+it('runs literal commands through MCP with renewable mutex leases and owned worktree cwd', async () => {
+  seed();
+  const one = await connect(); const two = await connect();
+  data(await tool(one.client, 'kith_begin_work', { agentId: 'command-owner', title: 'Command verification', scopeGlobs: ['src/native.mjs'], isolateWorktree: true }));
+  expect((await tool(two.client, 'kith_run_with_mutex', { agentId: 'command-owner', mutexName: 'native', command: [process.execPath, '-v'] })).isError).toBe(true);
+  const command = [process.execPath, '-e', 'setTimeout(()=>process.stdout.write(JSON.stringify({cwd:process.cwd(),arg:process.argv[1]})),900)', 'literal $value; words'];
+  const pending = tool(one.client, 'kith_run_with_mutex', { agentId: 'command-owner', mutexName: 'native', command, leaseDurationMs: 250 });
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  const engine = new KithEngine(root);
+  try {
+    engine.fencing.registerAgent({ id: 'peer' });
+    expect(engine.broker.tryAcquireMutex({ agentId: 'peer', mutexName: 'native' }).acquired).toBe(false);
+    const result = data(await pending);
+    const output = JSON.parse(result.stdout);
+    expect(fs.realpathSync(output.cwd)).toBe(fs.realpathSync(engine.fencing.getAgent('command-owner')!.worktree_path!));
+    expect(output.arg).toBe('literal $value; words');
+    const grant = engine.broker.tryAcquireMutex({ agentId: 'peer', mutexName: 'native' });
+    expect(grant.acquired).toBe(true);
+    engine.broker.releaseMutex({ agentId: 'peer', mutexName: 'native', fencingToken: grant.fencingToken });
+  } finally { engine.close(); }
+  const failed = await tool(one.client, 'kith_run_with_mutex', { agentId: 'command-owner', mutexName: 'native', command: [process.execPath, '-e', 'process.exit(7)'] });
+  expect(failed.isError).toBe(true);
+  expect((failed.structuredContent as any).exitCode).toBe(7);
+  expect((await tool(one.client, 'kith_run_with_mutex', { agentId: 'command-owner', mutexName: 'native', command: [process.execPath, '-v'], cwd: path.parse(root).root })).isError).toBe(true);
+});
+
+it('cancels an MCP mutex command on request cancellation and connection loss before handoff', async () => {
+  for (const disconnect of [false, true]) {
+    const { client } = await connect();
+    const id = `cancel-${disconnect}`;
+    data(await tool(client, 'kith_start_session', { agentId: id }));
+    const pidFile = path.join(root, `pid-${disconnect}`);
+    const controller = new AbortController();
+    const pending = client.callTool({ name: 'kith_run_with_mutex', arguments: { agentId: id, mutexName: 'cancel', leaseDurationMs: 300,
+      command: [process.execPath, '-e', `require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`] } }, undefined, { signal: controller.signal })
+      .then((value) => ({ value }), (error) => ({ error }));
+    const deadline = Date.now() + 10000;
+    while (!fs.existsSync(pidFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fs.existsSync(pidFile)).toBe(true);
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    if (disconnect) await client.close(); else controller.abort();
+    expect(await pending).toHaveProperty('error');
+    const stopped = () => { try { process.kill(pid, 0); return false; } catch { return true; } };
+    while (!stopped() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(stopped()).toBe(true);
+    const engine = new KithEngine(root);
+    try {
+      engine.fencing.registerAgent({ id: `peer-${disconnect}` });
+      const grant = engine.broker.tryAcquireMutex({ agentId: `peer-${disconnect}`, mutexName: 'cancel' });
+      expect(grant.acquired).toBe(true);
+      engine.broker.releaseMutex({ agentId: `peer-${disconnect}`, mutexName: 'cancel', fencingToken: grant.fencingToken });
+    } finally { engine.close(); }
+  }
+});
+
+it('stops a disconnected borrowed-session MCP command while preserving the original owner', async () => {
+  const engine = new KithEngine(root);
+  const session = engine.fencing.registerAgent({ id: 'borrowed' });
+  env.KITH_AGENT_ID = 'borrowed'; env.KITH_SESSION_TOKEN = session.sessionToken;
+  const { client } = await connect();
+  const pidFile = path.join(root, 'borrowed-command');
+  const pending = tool(client, 'kith_run_with_mutex', { agentId: 'borrowed', mutexName: 'borrowed-command', leaseDurationMs: 300,
+    command: [process.execPath, '-e', `require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`] }).catch(() => undefined);
+  try {
+    const deadline = Date.now() + 10000;
+    while (!fs.existsSync(pidFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fs.existsSync(pidFile)).toBe(true);
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    await client.close(); await pending;
+    const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    while (alive() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(alive()).toBe(false);
+    expect(engine.fencing.getAgent('borrowed')?.status).toBe('active');
+    expect(engine.fencing.getAgent('borrowed')?.pid).toBe(process.pid);
+    expect(engine.broker.listResources().filter((r) => r.type === 'mutex')).toEqual([]);
+  } finally { engine.close(); }
+});

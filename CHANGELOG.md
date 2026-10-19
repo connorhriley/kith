@@ -2,6 +2,8 @@
 
 ## Unreleased — native clients and hosted checks
 
+- Add `kith_run_with_mutex` for sandboxed MCP clients unable to inspect process identities in their native shell. Preserve ownership, renewable supervision and actual exit codes; cancel commands on request cancellation or connection loss before closing coordination state. Translate stdio EOF into graceful cancellation; the MCP SDK alone does not emit a close callback for stdin EOF. Commands run with server permissions and need client approval.
+
 - Add non-destructive Codex project MCP configuration with capability environment forwarding. Preserve custom Kith transports and malformed-config fail-before-write behavior.
 - Make generated Claude pre-hooks fail closed on launch failures on supporting client versions; rerun init to upgrade existing Kith hooks.
 - Add an opt-in native Codex/Claude runner checking real editor/MCP workflows and resulting repository state, with redacted reports and bounded runs.

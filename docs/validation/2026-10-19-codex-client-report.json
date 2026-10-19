@@ -11,6 +11,7 @@
         "kith_begin_work",
         "kith_begin_work",
         "kith_record_file_edit",
+        "kith_run_with_mutex",
         "kith_complete_work",
         "kith_get_status"
       ],
@@ -18,6 +19,7 @@
         "protected bytes unchanged",
         "native edit",
         "contract recorded",
+        "renewable MCP mutex command",
         "verified integration",
         "task completed",
         "locks released"
@@ -30,6 +32,7 @@
         "kith_begin_work",
         "kith_begin_work",
         "kith_record_file_edit",
+        "kith_run_with_mutex",
         "kith_complete_work",
         "kith_get_status"
       ],
@@ -37,6 +40,7 @@
         "protected bytes unchanged",
         "native edit",
         "contract recorded",
+        "renewable MCP mutex command",
         "verified integration",
         "task completed",
         "locks released",
@@ -46,6 +50,6 @@
   ],
   "passed": true,
   "date": "2026-10-19",
-  "scope": "Native CLI, disposable worktree fixture; not GUI certification",
+  "scope": "Native CLI workflows, renewable MCP command supervision and failure probes; not GUI certification",
   "configuration": "Generated settings; Codex receives server values via invocation overrides, Claude loads generated project hooks/MCP"
 }

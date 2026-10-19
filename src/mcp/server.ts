@@ -1,6 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import fs from 'node:fs';
+import path from 'node:path';
 import { KithEngine } from '../core/engine.js';
 
 export function createKithMcpServer(repoRoot = process.cwd()): {
@@ -30,11 +32,22 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     if (token) engine.fencing.resumeSession(args.agentId, token);
     engine.fencing.heartbeat(args.agentId);
   };
-  server.server.onclose = () => {
+  const disconnected = new AbortController();
+  const commands = new Set<Promise<unknown>>();
+  const cleanup = () => {
     for (const id of owned) {
       try { engine.fencing.abandonAgentSession(id); } catch { /* Expired or already completed. */ }
     }
     engine.close();
+  };
+  let closing = false;
+  server.server.onclose = () => {
+    if (closing) return;
+    closing = true;
+    disconnected.abort();
+    // A command must stop before its process-group guard and database are closed.
+    if (commands.size) void Promise.allSettled([...commands]).then(cleanup);
+    else cleanup();
   };
 
   const formatReply = (agentId: string | undefined, payload: unknown) => {
@@ -209,6 +222,41 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
   );
 
   server.tool(
+    'kith_run_with_mutex',
+    'Run an argv command under a renewable named mutex, using the MCP server process permissions. Useful when a sandboxed client shell cannot inspect process identities. Requires an owned session. Cancellation or connection loss stops the supervised command before release. This is command execution, not a filesystem sandbox.',
+    {
+      agentId: z.string(), sessionToken: z.string().optional(),
+      mutexName: z.string().min(1).max(128),
+      command: z.array(z.string()).min(1).describe('Executable followed by literal arguments; no implicit shell'),
+      cwd: z.string().optional().describe('Directory under the registered worktree or repository; defaults to the worktree when present'),
+      leaseDurationMs: z.number().int().min(100).max(86400000).optional(),
+      waitTimeoutMs: z.number().int().min(0).max(600000).optional(),
+      commandTimeoutMs: z.number().int().min(1).max(600000).optional(),
+      maxOutputBytes: z.number().int().min(1).max(1048576).optional(),
+    },
+    async (args, extra) => {
+      authorize(args);
+      const root = fs.realpathSync(engine.fencing.getAgent(args.agentId)?.worktree_path ?? engine.coordDb.repoRoot);
+      const cwd = fs.realpathSync(path.resolve(root, args.cwd ?? '.'));
+      const relative = path.relative(root, cwd);
+      if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+        throw new Error('Command cwd must be inside the registered worktree or repository');
+      }
+      const execution = engine.broker.executeWithMutex({
+        agentId: args.agentId, mutexName: args.mutexName, command: args.command, cwd,
+        leaseDurationMs: args.leaseDurationMs, timeoutMs: args.waitTimeoutMs,
+        commandTimeoutMs: args.commandTimeoutMs ?? 60000, maxOutputBytes: args.maxOutputBytes ?? 65536,
+        signal: AbortSignal.any([disconnected.signal, extra.signal]),
+      });
+      commands.add(execution);
+      try {
+        const result = await execution;
+        return formatReply(args.agentId, { ok: result.exitCode === 0, ...result });
+      } finally { commands.delete(execution); }
+    }
+  );
+
+  server.tool(
     'kith_get_status',
     'Retrieve live coordination state: active agents, file locks, tasks, contracts, dirty-tree conflicts, and leased ports/mutexes.',
     {
@@ -290,5 +338,22 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
 export async function runKithMcpStdioServer(repoRoot = process.cwd()): Promise<void> {
   const { server } = createKithMcpServer(repoRoot);
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  let closing = false;
+  const close = () => {
+    if (closing) return;
+    closing = true;
+    process.stdin.off('end', close);
+    process.stdin.off('close', close);
+    process.off('SIGTERM', close);
+    process.off('SIGINT', close);
+    void server.close();
+  };
+  // The SDK transport does not translate stdin EOF into onclose. A running command
+  // otherwise keeps the server alive until the client force-kills it.
+  process.stdin.once('end', close);
+  process.stdin.once('close', close);
+  process.once('SIGTERM', close);
+  process.once('SIGINT', close);
+  try { await server.connect(transport); }
+  catch (error) { close(); throw error; }
 }

@@ -8,4 +8,6 @@ For ordinary reliability bugs, provide a minimal disposable repository and redac
 
 Session capabilities protect cooperative client ownership and are omitted from status/events. They do not protect against a process with permission to read another process environment or rewrite the local SQLite database. Keep KITH_SESSION_TOKEN out of public diagnostics. See [session lifecycle](docs/sessions-and-mutexes.md).
 
+MCP command execution (`kith_run_with_mutex`) and merge verification execute programs with the coordinator process permissions. They are outside a native client shell sandbox and must be reviewed/approved accordingly. Working-directory checks do not sandbox programs.
+
 Read [the reliability contract](docs/reliability.md) for known enforcement and recovery limits.

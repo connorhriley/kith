@@ -36,7 +36,7 @@ kith init --dry-run
 kith init --only claude,agents
 ```
 
-`--only` accepts `claude,cursor,agents,git,shims`. Without it, all are selected. Setup preserves unrelated settings, existing hooks, and MCP servers; invalid JSON stops setup before configuration writes. Review the returned file list and warnings. Claude MCP configuration lives in `.mcp.json`; hooks live in `.claude/settings.json`. Existing Git pre-commit hooks are left for you to integrate with your hook manager.
+`--only` accepts `claude,codex,cursor,agents,git,shims`. Without it, all are selected. Setup preserves unrelated settings, existing hooks, and MCP servers; invalid JSON/TOML stops setup before configuration writes. Review the returned file list and warnings. Claude MCP configuration lives in `.mcp.json`; hooks live in `.claude/settings.json`. Existing Git pre-commit hooks are left for you to integrate with your hook manager.
 
 Hook and MCP configurations execute `kith`, so make sure it is installed on the client process's `PATH`. Restart the client after changing configuration. See [integration details](docs/integrations.md).
 
@@ -75,7 +75,7 @@ A verification command is optional. Without one, integration checks Git mergeabi
 
 ## Runnable client example
 
-Run `pnpm demo` from the checkout. It starts two real MCP stdio clients, edits separate Git worktrees in a disposable repository, reports the files, and verifies/integrates both branches. No model API calls are involved.
+Run `pnpm demo` from the checkout. It starts two real MCP stdio clients, edits separate Git worktrees in a disposable repository, reports the files, and verifies/integrates both branches. No model API calls are involved. For opt-in runs against installed Codex and Claude Code, including native edits, denied edits, supervised commands and integration, see [native client validation](docs/client-validation.md).
 
 ## Other workflows
 

@@ -71,7 +71,8 @@ try {
         continue;
       }
       const hookProbe = client === 'claude' ? ` After the expected MCP conflict, also test native hook enforcement: Read ${path.join(root, 'src/blocked.mjs')}, then attempt exactly one native Edit of that file replacing true with false. Its PreToolUse hook must deny the edit. Continue only after that denial; never retry or bypass it.` : '';
-      const prompt = `Run this bounded compatibility test in this disposable Git repository. Do not use subagents or unrelated tools. Never print session tokens. Call the kith MCP tools directly. First call kith_begin_work with agentId ${agentId}, title Native conflict probe, scopeGlobs [src/blocked.mjs]. Expect a lock conflict.${hookProbe} Never change that file successfully. Then call kith_begin_work with the SAME agentId, title Add native compatibility module, scopeGlobs [src/native.mjs], isolateWorktree true. Use your native editing tool to create src/native.mjs IN THE RETURNED WORKTREE with exactly: export const nativeCompatibility = 42; followed by a newline. Call kith_record_file_edit with that absolute file path. Then call kith_complete_work with verificationCmd node --check src/native.mjs. Finally call kith_get_status without agentId. Stop on unexpected failure; never bypass coordination or substitute shell calls for MCP. End with a brief result.`;
+      const protectedCommand = [process.execPath, '-e', `const fs=require('node:fs'),path=require('node:path'),start=Date.now();setTimeout(()=>{fs.mkdirSync('.coord',{recursive:true});fs.writeFileSync('.coord/native-command-proof.json',JSON.stringify({cwd:process.cwd(),elapsed:Date.now()-start}));process.stdout.write('mutex-ok')},1200)`];
+      const prompt = `Run this bounded compatibility test in this disposable Git repository. Do not use subagents or unrelated tools. Never print session tokens. Call the kith MCP tools directly. First call kith_begin_work with agentId ${agentId}, title Native conflict probe, scopeGlobs [src/blocked.mjs]. Expect a lock conflict.${hookProbe} Never change that file successfully. Then call kith_begin_work with the SAME agentId, title Add native compatibility module, scopeGlobs [src/native.mjs], isolateWorktree true. Use your native editing tool to create src/native.mjs IN THE RETURNED WORKTREE with exactly: export const nativeCompatibility = 42; followed by a newline. Call kith_record_file_edit with that absolute file path. Before completing, call kith_run_with_mutex with agentId ${agentId}, mutexName native-validation, command ${JSON.stringify(protectedCommand)}, leaseDurationMs 300, commandTimeoutMs 5000. It must return exitCode 0 and stdout mutex-ok. Then call kith_complete_work with verificationCmd node --check src/native.mjs. Finally call kith_get_status without agentId. Stop on unexpected failure; never bypass coordination or substitute shell calls for MCP. End with a brief result.`;
       const generated = client === 'codex' ? parseToml(fs.readFileSync(path.join(root, '.codex/config.toml'), 'utf8')).mcp_servers.kith : undefined;
       // Project trust is persisted by the client outside this fixture. Pass generated values
       // explicitly for this invocation so the runner never edits global trust/configuration.
@@ -96,7 +97,7 @@ try {
         assert.ok(native.some((b) => ['Write', 'Edit'].includes(b.name) && b.input?.file_path?.endsWith('/src/native.mjs')), 'Missing native editor event');
         result.hookDenialVerified = true;
       }
-      for (const name of ['kith_record_file_edit', 'kith_complete_work', 'kith_get_status']) assert.ok(calls.includes(name), `Missing ${name}; client exit zero is insufficient`);
+      for (const name of ['kith_record_file_edit', 'kith_run_with_mutex', 'kith_complete_work', 'kith_get_status']) assert.ok(calls.includes(name), `Missing ${name}; client exit zero is insufficient`);
       assert.ok(calls.filter((n) => n === 'kith_begin_work').length >= 2, 'Missing conflict probe and subsequent begin');
       if (client === 'codex') {
         const begin = events.find((e) => e.type === 'item.completed' && e.item?.tool === 'kith_begin_work');
@@ -105,13 +106,18 @@ try {
       }
       assert.equal(fs.readFileSync(path.join(root, 'src/blocked.mjs'), 'utf8'), protectedBytes, 'Peer file changed');
       assert.equal(fs.readFileSync(path.join(root, 'src/native.mjs'), 'utf8'), 'export const nativeCompatibility = 42;\n', 'Incorrect integrated bytes');
+      const worktree = engine.fencing.getAgent(agentId).worktree_path;
+      const proof = JSON.parse(fs.readFileSync(path.join(worktree, '.coord/native-command-proof.json'), 'utf8'));
+      assert.equal(fs.realpathSync(proof.cwd), fs.realpathSync(worktree), 'Mutex command used wrong working directory');
+      assert.ok(proof.elapsed >= 1000, 'Mutex command did not run across lease periods');
+      assert.equal(engine.broker.listResources().some((r) => r.type === 'mutex' && r.owner_agent_id === agentId), false, 'Command retained its mutex');
       assert.notEqual(git('rev-parse', 'HEAD'), initialHead, 'Worktree not integrated');
       assert.ok(engine.intents.listTasks().some((t) => t.owner_agent_id === agentId && t.status === 'done'), 'Task not completed');
       assert.ok(engine.depGraph.listContracts().some((c) => c.symbol_name === 'nativeCompatibility'), 'Contract missing');
       assert.ok(engine.mergeTrain.listQueue().some((m) => m.agent_id === agentId && m.status === 'merged' && m.verification_cmd === 'node --check src/native.mjs' && m.diagnostics_output.includes('Verification passed')), 'Verified integration missing');
       assert.ok(engine.locks.listLocks().every((l) => l.owner_agent_id === 'peer'), 'Client left locks behind');
       if (borrowed) assert.equal(engine.fencing.getAgent(agentId).pid, process.pid, 'Inherited owner changed');
-      result.passed = true; result.checks = ['protected bytes unchanged', 'native edit', 'contract recorded', 'verified integration', 'task completed', 'locks released', ...(borrowed ? ['inherited owner preserved'] : [])];
+      result.passed = true; result.checks = ['protected bytes unchanged', 'native edit', 'contract recorded', 'renewable MCP mutex command', 'verified integration', 'task completed', 'locks released', ...(borrowed ? ['inherited owner preserved'] : [])];
       console.log(`${client} ${mode}: passed`);
     } catch (error) {
       // Only authored assertion messages; raw MCP transcripts contain bearer capabilities.

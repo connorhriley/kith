@@ -125,6 +125,7 @@ export function initializeKithRepository(
 ## Parallel Agent Coordination (kith)
 
 Start a capability-owned session before launching a hook client: \`eval "$(kith session start --agent <id> --owner-pid "$$" --shell)"\`. Share KITH_AGENT_ID and KITH_SESSION_TOKEN with CLI and hooks. Keep the token private.
+For sandboxed MCP clients, use \`kith_begin_work\` and \`kith_run_with_mutex\` with literal command arrays; the connection retains ownership internally. Commands run with server permissions and require client approval.
 - Begin: \`kith begin --agent <id> --title "<intent>" --scope "src/**"\`
 - Claim a queued task: \`kith task claim --agent <id>\`
 - Inspect coordination: \`kith status\` or \`kith top\`

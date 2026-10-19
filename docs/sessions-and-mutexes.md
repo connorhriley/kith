@@ -78,3 +78,15 @@ The API also accepts an AbortSignal, `timeoutMs` for queue waiting, `killGraceMs
 Stop all old Kith clients and running commands before upgrading. The schema-2 migration invalidates legacy sessions that have no capabilities, clears their coordination leases/conflicts, and requeues unfinished tasks. It preserves workspace files, worktrees, snapshots, and quarantine copies. Create fresh sessions after upgrading. Do not run an old binary against the upgraded database.
 
 For a database backup, stop writers and use a SQLite-aware backup or preserve the database together with its WAL/SHM files. Do not copy a live `state.db` alone and assume it is complete. Broader backup/restore and downgrade tooling remains future work.
+
+## Commands from sandboxed MCP clients
+
+On the validated macOS Codex version, the sandboxed native shell cannot inspect process identities, so direct CLI mutex execution fails closed with `Cannot inspect mutex waiter process`. Use `kith_run_with_mutex` on the already-owned MCP connection instead:
+
+```json
+{"agentId":"worker","mutexName":"package-install","command":["pnpm","install"],"leaseDurationMs":30000,"commandTimeoutMs":600000}
+```
+
+The executable and arguments remain separate. The working directory defaults to the registered worktree (otherwise the repository); a supplied `cwd` must resolve inside that root. The server renews the mutex while the command runs and stops it on request cancellation or connection loss, including borrowed sessions. A disconnected borrowed session retains its original owner after its command stops. Nonzero command exits set `isError: true` and retain the actual `exitCode`. Execution defaults to a 60-second timeout and 64 KiB output limit; bounded overrides are supported. Increase the client's MCP tool timeout as needed for longer commands.
+
+This tool runs with the coordinator process permissions, outside the native client's command sandbox. Review and approve it as command execution. Cwd validation selects the working directory; it does not contain what a program can access. Use isolated worktrees and declared scopes for cooperating writers. Session capabilities never need to appear in the command arguments.
