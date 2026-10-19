@@ -266,7 +266,8 @@ it('stops a disconnected borrowed-session MCP command while preserving the origi
 
 it('shares real MCP clients across linked checkout/subdirectory discovery and guards that checkout index', async () => {
   seed();
-  const linked = path.join(root, '.coord/worktrees/manual');
+  // Manual Git checkouts live outside Kith's reserved recovery directory.
+  const linked = path.join(bin, 'manual-worktree');
   git('worktree', 'add', '-b', 'manual-linked', linked);
   const one = await connect(path.join(root, 'src'), true);
   const two = await connect(path.join(linked, 'src'), true);

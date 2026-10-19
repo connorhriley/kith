@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Interrupted upgrades and damaged-state refusal
+
+- Refuse missing/empty databases with retained recovery data, orphan sidecars, incomplete ownership schema, invalid/regressed counters and SQLite-detected page damage. Keep state intact for inspection rather than recreating empty ownership tables.
+- Fail safely at fencing exhaustion and validate state before init writes client configuration.
+- Test a real upgrade process killed before commit, followed by rollback/retry and recovery of unfinished work. Retain interrupted first-start retries when no coordination/recovery data exists.
+
 ### Recovery and verification integrity
 
 - Freeze the integration candidate before verification and reject checks that change HEAD, tracked/index contents or leave new nonignored files in staging. Preserve source work and claims so callers can repair and retry.

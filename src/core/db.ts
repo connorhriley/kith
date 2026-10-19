@@ -44,10 +44,24 @@ export class CoordDatabase {
     if (physicalPath(this.coordDir) !== this.coordDir) throw new Error('Coordination directory must not be a symlink');
     this.dbPath = customDbPath ?? path.join(this.coordDir, 'state.db');
     if (!customDbPath && physicalPath(this.dbPath) !== this.dbPath) throw new Error('Coordination database must not be a symlink');
+    const recoveryFiles = !customDbPath && (fs.existsSync(path.join(this.coordDir, 'merge-train.lock')) ||
+      ['shadow-index', 'quarantine', 'snapshots', 'worktrees'].some(name => {
+        const dir = path.join(this.coordDir, name);
+        return fs.existsSync(dir) && (!fs.lstatSync(dir).isDirectory() || fs.readdirSync(dir).length > 0);
+      }));
+    const sidecars = ['-wal', '-shm', '-journal'].some(suffix => fs.existsSync(this.dbPath + suffix));
+    if (!fs.existsSync(this.dbPath) && (recoveryFiles || sidecars)) {
+      throw new Error('Missing coordination database with existing recovery state. Stop clients and preserve the database, sidecars and worktrees before repair.');
+    }
     // Reject unknown state through a read-only connection before pragmas, checkpoints or setup writes.
     if (fs.existsSync(this.dbPath)) {
       const probe = new DatabaseSync(this.dbPath, { readOnly: true });
-      try { probe.exec('PRAGMA busy_timeout=10000'); CoordDatabase.schemaVersion(probe); } finally { probe.close(); }
+      try {
+        probe.exec('PRAGMA busy_timeout=10000; BEGIN');
+        CoordDatabase.schemaVersion(probe, !recoveryFiles);
+        const check = probe.prepare('PRAGMA quick_check(1)').get() as { quick_check: string };
+        if (check.quick_check !== 'ok') throw new Error('Damaged coordination database. Preserve all state before repair.');
+      } finally { probe.close(); }
     }
     fs.mkdirSync(this.coordDir, { recursive: true, mode: 0o700 });
     for (const name of ['shadow-index', 'quarantine', 'snapshots', 'worktrees']) {
@@ -62,7 +76,7 @@ export class CoordDatabase {
 
     try {
       this.supportsFts5 = CoordDatabase.hasFts5(this.db);
-      this.configurePragmas(); this.migrate();
+      this.configurePragmas(); this.migrate(!recoveryFiles);
     }
     catch (err) { this.db.close(); throw err; }
   }
@@ -115,20 +129,61 @@ export class CoordDatabase {
     `);
   }
 
-  private static schemaVersion(db: DatabaseSyncType): number {
+  private static schemaVersion(db: DatabaseSyncType, allowEmpty: boolean): number {
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'").all() as Array<{ name: string }>;
-    if (!tables.length) return 1; // Fresh, empty SQLite database.
+    if (!tables.length) {
+      if (!allowEmpty) throw new Error('Empty coordination database with existing recovery files. Preserve all state before repair.');
+      return 1; // Fresh or interrupted first initialization, with no recovery files.
+    }
     if (!tables.some(table => table.name === 'meta')) throw new Error('Missing coordination schema metadata. Preserve the database before repair.');
     const row = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value: string } | undefined;
     if (row?.value !== '1' && row?.value !== '2') {
       throw new Error(`Unsupported coordination schema version: ${String(row?.value)}. Preserve the database before upgrading or repairing it.`);
     }
-    return Number(row.value);
+    const version = Number(row.value);
+    const required = ['agents', 'tasks', 'locks', 'file_deps', 'contracts', 'conflicts', 'merge_queue', 'resources', 'quarantine', 'events',
+      ...(version === 2 ? ['agent_sessions', 'mutex_waiters', 'mutex_runs'] : [])];
+    if (required.some(name => !tables.some(table => table.name === name))) {
+      throw new Error('Incomplete coordination schema. Preserve the database before repair.');
+    }
+    // Check ownership fields that could otherwise make live owners or guards appear absent.
+    const columns: Record<string, string> = {
+      agents: 'id,pid,pid_start_time,status,registered_at,lease_expires_at,worktree_path,branch',
+      tasks: 'status,owner_agent_id,fencing_token,scope_globs_json,depends_on_json',
+      locks: 'owner_agent_id,pattern,mode,fencing_token,expires_at',
+      resources: 'type,name,owner_agent_id,fencing_token,expires_at',
+      ...(version === 2 ? {
+        agent_sessions: 'agent_id,token_hash,epoch',
+        mutex_waiters: 'ticket,mutex_name,request_id,owner_agent_id,session_epoch,waiter_pid,waiter_start,expires_at',
+        mutex_runs: 'mutex_name,run_id,owner_agent_id,session_epoch,fencing_token,supervisor_pid,supervisor_start,worker_pid,worker_start',
+      } : {}),
+    };
+    for (const [table, fields] of Object.entries(columns)) {
+      try { db.prepare(`SELECT ${fields} FROM ${table} LIMIT 0`); }
+      catch { throw new Error(`Incomplete coordination schema (${table}). Preserve the database before repair.`); }
+    }
+    const epoch = CoordDatabase.fencingEpoch(db);
+    const tokens = ['SELECT fencing_token AS token FROM locks', 'SELECT fencing_token FROM tasks',
+      'SELECT fencing_token FROM resources', 'SELECT fencing_token FROM merge_queue',
+      ...(version === 2 ? ['SELECT epoch FROM agent_sessions', 'SELECT session_epoch FROM mutex_waiters', 'SELECT fencing_token FROM mutex_runs'] : [])];
+    if (db.prepare(`SELECT 1 FROM (${tokens.join(' UNION ALL ')}) WHERE token IS NOT NULL AND (typeof(token)!='integer' OR token<0 OR token>?) LIMIT 1`).get(epoch)) {
+      throw new Error('Invalid or regressed fencing counter. Preserve the database before repair.');
+    }
+    return version;
   }
 
-  private migrate(): void {
+  private static fencingEpoch(db: DatabaseSyncType): number {
+    const row = db.prepare("SELECT value FROM meta WHERE key='fencing_epoch'").get() as { value: string } | undefined;
+    const epoch = Number(row?.value);
+    if (!row || typeof row.value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(row.value) || !Number.isSafeInteger(epoch)) {
+      throw new Error('Missing or invalid fencing counter. Preserve the database before repair.');
+    }
+    return epoch;
+  }
+
+  private migrate(allowEmpty: boolean): void {
     this.withTransaction(() => {
-      const version = CoordDatabase.schemaVersion(this.db);
+      const version = CoordDatabase.schemaVersion(this.db, allowEmpty);
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS meta (
           key TEXT PRIMARY KEY,
@@ -355,25 +410,15 @@ export class CoordDatabase {
    */
   public nextFencingToken(): number {
     return this.withTransaction(() => {
-      this.db.prepare(`
-        UPDATE meta
-        SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
-        WHERE key = 'fencing_epoch'
-      `).run();
-
-      const row = this.db
-        .prepare(`SELECT value FROM meta WHERE key = 'fencing_epoch'`)
-        .get() as { value: string } | undefined;
-
-      return Number(row?.value ?? 1001);
+      const next = this.currentFencingEpoch() + 1;
+      if (!Number.isSafeInteger(next)) throw new Error('Fencing counter exhausted; preserve state before recovery.');
+      this.db.prepare("UPDATE meta SET value=? WHERE key='fencing_epoch'").run(String(next));
+      return next;
     });
   }
 
   public currentFencingEpoch(): number {
-    const row = this.db
-      .prepare(`SELECT value FROM meta WHERE key = 'fencing_epoch'`)
-      .get() as { value: string } | undefined;
-    return Number(row?.value ?? 1000);
+    return CoordDatabase.fencingEpoch(this.db);
   }
 
   public logEvent(

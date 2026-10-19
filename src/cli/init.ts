@@ -201,13 +201,13 @@ esac
     dryRun: options.dryRun ?? false, warnings,
   };
   if (report.dryRun) return report;
-  for (const [name, { content, mode }] of plan) {
-    const target = path.isAbsolute(name) ? name : path.join(absRoot, name);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content, { encoding: 'utf8', mode });
-  }
   const engine = new KithEngine(absRoot);
   try {
+    for (const [name, { content, mode }] of plan) {
+      const target = path.isAbsolute(name) ? name : path.join(absRoot, name);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content, { encoding: 'utf8', mode });
+    }
     report.indexedFiles = engine.depGraph.indexRepositoryFiles(absRoot);
   } finally {
     engine.close();

@@ -83,3 +83,16 @@ it('preserves existing edit guards byte for byte and flags their session require
   expect(fs.readFileSync(file, 'utf8')).toBe(before);
   expect(JSON.parse(result.stdout).warnings.join(' ')).toContain('does not disable guards');
 });
+
+it('does not rewrite client files when init encounters damaged coordination state', () => {
+  initializeKithRepository(root, 'kith', { integrations: ['claude', 'agents'] });
+  const files = ['.mcp.json', '.claude/settings.json', 'AGENTS.md', '.agent/skills/kith/SKILL.md'];
+  // Existing custom bytes would otherwise be normalized or upgraded by init.
+  fs.writeFileSync(path.join(root, '.mcp.json'), '{ "mcpServers": {} }\n');
+  const before = files.map(f => fs.readFileSync(path.join(root, f)));
+  const db = path.join(root, '.coord/state.db'); fs.writeFileSync(db, 'not a SQLite database');
+  const result = run('init', '--only', 'claude,agents');
+  expect(result.status).toBe(1);
+  expect(files.map(f => fs.readFileSync(path.join(root, f)))).toEqual(before);
+  expect(fs.readFileSync(db, 'utf8')).toBe('not a SQLite database');
+});
