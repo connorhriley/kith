@@ -8,7 +8,7 @@ A session created inside a linked checkout records that checkout as its working 
 
 Relative API file paths and scopes are checkout-root-relative, including when the client starts in a subdirectory. Hook clients should send absolute file paths. A non-Git directory has no shared Git identity; pass its intended root explicitly. Bare repositories and broken `.git` markers fail discovery. Setup discovers the root before preparing configuration and retains dry-run behavior.
 
-Stop old Kith clients before upgrading. If a linked checkout already contains an old independent `.coord/state.db`, discovery refuses it. Preserve its database, worktrees, snapshots and quarantine files before consolidating state manually. Kith does not merge independent databases or delete legacy work automatically.
+Stop old Kith clients before upgrading. If the selected directory, an ancestor up to its checkout root, or a linked/separate-Git-directory checkout contains an old independent `.coord/state.db`, discovery refuses it rather than bypassing that state. Preserve its database, worktrees, snapshots and quarantine files before consolidating state manually. Kith does not merge independent databases or delete legacy work automatically.
 
 ## Supported scope grammar
 

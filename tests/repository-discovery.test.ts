@@ -56,6 +56,11 @@ it('does not silently abandon checkout-local legacy state or a broken Git marker
   fs.mkdirSync(path.join(linked, '.coord')); fs.writeFileSync(path.join(linked, '.coord/state.db'), 'preserve');
   expect(() => open(linked)).toThrow('Legacy checkout-local');
   expect(fs.readFileSync(path.join(linked, '.coord/state.db'), 'utf8')).toBe('preserve');
+  const sub = path.join(root, 'src/nested'); fs.mkdirSync(path.join(sub, '.coord'));
+  fs.writeFileSync(path.join(sub, '.coord/state.db'), 'old subdirectory state');
+  expect(() => open(sub)).toThrow('Legacy checkout-local');
+  expect(fs.readFileSync(path.join(sub, '.coord/state.db'), 'utf8')).toBe('old subdirectory state');
+  expect(fs.existsSync(path.join(root, '.coord'))).toBe(false);
   const broken = path.join(temp, 'broken'); fs.mkdirSync(broken); fs.writeFileSync(path.join(broken, '.git'), 'gitdir: /missing/kith\n');
   expect(() => open(broken)).toThrow('Cannot discover Git');
   expect(fs.existsSync(path.join(broken, '.coord'))).toBe(false);

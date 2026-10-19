@@ -33,8 +33,12 @@ export class CoordDatabase {
     this.repoRoot = layout.checkoutRoot;
     this.commonGitDir = layout.commonGitDir;
     this.isLinkedWorktree = layout.isLinkedWorktree;
-    if (layout.coordDir !== path.join(this.repoRoot, '.coord') && fs.existsSync(path.join(this.repoRoot, '.coord', 'state.db'))) {
-      throw new Error('Legacy checkout-local coordination state found. Stop clients and preserve that .coord directory before consolidating shared state.');
+    for (let current = fs.realpathSync(repoRoot); isWithin(this.repoRoot, current); current = path.dirname(current)) {
+      const local = path.join(current, '.coord');
+      if (local !== layout.coordDir && fs.existsSync(path.join(local, 'state.db'))) {
+        throw new Error(`Legacy checkout-local coordination state found at ${local}. Stop clients and preserve that directory before consolidating shared state.`);
+      }
+      if (current === this.repoRoot) break;
     }
     this.coordDir = layout.coordDir;
     if (physicalPath(this.coordDir) !== this.coordDir) throw new Error('Coordination directory must not be a symlink');
