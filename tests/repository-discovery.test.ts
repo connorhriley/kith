@@ -28,7 +28,10 @@ it('shares locks, tasks and capabilities from root, subdirectories, aliases and 
   owner.intents.addTask({ id: 'task', title: 'Shared task' });
   const alias = path.join(temp, 'alias'); fs.symlinkSync(root, alias);
   const linked = path.join(temp, 'linked checkout'); git(root, 'worktree', 'add', '-b', 'linked', linked);
-  for (const directory of [path.join(root, 'src/nested'), alias, path.join(linked, 'src')]) {
+  const parentTarget = path.join(temp, 'other/nested'); fs.mkdirSync(parentTarget, { recursive: true });
+  const parentAlias = path.join(temp, 'parent-alias'); fs.symlinkSync(parentTarget, parentAlias);
+  const physicalTraversal = parentAlias + '/../../' + path.basename(root) + '/src';
+  for (const directory of [path.join(root, 'src/nested'), alias, path.join(linked, 'src'), physicalTraversal]) {
     const peer = open(directory);
     expect(peer.coordDb.dbPath).toBe(owner.coordDb.dbPath);
     expect(peer.intents.listTasks().some(t => t.id === 'task')).toBe(true);
