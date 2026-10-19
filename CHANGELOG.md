@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Recovery and verification integrity
+
+- Freeze the integration candidate before verification and reject checks that change HEAD, tracked/index contents or leave new nonignored files in staging. Preserve source work and claims so callers can repair and retry.
+- Validate existing schema metadata read-only before writable setup; refuse unsupported/malformed/missing versions instead of changing the database first. Recheck within the migration transaction.
+- Cover killed MCP ownership, stopped WAL backup restoration, new session generations, failed legacy migration rollback, and repair/retry through real clients. Native validation now checks an expected failed verification followed by successful completion.
+
 ### Lean MCP onboarding and read-only observation
 
 - Recommend MCP ownership and one worktree per parallel agent in setup instructions and examples. Add `init --mcp-only` to configure clients without installing hooks or shims; preserve existing guards with a review warning.

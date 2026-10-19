@@ -20,7 +20,7 @@ These gates are covered locally. Version-specific native Codex and Claude CLI ru
 - Redesign shared-tree Bash attribution before considering automatic restoration as a default. Gate: sibling edits cannot be reverted by another agent's post-hook.
 - Shared common-Git-directory discovery from roots, subdirectories, linked worktrees, symlink aliases and separate Git directories; physical containment, external-link refusal, literal framework paths and invoking-index Git guards have regression coverage.
 - Parsed append-only declaration resolution rejects imports, initializers, top-level execution, name collisions, cross-branch bindings, unsupported syntax, lossy JSON and ambiguous Git stages/modes. Actual Git conflicts cover symlink refusal and unusual filenames.
-- Add robust schema migrations and backup/recovery tests. Gate: supported upgrades preserve state or fail without modifying it.
+- Legacy migration rollback/retry, unknown-schema refusal and stopped WAL backup restoration now have regressions, including killed MCP ownership and worktree continuation. Broader upgrade/downgrade combinations and corrupted-state repair remain unvalidated.
 
 ## 4. Broaden integration validation
 

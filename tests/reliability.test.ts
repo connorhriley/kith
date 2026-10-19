@@ -298,3 +298,33 @@ it('makes generated Claude pre-hooks block on launch failure and upgrades existi
   expect(updated.hooks.PreToolUse).toHaveLength(1);
   expect(updated.hooks.PreToolUse[0].hooks[0].onFailure).toBe('block');
 });
+
+it.each(['staged', 'commit', 'untracked'])('refuses verification that leaves %s changes outside the candidate commit', action => {
+  seedGit();
+  const wt = engine!.worktrees.spawnWorktree({ agentId: 'worker' });
+  fs.writeFileSync(path.join(wt.worktreePath, 'file.ts'), 'export const value = 2;\n');
+  const before = git('rev-parse', 'HEAD');
+  const commands = {
+    staged: 'git rm file.ts',
+    commit: 'git -c user.name=Verifier -c user.email=test@example.test commit --allow-empty -m changed-head',
+    untracked: 'node -e "require(\'node:fs\').writeFileSync(\'only-in-stage.txt\',\'not integrated\')"',
+  };
+  const result = engine!.mergeTrain.enqueueAndMerge({ agentId: 'worker', branch: wt.branch, worktreePath: wt.worktreePath, verificationCmd: commands[action as keyof typeof commands] });
+  expect(result.merged).toBe(false);
+  expect(result.diagnostics).toContain('staging checkout');
+  expect(git('rev-parse', 'HEAD')).toBe(before);
+  expect(fs.readFileSync(path.join(wt.worktreePath, 'file.ts'), 'utf8')).toBe('export const value = 2;\n');
+});
+
+it('allows unchanged dependency hydration and ignored outputs during verification', () => {
+  seedGit();
+  fs.mkdirSync(path.join(root, 'node_modules'));
+  const wt = engine!.worktrees.spawnWorktree({ agentId: 'worker' });
+  // This fixture intentionally leaves node_modules unignored; Kith creates this stage symlink itself.
+  const ignore = path.join(root, '.gitignore'); fs.writeFileSync(ignore, '.coord/\n');
+  git('add', '.gitignore'); git('commit', '-m', 'Leave dependency hydration unignored');
+  fs.writeFileSync(path.join(wt.worktreePath, 'file.ts'), 'export const value = 2;\n');
+  const result = engine!.mergeTrain.enqueueAndMerge({ agentId: 'worker', branch: wt.branch, worktreePath: wt.worktreePath,
+    verificationCmd: 'node -e "const fs=require(\'node:fs\');fs.mkdirSync(\'.coord\',{recursive:true});fs.writeFileSync(\'.coord/result\',\'passed\')"' });
+  expect(result.merged, result.diagnostics).toBe(true);
+});

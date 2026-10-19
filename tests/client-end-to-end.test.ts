@@ -320,3 +320,67 @@ it('uses generated MCP-only onboarding with no exported capability or installed 
   expect(completed.ok).toBe(true);
   expect(fs.readFileSync(path.join(root, 'src/feature.mjs'), 'utf8')).toContain('feature = 42');
 });
+
+it('rejects a check that repairs only the staging tree, preserves work, and completes after source repair', async () => {
+  seed();
+  const { client } = await connect();
+  const before = git('rev-parse', 'HEAD');
+  const work = data(await tool(client, 'kith_begin_work', { agentId: 'repair', title: 'Repair module', scopeGlobs: ['src/feature.mjs'], isolateWorktree: true }));
+  const file = path.join(work.worktree.worktreePath, 'src/feature.mjs');
+  const broken = 'export const feature = ;\n', fixed = 'export const feature = 42;\n';
+  fs.writeFileSync(file, broken);
+  const script = `require('node:fs').writeFileSync('src/feature.mjs',${JSON.stringify(fixed)});require('node:child_process').execFileSync(process.execPath,['--check','src/feature.mjs'])`;
+  const failed = await tool(client, 'kith_complete_work', { agentId: 'repair', verificationCmd: `node -e ${quote(script)}` });
+  expect(failed.isError).toBe(true);
+  expect(git('rev-parse', 'HEAD')).toBe(before);
+  expect(fs.existsSync(path.join(root, 'src/feature.mjs'))).toBe(false);
+  expect(fs.readFileSync(file, 'utf8')).toBe(broken);
+  const status = data(await tool(client, 'kith_get_status', {}));
+  expect(status.tasks.some((t: any) => t.owner_agent_id === 'repair' && t.status === 'active')).toBe(true);
+  expect(status.locks.some((l: any) => l.owner_agent_id === 'repair')).toBe(true);
+  expect(status.mergeQueue[0].diagnostics_output).toContain('staging checkout');
+  fs.writeFileSync(file, fixed);
+  data(await tool(client, 'kith_record_file_edit', { agentId: 'repair', filePath: file }));
+  data(await tool(client, 'kith_complete_work', { agentId: 'repair', verificationCmd: 'node --check src/feature.mjs' }));
+  expect(fs.readFileSync(path.join(root, 'src/feature.mjs'), 'utf8')).toBe(fixed);
+  expect(fs.existsSync(work.worktree.worktreePath)).toBe(true);
+  expect(data(await tool(client, 'kith_get_status', {})).locks).toEqual([]);
+});
+
+it('recovers a killed MCP owner from a stopped WAL backup and resumes its preserved worktree with a new capability', async () => {
+  seed();
+  const one = await connect();
+  const work = data(await tool(one.client, 'kith_begin_work', { agentId: 'recover', title: 'Recover interrupted work', scopeGlobs: ['src/feature.mjs'], isolateWorktree: true }));
+  const bytes = 'export const recovered = 42;\n';
+  fs.writeFileSync(path.join(work.worktree.worktreePath, 'src/feature.mjs'), bytes);
+  data(await tool(one.client, 'kith_record_file_edit', { agentId: 'recover', filePath: 'src/feature.mjs' }));
+  const disconnected = new Promise<void>(resolve => { one.client.onclose = resolve; });
+  process.kill(one.transport.pid!, 'SIGKILL');
+  await disconnected;
+  const coord = path.join(root, '.coord');
+  const saved = path.join(coord, 'stopped-backup'); fs.mkdirSync(saved);
+  expect(fs.statSync(path.join(coord, 'state.db-wal')).size).toBeGreaterThan(0);
+  for (const suffix of ['', '-wal', '-shm']) {
+    const name = `state.db${suffix}`;
+    if (fs.existsSync(path.join(coord, name))) fs.copyFileSync(path.join(coord, name), path.join(saved, name));
+  }
+  // Opening/checkpointing the original after the crash must not be required to use the backup.
+  const checkpoint = new KithEngine(root); checkpoint.close();
+  for (const suffix of ['', '-wal', '-shm']) {
+    const name = `state.db${suffix}`;
+    fs.rmSync(path.join(coord, name), { force: true });
+    if (fs.existsSync(path.join(saved, name))) fs.copyFileSync(path.join(saved, name), path.join(coord, name));
+  }
+  const two = await connect();
+  expect((await tool(two.client, 'kith_heartbeat', { agentId: 'recover', sessionToken: work.sessionToken })).isError).toBe(true);
+  const claimed = data(await tool(two.client, 'kith_claim_next_task', { agentId: 'recover' }));
+  expect(claimed.claimed).toBe(true);
+  expect(claimed.task.id).toBe(work.task.id);
+  expect(claimed.sessionToken).not.toBe(work.sessionToken);
+  const status = data(await tool(two.client, 'kith_get_status', {}));
+  expect(status.agents.find((a: any) => a.id === 'recover').worktree_path).toBe(work.worktree.worktreePath);
+  data(await tool(two.client, 'kith_complete_work', { agentId: 'recover', verificationCmd: 'node --check src/feature.mjs' }));
+  expect(fs.readFileSync(path.join(root, 'src/feature.mjs'), 'utf8')).toBe(bytes);
+  expect(fs.existsSync(work.worktree.worktreePath)).toBe(true);
+  expect(data(await tool(two.client, 'kith_get_status', {})).locks).toEqual([]);
+});

@@ -42,6 +42,13 @@ export class CoordDatabase {
     }
     this.coordDir = layout.coordDir;
     if (physicalPath(this.coordDir) !== this.coordDir) throw new Error('Coordination directory must not be a symlink');
+    this.dbPath = customDbPath ?? path.join(this.coordDir, 'state.db');
+    if (!customDbPath && physicalPath(this.dbPath) !== this.dbPath) throw new Error('Coordination database must not be a symlink');
+    // Reject unknown state through a read-only connection before pragmas, checkpoints or setup writes.
+    if (fs.existsSync(this.dbPath)) {
+      const probe = new DatabaseSync(this.dbPath, { readOnly: true });
+      try { probe.exec('PRAGMA busy_timeout=10000'); CoordDatabase.schemaVersion(probe); } finally { probe.close(); }
+    }
     fs.mkdirSync(this.coordDir, { recursive: true, mode: 0o700 });
     for (const name of ['shadow-index', 'quarantine', 'snapshots', 'worktrees']) {
       const target = path.join(this.coordDir, name);
@@ -51,8 +58,6 @@ export class CoordDatabase {
       fs.mkdirSync(target, { recursive: true });
     }
 
-    this.dbPath = customDbPath ?? path.join(this.coordDir, 'state.db');
-    if (!customDbPath && physicalPath(this.dbPath) !== this.dbPath) throw new Error('Coordination database must not be a symlink');
     this.db = new DatabaseSync(this.dbPath);
 
     try {
@@ -110,8 +115,20 @@ export class CoordDatabase {
     `);
   }
 
+  private static schemaVersion(db: DatabaseSyncType): number {
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'").all() as Array<{ name: string }>;
+    if (!tables.length) return 1; // Fresh, empty SQLite database.
+    if (!tables.some(table => table.name === 'meta')) throw new Error('Missing coordination schema metadata. Preserve the database before repair.');
+    const row = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value: string } | undefined;
+    if (row?.value !== '1' && row?.value !== '2') {
+      throw new Error(`Unsupported coordination schema version: ${String(row?.value)}. Preserve the database before upgrading or repairing it.`);
+    }
+    return Number(row.value);
+  }
+
   private migrate(): void {
     this.withTransaction(() => {
+      const version = CoordDatabase.schemaVersion(this.db);
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS meta (
           key TEXT PRIMARY KEY,
@@ -255,8 +272,6 @@ export class CoordDatabase {
           payload_json TEXT NOT NULL
         );
       `);
-      const version = Number((this.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value: string }).value);
-      if (version > 2) throw new Error(`Unsupported future coordination schema: ${version}`);
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS agent_sessions (
           agent_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, epoch INTEGER NOT NULL

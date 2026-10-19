@@ -137,7 +137,8 @@ export class SpeculativeMergeTrain {
       // Hydrate node_modules into staging worktree if present
       const rootNodeModules = path.join(this.coordDb.repoRoot, 'node_modules');
       const stageNodeModules = path.join(stageDir, 'node_modules');
-      if (fs.existsSync(rootNodeModules) && !fs.existsSync(stageNodeModules)) {
+      const hydratedNodeModules = fs.existsSync(rootNodeModules) && !fs.existsSync(stageNodeModules);
+      if (hydratedNodeModules) {
         fs.symlinkSync(rootNodeModules, stageNodeModules, 'dir');
       }
 
@@ -207,6 +208,8 @@ export class SpeculativeMergeTrain {
         );
       }
 
+      const verifiedSha = this.gitHead(stageDir);
+
       // 3. Run verification command inside the speculative staging tree if specified
       let diagnostics = 'Speculative merge clean.';
       if (params.verificationCmd) {
@@ -229,10 +232,14 @@ export class SpeculativeMergeTrain {
       }
 
       // 4. Advance the main repository to the verified speculative commit
-      const verifiedSha = execFileSync('git', ['rev-parse', 'HEAD'], {
-        cwd: stageDir, env: sessionEnv,
-        encoding: 'utf8',
-      }).trim();
+      const stageChanges = execFileSync('git', ['status', '--porcelain', '-z', '--untracked-files=normal'], {
+        cwd: stageDir, encoding: 'utf8',
+      }).split('\0').filter(Boolean);
+      const unchangedHydration = hydratedNodeModules && fs.lstatSync(stageNodeModules, { throwIfNoEntry: false })?.isSymbolicLink()
+        && fs.readlinkSync(stageNodeModules) === rootNodeModules;
+      if (this.gitHead(stageDir) !== verifiedSha || stageChanges.some(change => !(unchangedHydration && change === '?? node_modules'))) {
+        throw new Error('Verification changed the staging checkout. Apply fixes in the source worktree and retry with a read-only check.');
+      }
 
       if (this.gitHead(this.coordDb.repoRoot) !== baseHead ||
           this.gitBranch(this.coordDb.repoRoot) !== targetBranch) {

@@ -8,7 +8,7 @@ Kith is a cooperative local coordinator. It does not provide an OS sandbox, dist
 - Port reservations are rechecked atomically after asynchronous OS probes; exhaustion returns an error.
 - Setup previews without writes, preserves unrelated JSON settings, and rejects malformed config before writing selected configuration.
 - Worktree creation refuses an existing path or branch; removal refuses local, untracked, or ignored changes.
-- Integration refuses a dirty target and concurrent Kith integrations; verification failures preserve the target.
+- Integration refuses a dirty target and concurrent Kith integrations; failed or mutating verification preserves the target and source worktree for retry. Checks cannot change the candidate commit, tracked/index contents, or leave new nonignored files behind.
 - Conflict resolution accepts only parsed, disjoint appended named declarations or lossless additive JSON objects. Imports, initializers, executable top-level additions, binding collisions, missing Git stages and changed/symlink modes remain conflicts.
 - Shadow-tree deletions reach Git; invalid merge inputs surface errors.
 - Bash recovery preserves current workspace bytes by default and saves before/after copies.
@@ -17,7 +17,9 @@ Kith is a cooperative local coordinator. It does not provide an OS sandbox, dist
 - Long commands renew leases; expiry, cancellation, supervisor death, and suspension do not permit overlapping guarded command groups.
 - FIFO tickets survive release, and cancelled waiters do not block the queue.
 - Separate CLI/MCP clients cannot mutate a live ID without its capability; old tokens cannot clean up a replacement session.
-- Generated hook commands, MCP wire initialization/calls, worktree reporting, verification, completion, and disconnect recovery run end to end against actual subprocesses.
+- Generated hook commands, MCP wire initialization/calls, worktree reporting, failed verification followed by repair/retry, completion, and disconnect recovery run end to end against actual subprocesses.
+- A killed MCP owner can be recovered from a stopped database/WAL backup: its task is requeued, old capability rejected and worktree preserved for a new owning session.
+- Unknown or missing schema versions are refused before writable database setup. Failed legacy migrations roll back ownership/schema changes and preserve workspace and recovery files.
 
 These are test scenarios, not universal guarantees. CI coverage and real usage need to grow together.
 
@@ -37,12 +39,20 @@ These are test scenarios, not universal guarantees. CI coverage and real usage n
 
 ## Recovery
 
-1. Stop writers and inspect `kith status` and Git status in every worktree.
+1. Stop all clients, writers and supervised commands. Inspect `kith top --once` and Git status in every worktree; `top` observes without initializing, migrating or reaping state.
 2. Preserve worktree contents and quarantine files before removing state. Never delete `.coord` as routine cleanup: it contains worktrees, snapshots, and quarantine backups.
 3. If integration reports busy after a crash, inspect `.coord/merge-train.lock`, confirm its process is no longer running, and preserve any `_merge_train_*` worktree before manually removing the stale lock.
-4. Repair conflicts in the source branch/worktree, then retry integration with a suitable `--verify` command.
+4. Repair conflicts or failed checks in the source branch/worktree, then retry integration on the same session with a suitable verification command. Use checks that leave tracked/index contents and HEAD unchanged. Put formatters and fixers in the source worktree first. Ignored build/test outputs and Kith's unchanged dependency hydration are allowed; new nonignored staging files are rejected.
 5. To remove a worktree, commit or preserve local files first. After completing its session, start a new maintenance generation with `kith session start --agent <id> --new --owner-pid "$$" --shell`. Kith deliberately does not force removal.
 6. Inspect `mutex_runs` before manually removing a stuck command guard. Confirm its worker group and protected descendants cannot still execute. A process that escaped the group may require external recovery. Never clear a live guard to bypass a busy result.
+
+### Stopped database backups and interrupted agents
+
+Preserve `state.db` together with any matching `state.db-wal` and `state.db-shm` files after every client/writer has stopped. Keep worktrees, snapshots and quarantine copies too. A crash can leave committed data only in the WAL; copying `state.db` alone can lose it. Restore the database and its matching sidecars as one stopped set, preserving the current set separately first. Never mix a restored database with sidecars from another snapshot or restore while old clients remain alive. These are tested recovery scenarios, not a corruption-repair tool.
+
+After an MCP owner dies, reconnect and inspect the queued tasks and retained worktree before claiming work. `kith_claim_next_task` with the same agent ID can create a fresh session generation and retain that worktree; verify the returned task ID/scope before continuing because it claims the highest-priority eligible task. The old capability is invalid. Do not request another isolated worktree over the retained path: creation deliberately refuses to replace existing work. Repair/report edits there, then complete with a read-only project check.
+
+Unsupported or missing schema metadata requires inspection of a preserved copy. Do not edit the version value to force an upgrade. A supported schema-1 upgrade invalidates legacy ownership and requeues unfinished tasks; an error rolls back those database changes. Stop older clients before upgrading or retrying.
 
 The SQLite implementation requires Node's unflagged SQLite API: [Node SQLite documentation](https://nodejs.org/download/release/latest-jod/docs/api/sqlite.html). Generated Claude integration follows the [hook reference](https://code.claude.com/docs/en/hooks) and [project MCP configuration](https://code.claude.com/docs/en/mcp).
 
