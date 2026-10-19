@@ -2,15 +2,15 @@
   <img src="assets/brand/readme-header.png" alt="Kith — Parallel agents. Shared direction. Local coordination for coding agents." width="100%">
 </p>
 
-# Kith
-
 Kith helps coding agents coordinate work in the same local repository. Give each agent a scope, detect overlapping work, and inspect shared state through the CLI, terminal dashboard, or MCP.
 
 - **Claim a scope.** Register a task and check for overlapping exclusive scopes.
 - **See shared work.** Inspect sessions, tasks, and coordination state.
 - **Work in isolation.** Create agent worktrees and integrate completed work, with an optional project verification command.
 
-[Quick start](#try-it-from-source) · [Integrations](docs/integrations.md) · [Reliability](docs/reliability.md) · [Contributing](CONTRIBUTING.md)
+<p align="center">
+  <a href="#try-it-from-source">Quick start</a> · <a href="docs/integrations.md">Integrations</a> · <a href="docs/reliability.md">Reliability</a> · <a href="CONTRIBUTING.md">Contributing</a>
+</p>
 
 **Status: experimental.** Kith has useful coordination primitives and regression tests, but needs field testing before use on irreplaceable work. It is designed for cooperating agents on one machine. Hooks and fencing checks are not an OS security boundary.
 
@@ -19,7 +19,8 @@ Kith helps coding agents coordinate work in the same local repository. Give each
 Requirements: Git 2.38+ and Node.js 22.13+ on the 22.x line, or Node.js 24+. Development targets macOS and Linux; Windows support is not yet validated. Node's SQLite module may emit an experimental warning.
 
 ```sh
-# From this checkout
+git clone https://github.com/connorhriley/kith.git
+cd kith
 corepack enable
 pnpm install --frozen-lockfile
 pnpm check
@@ -27,7 +28,7 @@ pnpm link --global
 kith help
 ```
 
-The repository has no configured upstream remote. Package-name ownership and registry publication have not been verified; use the source checkout until a release channel is established.
+Use the source checkout for now. Package-name ownership and registry publication have not been verified.
 
 In a disposable Git repository, preview setup before applying it:
 
