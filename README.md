@@ -2,137 +2,119 @@
   <img src="assets/brand/readme-header.png" alt="Kith — Parallel agents. Shared direction. Local coordination for coding agents." width="100%">
 </p>
 
-Kith helps coding agents coordinate work in the same local repository. Give each agent a scope, detect overlapping work, and inspect shared state through the CLI, terminal dashboard, or MCP.
-
-- **Claim a scope.** Register a task and check for overlapping exclusive scopes.
-- **See shared work.** Inspect sessions, tasks, and coordination state.
-- **Work in isolation.** Create agent worktrees and integrate completed work, with an optional project verification command.
-
 <p align="center">
-  <a href="#try-it-from-source">Quick start</a> · <a href="docs/integrations.md">Integrations</a> · <a href="docs/reliability.md">Reliability</a> · <a href="CONTRIBUTING.md">Contributing</a>
+  <a href="https://github.com/connorhriley/kith/actions/workflows/ci.yml"><img src="https://github.com/connorhriley/kith/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22C55E" alt="MIT license"></a>
 </p>
 
-**Status: experimental.** Kith has useful coordination primitives and regression tests, but needs field testing before use on irreplaceable work. It is designed for cooperating agents on one machine. Hooks and fencing checks are not an OS security boundary.
+<p align="center">
+  <a href="#quick-start">Quick start</a> · <a href="#see-it-work">Demo</a> · <a href="docs/integrations.md">Integrations</a> · <a href="docs/usage.md">CLI &amp; API</a> · <a href="CONTRIBUTING.md">Contribute</a>
+</p>
 
-## Try it from source
+**Run coding agents in parallel, with explicit ownership of the work.**
 
-Requirements: Git 2.38+ and Node.js 22.13+ on the 22.x line, or Node.js 24+. Development targets macOS and Linux; Windows support is not yet validated. Node's SQLite module may emit an experimental warning.
+One agent changes an interface while another builds against it. Two agents edit the same file. Separate worktrees still compete for a dev-server port or a package install.
+
+Kith gives cooperating agents shared local state: who owns a task, which files are claimed, and which commands need to wait. Use it through a CLI, terminal dashboard, or MCP server. Coordination lives in SQLite on your machine; Kith itself needs no hosted service or model API key.
+
+## What Kith does
+
+| Need | Kith provides |
+| --- | --- |
+| Keep tasks from overlapping | Scoped claims with conflict responses |
+| Give agents separate working files | Git worktrees with an explicit integration step |
+| Check work before integration | Your project's verification command |
+| Share local tools | Port reservations and supervised command mutexes |
+| See what is happening | Session/task state through `kith status`, `kith top`, and MCP |
+
+Kith fits workflows where you already launch multiple coding agents and want them to coordinate. It does not choose models, write prompts, or launch a fleet for you. Worktrees separate files; Kith adds shared ownership and resource coordination.
+
+**Experimental.** Kith relies on cooperating clients. Hooks are not an OS security boundary, and analysis of globs and source code is heuristic. Start in a disposable repository. Read the [reliability contract](docs/reliability.md) before using it on important work.
+
+## Quick start
+
+Requires **Git 2.38+**, **Node.js 22.13+ on 22.x or Node.js 24+**, and the pinned **pnpm 10.20.0**. Development targets macOS and Linux. Windows is unvalidated. Node may print an experimental SQLite warning.
 
 ```sh
 git clone https://github.com/connorhriley/kith.git
 cd kith
 corepack enable
 pnpm install --frozen-lockfile
-pnpm check
+pnpm build
+```
+
+### See it work
+
+```sh
+pnpm demo
+```
+
+The demo starts **two real MCP clients**, gives each a separate Git worktree in a temporary repository, refuses an overlapping claim, records their edits, and verifies/integrates both changes. It removes the temporary repository afterward. No model calls or client credentials are needed.
+
+```text
+auth: claimed src/auth.mjs in an isolated worktree
+billing: overlapping claim on src/auth.mjs refused
+billing: claimed src/billing.mjs in an isolated worktree
+auth: isolated edit reported, verified, and integrated
+billing: isolated edit reported, verified, and integrated
+Two real MCP clients completed work in separate worktrees. Disposable example passed.
+```
+
+The implementation is in [examples/two-agents.mjs](examples/two-agents.mjs). This demonstrates the coordination protocol; [native-client validation](docs/client-validation.md) separately exercises installed coding clients.
+
+### Connect your client
+
+Link the built CLI, then switch to the repository you want to coordinate:
+
+```sh
+# From the Kith checkout
 pnpm link --global
 kith help
+
+# From your target repository, preview the selected integrations first
+kith init --dry-run --only claude,codex,agents
+kith init --only claude,codex,agents
 ```
 
-Use the source checkout for now. Package-name ownership and registry publication have not been verified.
+Choose only the clients you use. Setup preserves unrelated settings and existing hooks; review the returned files and warnings, then restart your client. The `kith` executable must be on that client's `PATH`.
 
-In a disposable Git repository, preview setup before applying it:
-
-```sh
-kith init --dry-run
-kith init --only claude,agents
-```
-
-`--only` accepts `claude,codex,cursor,agents,git,shims`. Without it, all are selected. Setup preserves unrelated settings, existing hooks, and MCP servers; invalid JSON/TOML stops setup before configuration writes. Review the returned file list and warnings. Claude MCP configuration lives in `.mcp.json`; hooks live in `.claude/settings.json`. Existing Git pre-commit hooks are left for you to integrate with your hook manager.
-
-Hook and MCP configurations execute `kith`, so make sure it is installed on the client process's `PATH`. Restart the client after changing configuration. See [integration details](docs/integrations.md).
-
-## Coordinate two agents
-
-Run commands from the repository root, or pass `--repo /absolute/path`. Create a capability-owned session and share its environment with CLI commands and hooks. An agent ID alone cannot resume another session.
-
-```sh
-eval "$(kith session start --agent auth-worker --owner-pid "$$" --shell)"
-kith begin --agent auth-worker --title "Refresh auth middleware" --scope "src/auth/**"
-kith status
-kith heartbeat --agent auth-worker
-kith complete --agent auth-worker
-unset KITH_AGENT_ID KITH_SESSION_TOKEN
-```
-
-A second agent requesting an overlapping exclusive scope receives a conflict and a nonzero exit status. Quote globs so the shell does not expand them. Scopes are comma-separated. Leases default to five minutes; heartbeat during longer sessions. Dead or expired sessions release coordination resources when another operation runs the reaper. Active supervised command guards survive expiry until the command group stops. See [sessions and mutexes](docs/sessions-and-mutexes.md) for ownership, cancellation, and upgrade details.
-
-For stronger filesystem separation, use a worktree:
-
-```sh
-eval "$(kith session start --agent billing-worker --owner-pid "$$" --shell)"
-kith begin --agent billing-worker --title "Billing webhooks" --scope "src/billing/**" --worktree
-# Edit in the worktreePath returned in the JSON result.
-kith complete --agent billing-worker --verify "pnpm typecheck"
-# Open a new maintenance generation after the completed session.
-eval "$(kith session start --agent billing-worker --new --owner-pid "$$" --shell)"
-kith worktree remove --agent billing-worker
-kith session end
-unset KITH_AGENT_ID KITH_SESSION_TOKEN
-```
-
-Completion checkpoints uncommitted worktree changes and integrates into the branch currently checked out in the main repository. The target must be clean. A verification failure leaves the target unchanged and the worktree available for repair. Successful completion also keeps the worktree for inspection; removal is explicit and refuses dirty, untracked, or ignored work. Existing branches are never reset to create a worktree. Hydration tries filesystem clones and falls back to an independent copy; cost depends on the filesystem and dependency size.
-
-A verification command is optional. Without one, integration checks Git mergeability only. Choose a command that actually checks your project.
-
-## Runnable client example
-
-Run `pnpm demo` from the checkout. It starts two real MCP stdio clients, edits separate Git worktrees in a disposable repository, reports the files, and verifies/integrates both branches. No model API calls are involved. For opt-in runs against installed Codex and Claude Code, including native edits, denied edits, supervised commands and integration, see [native client validation](docs/client-validation.md).
-
-## Other workflows
-
-```sh
-# Task dependencies
-kith task add --id schema --title "Billing schema" --scope "src/db/**"
-kith task add --id api --title "Billing endpoints" --depends-on schema --scope "src/api/**"
-kith task claim --agent worker-1
-
-# Inspect the dashboard once, or omit --once for a live view
-kith top --once
-
-# Allocate a cooperating client's port; start your service promptly
-kith port --agent worker-1 --service web
-
-# Serialize commands; argument boundaries are preserved after --
-kith mutex --agent worker-1 --name package-install -- pnpm install
-
-# Start the MCP stdio server
-kith mcp
-```
-
-The `coord` executable is an alias for `kith`. The library exports `KithEngine` and its component classes for custom integrations:
-
-```js
-import { KithEngine } from 'kith';
-const kith = new KithEngine('/absolute/path/to/repository');
-try {
-  kith.fencing.registerAgent({ id: 'custom-worker' });
-  const result = kith.locks.acquireLocks({
-    agentId: 'custom-worker', patterns: ['src/auth/**'],
-  });
-  console.log(result);
-} finally {
-  kith.close();
-}
-```
-
-## Capabilities and limits
-
-| Capability | Practical boundary |
+| Client | Setup and validation |
 | --- | --- |
-| Scoped file, glob, and symbol locks | Cooperative checks; glob intersections use heuristics and need more adversarial coverage |
-| Task claims and fencing tokens | SQLite writer transactions; callers must check results and present tokens where supported |
-| Contract and dependency hints | Lightweight source parsing, not a compiler or a complete type-system analysis |
-| Duplicate-symbol hints | FTS and structural heuristics; false positives and misses are possible |
-| Dirty-tree conflict probes | Git shadow indexes; Git failures surface as errors; automatic additive merges still need project verification |
-| Bash mutation quarantine | Recovery copies with exclusions and size limits; automatic restoration is disabled by default |
-| Port leases | Unique among live Kith reservations; no socket is held for the eventual service |
-| Command mutexes | Renewed leases, persistent FIFO tickets, and guarded process groups; protected work must stay in the supervised group |
-| Merge integration | Serialized Kith integrations and isolated staging; external Git writers must still coordinate |
+| Claude Code | MCP and edit hooks; recorded native CLI runs |
+| Codex | Project MCP configuration; recorded native CLI runs with configuration overrides |
+| Cursor | Generated MCP configuration; native application behavior unvalidated |
+| Other MCP clients | stdio server via `kith mcp`; client-specific validation required |
 
-See the [reliability contract](docs/reliability.md), [architecture](docs/architecture.md), and [roadmap](docs/roadmap.md) before extending or deploying Kith.
+Native checks are version-specific. GUI discovery and persisted project trust need separate checks. See [integration setup](docs/integrations.md), [recorded validation](docs/client-validation.md), and [session ownership](docs/sessions-and-mutexes.md) before mixing hooks, CLI commands, and MCP clients.
 
-## Contribute
+Source installation is the current distribution path. Package-name ownership and registry publication have not been verified.
 
-Review [unreleased changes and migration notes](CHANGELOG.md). Start with [CONTRIBUTING.md](CONTRIBUTING.md). Run `pnpm check`; it typechecks, builds the distributable, and runs unit, Git integration, CLI/MCP end-to-end, supervision failure, and 50-process contention tests. CI is configured for macOS/Linux and supported Node versions; a local run does not establish that the CI matrix has passed.
+## How a task moves through Kith
 
-Licensed under [MIT](LICENSE). See [SECURITY.md](SECURITY.md) for reporting guidance and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for participation expectations.
+1. **Open a session.** A capability identifies the owning session; an agent name alone is insufficient.
+2. **Claim a scope.** Cooperating clients receive a conflict when an exclusive claim overlaps another claim.
+3. **Do the work.** Edit a shared checkout or the returned isolated worktree. Keep the session alive and report work through the client integration.
+4. **Verify and complete.** For a worktree, Kith checkpoints changes and integrates through a separate staging worktree. The target must be clean. Supply a verification command to check more than Git mergeability.
+
+Failed verification leaves the target unchanged and keeps the worktree for repair. Successful integration also retains the worktree until explicit cleanup. External Git writers must still coordinate.
+
+For runnable commands and library examples, see [CLI and library workflows](docs/usage.md).
+
+## Project status
+
+The suite exercises process contention, session ownership, command cancellation and disconnects, generated hooks, MCP workflows, and worktree integration. Clean-package checks install the built distribution in a separate consumer project. Native-client reports include exact versions and outcomes.
+
+The CI badge links to current hosted results; local tests and recorded native runs do not establish that every platform or client release passes. Known gaps include common-repository discovery, supported glob grammar, conservative source parsing, and recovery tooling.
+
+- [Reliability contract](docs/reliability.md): behavior, boundaries, and recovery
+- [Architecture](docs/architecture.md): storage, adapters, and Git integration
+- [Roadmap](docs/roadmap.md): priorities and completion gates
+- [Changelog](CHANGELOG.md): behavior changes and migration notes
+
+## Contributing
+
+The most useful contributions reproduce a concrete failure or improve a real multi-agent workflow. Include a disposable fixture, expected behavior, and a way to verify the change. Start with [contributor setup and entry points](CONTRIBUTING.md).
+
+For bugs, use the [bug report form](https://github.com/connorhriley/kith/issues/new?template=bug_report.yml). For a proposed workflow, use the [feature request form](https://github.com/connorhriley/kith/issues/new?template=feature_request.yml). Keep tokens, source snapshots, and `.coord` state out of public diagnostics; use the [security reporting guidance](SECURITY.md) for sensitive reports.
+
+[MIT licensed](LICENSE). Participation follows the [community expectations](CODE_OF_CONDUCT.md).

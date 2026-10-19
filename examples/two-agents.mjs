@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,7 +14,7 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([key, value])
 const git = (...args) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
 async function call(client, name, args) {
   const result = await client.callTool({ name, arguments: args });
-  if (result.isError) throw new Error(JSON.stringify(result.content));
+  if (result.isError) throw new Error(`${name} failed; inspect a redacted reproduction for details`);
   return result.structuredContent ?? JSON.parse(result.content[0].text);
 }
 try {
@@ -24,7 +25,20 @@ try {
   for (const name of ['auth', 'billing']) {
     const client = new Client({ name: `example-${name}`, version: '1.0.0' }); clients.push(client);
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [cli, 'mcp', '--repo', root], env, stderr: 'ignore' }));
+    if (name === 'billing') {
+      const refused = await client.callTool({ name: 'kith_begin_work', arguments: {
+        agentId: name, title: 'Check an overlapping scope', scopeGlobs: ['src/auth.mjs'],
+      } });
+      const conflict = refused.structuredContent ?? JSON.parse(refused.content[0].text);
+      assert.equal(refused.isError, true, 'An overlapping exclusive claim must be refused');
+      assert.equal(conflict.ok, false);
+      assert(conflict.lockConflicts?.length > 0, 'The refusal must identify a scope conflict');
+      console.log('billing: overlapping claim on src/auth.mjs refused');
+    }
     const started = await call(client, 'kith_begin_work', { agentId: name, title: `Add ${name} module`, scopeGlobs: [`src/${name}.mjs`], isolateWorktree: true });
+    assert.equal(started.ok, true);
+    assert(started.worktree?.worktreePath, 'The accepted task must receive a worktree');
+    console.log(`${name}: claimed src/${name}.mjs in an isolated worktree`);
     const directory = path.join(started.worktree.worktreePath, 'src'); fs.mkdirSync(directory, { recursive: true });
     fs.writeFileSync(path.join(directory, `${name}.mjs`), `export const ${name} = true;\n`);
     await call(client, 'kith_record_file_edit', { agentId: name, filePath: `src/${name}.mjs` });

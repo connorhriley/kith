@@ -18,6 +18,18 @@ pnpm test:package
 
 Run `pnpm demo` for a disposable two-MCP-client/worktree workflow. Ownership and supervision tests use real process identities, signals, expiry and client disconnects; keep those paths covered when changing lifecycle behavior.
 
+## Where to start
+
+| Area | Start here | Useful contribution |
+| --- | --- | --- |
+| Client integration | `src/cli/init.ts`, `src/cli/hook-handler.ts`, `src/mcp/server.ts` | A minimal fixture for an actual client payload or setup failure |
+| Ownership and lifecycle | `src/core/fencing.ts`, `src/core/broker.ts` | A reproducible stale-owner, cancellation, or disconnect edge case |
+| Git isolation | `src/core/worktree-cow.ts`, `src/core/merge-train.ts` | A fixture showing preserved work after a failed operation |
+| Source analysis | `src/core/ast-analyzer.ts`, `src/core/dep-graph.ts`, `src/core/dedup.ts` | A small syntax example that produces a false positive or missed hint |
+| First-run experience | `README.md`, `docs/integrations.md`, `examples/two-agents.mjs` | Reproduce the setup from a clean checkout and clarify a concrete stumbling block |
+
+For a first contribution, prefer a small reproduction or documentation correction over changes to locking or recovery semantics. Discuss a larger change in an issue before implementation. The [roadmap](docs/roadmap.md) lists the acceptance gates for broader work.
+
 ## Proposing changes
 
 Open a focused issue or pull request describing the concrete problem, current behavior, desired behavior, and a reproducible example. For bugs, include OS, Node/Git versions, relevant commands, and redacted diagnostics. Never attach secrets or an entire `.coord` directory.
