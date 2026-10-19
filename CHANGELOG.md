@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased — native clients and hosted checks
+## Unreleased
+
+### Lean MCP onboarding and read-only observation
+
+- Recommend MCP ownership and one worktree per parallel agent in setup instructions and examples. Add `init --mcp-only` to configure clients without installing hooks or shims; preserve existing guards with a review warning.
+- Make `top` read existing state without initialization, migrations, reaping or event acknowledgement. Show retained worktree paths, FIFO tickets without a current lease, command guards and the newest events.
+- Replace the incorrect recovery claim that files were reverted with recorded copy locations. No schema changes or Git-status polling.
+### Native clients and hosted checks
 
 - Share coordination automatically across Git subdirectories, symlink aliases, linked checkouts and separate Git directories. Preserve selected-checkout Git operations, register linked session roots, inspect the invoking pre-commit index and refuse orphaned legacy checkout-local state.
 - Resolve physical paths before containment checks, reject external/dangling/looping symlinks and redirected coordination/configuration writes, skip source symlinks/nested repositories, and support literal framework route filenames.

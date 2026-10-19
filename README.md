@@ -15,7 +15,7 @@
 
 One agent changes an interface while another builds against it. Two agents edit the same file. Separate worktrees still compete for a dev-server port or a package install.
 
-Kith gives cooperating agents shared local state: who owns a task, which files are claimed, and which commands need to wait. Use it through a CLI, terminal dashboard, or MCP server. Coordination lives in SQLite on your machine; Kith itself needs no hosted service or model API key.
+Kith gives cooperating agents shared local state: who owns a task, which files are claimed, and which commands need to wait. Agents use its MCP server; CLI commands and an optional read-only terminal view support local inspection and maintenance. Coordination lives in SQLite on your machine; Kith itself needs no hosted service or model API key.
 
 ## What Kith does
 
@@ -49,13 +49,15 @@ pnpm build
 pnpm demo
 ```
 
-The demo starts **two real MCP clients**, gives each a separate Git worktree in a temporary repository, refuses an overlapping claim, records their edits, and verifies/integrates both changes. It removes the temporary repository afterward. No model calls or client credentials are needed.
+The demo starts **two real MCP clients**, gives each a separate Git worktree in a temporary repository, refuses an overlapping claim, records their edits, runs commands under a mutex, and verifies/integrates both changes. It removes the temporary repository afterward. No model calls or client credentials are needed.
 
 ```text
 auth: claimed src/auth.mjs in an isolated worktree
 billing: overlapping claim on src/auth.mjs refused
 billing: claimed src/billing.mjs in an isolated worktree
+auth: checked its worktree through the MCP command supervisor
 auth: isolated edit reported, verified, and integrated
+billing: checked its worktree through the MCP command supervisor
 billing: isolated edit reported, verified, and integrated
 Two real MCP clients completed work in separate worktrees. Disposable example passed.
 ```
@@ -72,15 +74,15 @@ pnpm link --global
 kith help
 
 # From your target repository, preview the selected integrations first
-kith init --dry-run --only claude,codex,agents
-kith init --only claude,codex,agents
+kith init --mcp-only --dry-run --only claude,codex,agents
+kith init --mcp-only --only claude,codex,agents
 ```
 
-Choose only the clients you use. Setup preserves unrelated settings and existing hooks; review the returned files and warnings, then restart your client. The `kith` executable must be on that client's `PATH`.
+Choose only the clients you use. Review and commit the generated configuration before starting work; integration requires a clean target checkout. Restart your client with `kith` on its `PATH`. `--mcp-only` installs MCP configuration and agent instructions without adding edit hooks, Git hooks or package-manager shims. Existing hooks are preserved; review warnings if they require an inherited session. See [hook setup](docs/integrations.md) if you need them.
 
 | Client | Setup and validation |
 | --- | --- |
-| Claude Code | MCP and edit hooks; recorded native CLI runs |
+| Claude Code | MCP; optional edit hooks need shared session setup; recorded native CLI runs |
 | Codex | Project MCP configuration; recorded native CLI runs with configuration overrides |
 | Cursor | Generated MCP configuration; native application behavior unvalidated |
 | Other MCP clients | stdio server via `kith mcp`; client-specific validation required |
@@ -91,14 +93,16 @@ Source installation is the current distribution path. Package-name ownership and
 
 ## How a task moves through Kith
 
-1. **Open a session.** A capability identifies the owning session; an agent name alone is insufficient.
+1. **Begin through MCP.** Call `kith_begin_work` with a unique `agentId`, explicit `scopeGlobs`, and `isolateWorktree: true`. The connection retains session ownership; no shell exports are needed for this MCP-only workflow.
 2. **Claim a scope.** Cooperating clients receive a conflict when an exclusive claim overlaps another claim.
-3. **Do the work.** Edit a shared checkout or the returned isolated worktree. Keep the session alive and report work through the client integration.
+3. **Do the work.** Edit the returned `worktree.worktreePath`, report edits with `kith_record_file_edit`, and use `kith_run_with_mutex` for serialized commands. Heartbeat before expiry and keep the owning connection open.
 4. **Verify and complete.** For a worktree, Kith checkpoints changes and integrates through a separate staging worktree. The target must be clean. Supply a verification command to check more than Git mergeability.
 
 Failed verification leaves the target unchanged and keeps the worktree for repair. Successful integration also retains the worktree until explicit cleanup. External Git writers must still coordinate.
 
-For runnable commands and library examples, see [CLI and library workflows](docs/usage.md).
+Inspect through `kith_get_status` or `kith status`. Humans can optionally use `kith top --once` (or `kith top` for refresh). It reads recorded worktrees, queues and recovery copies without reaping owners or changing leases; it does not inspect Git contents or prove processes are alive.
+
+For MCP, CLI and library examples, see [workflows](docs/usage.md).
 
 ## Project status
 

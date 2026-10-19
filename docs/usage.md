@@ -1,39 +1,49 @@
-# CLI and library workflows
+# MCP, CLI and library workflows
 
-## Coordinate two agents
+## Recommended: MCP and isolated worktrees
 
-Run commands from the repository root, or pass `--repo /absolute/path`. Create a capability-owned session and share its environment with CLI commands and hooks. An agent ID alone cannot resume another session.
+Connect through the [MCP-only client setup](integrations.md). Each parallel agent uses its own MCP connection and worktree. No shell exports are needed when using only MCP. The connection retains its granted capability; another connection needs that capability to resume the same ID.
+
+Call these tools on the same connection:
+
+```text
+kith_begin_work      {"agentId":"auth-worker","title":"Refresh authentication","scopeGlobs":["src/auth/**"],"isolateWorktree":true}
+# Edit files under the returned worktree.worktreePath.
+kith_record_file_edit {"agentId":"auth-worker","filePath":"src/auth/middleware.ts"}
+kith_run_with_mutex  {"agentId":"auth-worker","mutexName":"project-checks","command":["pnpm","typecheck"]}
+kith_heartbeat       {"agentId":"auth-worker"}
+kith_complete_work   {"agentId":"auth-worker","verificationCmd":"pnpm typecheck"}
+```
+
+Use a different ID and nonoverlapping scope for another agent. An overlapping exclusive scope returns a tool error. Commands run with the MCP server permissions and require client approval; their working directory defaults to the registered worktree. Keep the connection open and heartbeat before the default five-minute session expiry. See the runnable [two-client example](../examples/two-agents.mjs).
+
+## CLI fallback: keep the owning shell alive
+
+CLI commands and Claude edit hooks need the same capability environment. Start from one persistent shell, then launch hook clients from it. Separate stateless shell calls do not preserve these exports or the owning shell process.
+
+Run from the repository root, or pass `--repo /absolute/path`:
 
 ```sh
 eval "$(kith session start --agent auth-worker --owner-pid "$$" --shell)"
-kith begin --agent auth-worker --title "Refresh auth middleware" --scope "src/auth/**"
+kith begin --agent auth-worker --title "Refresh authentication" --scope "src/auth/**" --worktree
+# Edit in the worktreePath returned in the JSON result.
 kith status
 kith heartbeat --agent auth-worker
-kith complete --agent auth-worker
-unset KITH_AGENT_ID KITH_SESSION_TOKEN
-```
-
-A second agent requesting an overlapping exclusive scope receives a conflict and a nonzero exit status. Quote globs so the shell does not expand them. Scopes are comma-separated. Use `file:src/routes/[id]/page.tsx` for a literal filename containing glob syntax; see [scope grammar and discovery](path-and-scope-rules.md). Leases default to five minutes; heartbeat during longer sessions. Dead or expired sessions release coordination resources when another operation runs the reaper. Active supervised command guards survive expiry until the command group stops. See [sessions and mutexes](sessions-and-mutexes.md) for ownership, cancellation, and upgrade details.
-
-For stronger filesystem separation, use a worktree:
-
-```sh
-eval "$(kith session start --agent billing-worker --owner-pid "$$" --shell)"
-kith begin --agent billing-worker --title "Billing webhooks" --scope "src/billing/**" --worktree
-# Edit in the worktreePath returned in the JSON result.
-kith complete --agent billing-worker --verify "pnpm typecheck"
-# Open a new maintenance generation after the completed session.
-eval "$(kith session start --agent billing-worker --new --owner-pid "$$" --shell)"
-kith worktree remove --agent billing-worker
+kith complete --agent auth-worker --verify "pnpm typecheck"
+# Open a maintenance generation to remove the retained worktree explicitly.
+eval "$(kith session start --agent auth-worker --new --owner-pid "$$" --shell)"
+kith worktree remove --agent auth-worker
 kith session end
 unset KITH_AGENT_ID KITH_SESSION_TOKEN
 ```
+
+Quote globs so the shell does not expand them. CLI scopes are comma-separated. Use `file:src/routes/[id]/page.tsx` for a literal filename containing glob syntax; see [scope grammar and discovery](path-and-scope-rules.md). An ID alone cannot resume another session. Dead or expired sessions release coordination resources when a mutating operation reaps them; reading `kith top` never performs that cleanup. Active supervised command guards survive expiry until shutdown is confirmed.
 
 Completion checkpoints uncommitted worktree changes and integrates into the branch currently checked out in the selected repository checkout (`--repo` when supplied). The target must be clean. A verification failure leaves the target unchanged and the worktree available for repair. Successful completion also keeps the worktree for inspection; removal is explicit and refuses dirty, untracked, or ignored work. Existing branches are never reset to create a worktree. Hydration tries filesystem clones and falls back to an independent copy; cost depends on the filesystem and dependency size.
 
 A verification command is optional. Without one, integration checks Git mergeability only. Choose a command that actually checks your project.
 
-## Other workflows
+## Other CLI workflows
 
 These agent-scoped commands assume an active session. Start one before claiming work or reserving resources:
 
@@ -45,7 +55,7 @@ kith task add --id schema --title "Billing schema" --scope "src/db/**"
 kith task add --id api --title "Billing endpoints" --depends-on schema --scope "src/api/**"
 kith task claim --agent worker-1
 
-# Inspect the dashboard once, or omit --once for a live view
+# Optional human inspection: recorded state only; omit --once for refresh
 kith top --once
 
 # Allocate a cooperating client's port; start your service promptly

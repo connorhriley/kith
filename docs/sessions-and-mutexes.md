@@ -1,6 +1,10 @@
 # Sessions, ownership, and supervised commands
 
-## Start and share a session
+## Start through MCP
+
+For agents, prefer `kith_begin_work` with a unique ID, explicit scopes and `isolateWorktree: true`. One persistent MCP connection retains its capabilities internally. Edit only the returned worktree, report edits with `kith_record_file_edit`, run serialized commands with `kith_run_with_mutex`, and complete with a project verification command. No environment exports are required for MCP-only setup. Keep the connection alive and heartbeat before expiry. See [client setup](integrations.md) and [examples](usage.md).
+
+## Share a session with CLI and hooks
 
 A session has a unique agent ID, a random 256-bit capability, a generation (epoch), a kernel process identity, and an expiry. An ID alone grants no ownership. The database stores a hash of the capability; public agent records and event/status responses omit it.
 
@@ -8,7 +12,8 @@ For a terminal workflow, initialize the environment before launching an agent cl
 
 ```sh
 eval "$(kith session start --agent auth-worker --owner-pid "$$" --shell)"
-kith begin --title "Refresh authentication" --scope "src/auth/**"
+kith begin --title "Refresh authentication" --scope "src/auth/**" --worktree
+# Edit in the returned worktreePath.
 # Launch the hook-enabled client from this environment.
 kith heartbeat
 kith complete

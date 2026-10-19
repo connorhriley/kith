@@ -27,7 +27,7 @@ function parseFlags(argv: string[]): {
       } else {
         const key = arg.slice(2);
         const next = mainArgs[i + 1];
-        if (!['once', 'force', 'worktree', 'raw', 'dry-run', 'help', 'version', 'shell', 'new'].includes(key) && next && !next.startsWith('--')) {
+        if (!['once', 'force', 'worktree', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only'].includes(key) && next && !next.startsWith('--')) {
           flags[key] = next;
           i++;
         } else {
@@ -57,7 +57,7 @@ async function main(): Promise<void> {
       throw new Error(`--only accepts: ${INTEGRATIONS.join(', ')}`);
     }
     const report = initializeKithRepository(repoRoot, 'kith', {
-      dryRun: Boolean(flags['dry-run']), integrations: integrations as Integration[] | undefined,
+      dryRun: Boolean(flags['dry-run']), mcpOnly: Boolean(flags['mcp-only']), integrations: integrations as Integration[] | undefined,
     });
     console.log(JSON.stringify({ ok: true, ...report }, null, 2));
     return;
@@ -422,9 +422,9 @@ function printHelp(): void {
   console.log(`Kith (v1.0.0) — Parallel Agent Coordination (experimental)
 
 Usage:
-  kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure integrations (supports --dry-run and --only)
-  kith top [--once]                               Launch live TUI dashboard
-  kith heartbeat --agent <id>                   Refresh agent and resource leases
+  kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure integrations (--dry-run, --only, --mcp-only skips new Claude edit hooks)
+  kith top [--once]                               Observe sessions, worktrees and queues (read-only)
+  kith heartbeat --agent <id>                   Refresh the owned session lease
   kith status                                     Output JSON coordination state
   kith mcp                                        Start stdio MCP server
   kith begin --agent <id> --title <t> --scope <g> Declare intent, check overlaps, lock scope

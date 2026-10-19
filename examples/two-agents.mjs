@@ -45,6 +45,9 @@ try {
     work.push({ client, name });
   }
   for (const { client, name } of work) {
+    const check = await call(client, 'kith_run_with_mutex', { agentId: name, mutexName: 'example-check', command: [process.execPath, '--check', `src/${name}.mjs`] });
+    assert.equal(check.exitCode, 0);
+    console.log(`${name}: checked its worktree through the MCP command supervisor`);
     await call(client, 'kith_complete_work', { agentId: name, verificationCmd: `node --check src/${name}.mjs` });
     console.log(`${name}: isolated edit reported, verified, and integrated`);
   }

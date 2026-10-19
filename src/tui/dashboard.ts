@@ -1,182 +1,86 @@
-import { KithEngine } from '../core/engine.js';
+import { readDashboardSnapshot, type DashboardSnapshot } from './snapshot.js';
 
-const ANSI = {
-  reset: '\x1b[0m',
-  bold: '\x1b[1m',
-  dim: '\x1b[2m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  red: '\x1b[31m',
-  cyan: '\x1b[36m',
-  magenta: '\x1b[35m',
-  blue: '\x1b[34m',
-  gray: '\x1b[90m',
-  clearScreen: '\x1b[2J\x1b[H',
-  hideCursor: '\x1b[?25l',
-  showCursor: '\x1b[?25h',
-};
+// Names and paths recorded by clients must not become terminal control sequences.
+function text(value: unknown): string {
+  return String(value).replace(/[\x00-\x1f\x7f-\x9f]/g, c => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`).slice(0, 240);
+}
+function expiry(expiresAt: number, now: number): string {
+  return expiresAt > now ? `expires in ${Math.ceil((expiresAt - now) / 1000)}s` : 'expired';
+}
+function limited<T>(rows: T[], lines: string[], render: (row: T) => void): void {
+  rows.slice(0, 12).forEach(render);
+  if (rows.length > 12) lines.push(`  + ${rows.length - 12} more records`);
+}
 
-export function renderDashboardFrame(engine: KithEngine): string {
-  const epoch = engine.coordDb.currentFencingEpoch();
-  const agents = engine.fencing.listAgents(true);
-  const locks = engine.locks.listLocks();
-  const tasks = engine.intents.listTasks();
-  const conflicts = engine.shadowGit.listConflicts();
-  const contracts = engine.depGraph.listContracts();
-  const resources = engine.broker.listResources();
-  const quarantined = engine.bashGuard.listQuarantined();
-  const events = engine.coordDb.getEventsSince(0, 12).reverse();
-
-  const lines: string[] = [];
-
-  lines.push(
-    `${ANSI.bold}${ANSI.cyan}╔══════════════════════════════════════════════════════════════════════════════════════╗${ANSI.reset}`
-  );
-  lines.push(
-    `${ANSI.bold}${ANSI.cyan}║  KITH — PARALLEL AGENT COORDINATOR${ANSI.reset}     ${ANSI.dim}Fencing Epoch: #${epoch} | Agents: ${agents.length}${ANSI.reset}  ${ANSI.bold}${ANSI.cyan}║${ANSI.reset}`
-  );
-  lines.push(
-    `${ANSI.bold}${ANSI.cyan}╚══════════════════════════════════════════════════════════════════════════════════════╝${ANSI.reset}`
-  );
-
-  // 1. Active Agents & Intents
-  lines.push(`\n${ANSI.bold}▶ ACTIVE AGENTS (${agents.length})${ANSI.reset}`);
-  if (agents.length === 0) {
-    lines.push(`  ${ANSI.dim}No active agents currently registered.${ANSI.reset}`);
-  } else {
-    for (const a of agents) {
-      const ageSec = Math.max(0, Math.round((Date.now() - a.last_heartbeat_at) / 1000));
-      const modeBadge = a.worktree_path
-        ? `${ANSI.magenta}[WORKTREE:${a.branch ?? 'isolated'}]${ANSI.reset}`
-        : `${ANSI.blue}[SHARED-TREE]${ANSI.reset}`;
-      const activeTask = tasks.find(
-        (t) => t.owner_agent_id === a.id && t.status === 'active'
-      );
-      lines.push(
-        `  ${ANSI.green}●${ANSI.reset} ${ANSI.bold}${a.id.padEnd(16)}${ANSI.reset} ${a.client.padEnd(12)} PID:${String(a.pid).padEnd(7)} ${modeBadge} ${ANSI.dim}(hb ${ageSec}s ago)${ANSI.reset}`
-      );
-      if (activeTask) {
-        lines.push(
-          `    └─ Intent: ${ANSI.yellow}${activeTask.title}${ANSI.reset} ${ANSI.dim}[scope: ${activeTask.scope_globs.join(', ')}]${ANSI.reset}`
-        );
-      }
-    }
+export function renderDashboardFrame(snapshot: DashboardSnapshot): string {
+  const now = snapshot.observedAt;
+  const lines = ['KITH — PARALLEL AGENT COORDINATOR',
+    `Read-only · ${new Date(now).toISOString()} · epoch #${snapshot.epoch}`,
+    `Checkout: ${text(snapshot.layout.checkoutRoot)}`, `Shared state: ${text(snapshot.layout.coordDir)}`];
+  if (snapshot.state !== 'ready') {
+    lines.push(snapshot.state === 'missing' ? '\nNo coordination database. Preview setup with kith init --dry-run.' : `\nState unavailable: ${text(snapshot.error)}`);
+    return lines.join('\n');
   }
-
-  // 2. Live Dirty-Tree & Blast-Radius Conflict Radar
-  const hardConflicts = conflicts.filter((c) => c.severity !== 'auto_mergeable');
-  const autoMerges = conflicts.filter((c) => c.severity === 'auto_mergeable');
-  lines.push(
-    `\n${ANSI.bold}▶ LIVE DIRTY-TREE & BLAST-RADIUS RADAR (${
-      hardConflicts.length === 0
-        ? `${ANSI.green}CLEAN${ANSI.reset}`
-        : `${ANSI.red}${hardConflicts.length} CONFLICT(S)${ANSI.reset}`
-    })${ANSI.reset}`
-  );
-  if (hardConflicts.length === 0 && autoMerges.length === 0) {
-    lines.push(
-      `  ${ANSI.green}✓ Zero dirty-tree or transitive contract conflicts across active agents.${ANSI.reset}`
-    );
-  } else {
-    for (const c of hardConflicts) {
-      lines.push(
-        `  ${ANSI.red}✗ [${c.severity.toUpperCase()}]${ANSI.reset} ${ANSI.bold}${c.file_path}${ANSI.reset} between ${ANSI.yellow}${c.agent_a}${ANSI.reset} ↔ ${ANSI.yellow}${c.agent_b}${ANSI.reset}: ${c.details.reason}`
-      );
-    }
-    for (const c of autoMerges) {
-      lines.push(
-        `  ${ANSI.cyan}⊕ [AST AUTO-MERGEABLE]${ANSI.reset} ${c.file_path} (${c.agent_a} + ${c.agent_b}): ${c.details.reason}`
-      );
-    }
+  const active = snapshot.agents.filter(a => a.status === 'active');
+  lines.push(`\nSESSIONS (${active.length} recorded active; process liveness not checked)`);
+  limited(active, lines, agent => {
+    const task = snapshot.tasks.find(t => t.owner_agent_id === agent.id && t.status === 'active');
+    lines.push(`  ${text(agent.id)} · ${text(agent.client)} · ${expiry(agent.lease_expires_at, now)}`);
+    if (task) lines.push(`    ${text(task.title)} [${text(task.scope.join(', '))}]`);
+  });
+  const worktrees = snapshot.agents.filter(a => a.worktree_path);
+  lines.push(`\nREGISTERED WORKTREES (${worktrees.length}; Git contents not inspected)`);
+  limited(worktrees, lines, agent => {
+    const integration = snapshot.integrations.find(m => m.agent_id === agent.id);
+    lines.push(`  ${text(agent.id)} · ${text(agent.status)} · ${text(agent.branch ?? '(branch unrecorded)')}${integration ? ` · integration ${text(integration.status)}` : ''}`);
+    lines.push(`    ${text(agent.worktree_path)}`);
+  });
+  const names = [...new Set([...snapshot.resources.filter(r => r.type === 'mutex').map(r => r.name), ...snapshot.waiters.map(w => w.mutex_name), ...snapshot.guards.map(g => g.mutex_name)])].sort();
+  lines.push(`\nMUTEXES & FIFO TICKETS (${names.length}; recorded order, stale records retained)`);
+  limited(names, lines, name => {
+    const lease = snapshot.resources.find(r => r.type === 'mutex' && r.name === name);
+    const guard = snapshot.guards.find(g => g.mutex_name === name);
+    lines.push(`  ${text(name)} · ${lease ? `${text(lease.owner_agent_id)} (${expiry(lease.expires_at, now)})` : 'no lease recorded'}`);
+    if (guard) lines.push(`    Command guard: ${text(guard.owner_agent_id)} · supervisor ${guard.supervisor_pid} · worker ${guard.worker_pid ?? 'unrecorded'} (shutdown not confirmed)`);
+    limited(snapshot.waiters.filter(w => w.mutex_name === name), lines, waiter => {
+      lines.push(`    ticket #${waiter.ticket} · ${text(waiter.owner_agent_id)} · ${expiry(waiter.expires_at, now)}`);
+    });
+  });
+  lines.push(`\nSCOPES (${snapshot.locks.length} records) & PORTS`);
+  limited(snapshot.locks, lines, lock => lines.push(`  ${text(lock.pattern)} · ${text(lock.owner_agent_id)} · ${text(lock.mode)} · ${expiry(lock.expires_at, now)}`));
+  limited(snapshot.resources.filter(r => r.type === 'port'), lines, port => lines.push(`  ${text(port.name)} · port ${text(port.value)} · ${text(port.owner_agent_id)} · ${expiry(port.expires_at, now)}`));
+  lines.push(`\nRECORDED CONFLICTS (${snapshot.conflicts.length})`);
+  if (!snapshot.conflicts.length) lines.push('  None recorded.');
+  limited(snapshot.conflicts, lines, conflict => lines.push(`  ${text(conflict.severity)} · ${text(conflict.file_path)} · ${text(conflict.agent_a)} / ${text(conflict.agent_b)}`));
+  lines.push('\nRECOVERY COPIES (latest; workspace restoration is not recorded)');
+  for (const entry of snapshot.recovery) {
+    lines.push(`  ${text(entry.agent_id)} · ${text(entry.file_path)} · copy: ${text(entry.patch_path)}`);
   }
-
-  // 3. Active File/Glob Locks & Port/Mutex Leases
-  lines.push(
-    `\n${ANSI.bold}▶ FENCING LOCKS (${locks.length}) & BROKER LEASES (${resources.length})${ANSI.reset}`
-  );
-  if (locks.length === 0 && resources.length === 0) {
-    lines.push(`  ${ANSI.dim}No active locks or port/mutex leases.${ANSI.reset}`);
-  } else {
-    for (const l of locks.slice(0, 8)) {
-      lines.push(
-        `  🔒 ${ANSI.bold}${l.pattern.padEnd(28)}${ANSI.reset} owner=${ANSI.cyan}${l.owner_agent_id.padEnd(14)}${ANSI.reset} token=#${l.fencing_token} (${l.mode})`
-      );
-    }
-    for (const r of resources) {
-      const icon = r.type === 'port' ? '🔌' : '⚙️';
-      const qInfo = r.queue.length > 0 ? ` [FIFO queue: ${r.queue.join(', ')}]` : '';
-      lines.push(
-        `  ${icon} ${r.type.toUpperCase().padEnd(6)} ${ANSI.bold}${r.name.padEnd(21)}${ANSI.reset} value=${ANSI.green}${r.value}${ANSI.reset} owner=${ANSI.cyan}${r.owner_agent_id}${ANSI.reset}${qInfo}`
-      );
-    }
-  }
-
-  // 4. Contract Blackboard & Quarantined Bash Mutations
-  lines.push(
-    `\n${ANSI.bold}▶ CONTRACT BLACKBOARD (${contracts.length}) & BASH QUARANTINE (${quarantined.length})${ANSI.reset}`
-  );
-  for (const ctr of contracts.slice(0, 6)) {
-    const brk = ctr.is_breaking ? ` ${ANSI.red}[BREAKING v${ctr.version}]${ANSI.reset}` : ` ${ANSI.dim}v${ctr.version}${ANSI.reset}`;
-    lines.push(
-      `  📜 ${ANSI.bold}${ctr.symbol_name}${ANSI.reset} (${ctr.file_path}): ${ANSI.cyan}${ctr.signature}${ANSI.reset}${brk}`
-    );
-  }
-  for (const q of quarantined.slice(0, 3)) {
-    lines.push(
-      `  🛡️ ${ANSI.red}[QUARANTINED]${ANSI.reset} Agent '${q.agent_id}' unauthorized bash edit to '${q.file_path}' reverted & saved.`
-    );
-  }
-
-  // 5. Recent Event Stream
-  lines.push(`\n${ANSI.bold}▶ RECENT COORDINATION EVENTS${ANSI.reset}`);
-  for (const ev of events.slice(0, 6)) {
-    const timeStr = new Date(ev.timestamp).toISOString().slice(11, 19);
-    lines.push(
-      `  ${ANSI.gray}${timeStr}${ANSI.reset} [${ANSI.cyan}${(ev.agent_id ?? 'sys').padEnd(10)}${ANSI.reset}] ${ev.event_type}`
-    );
-  }
-
+  lines.push('\nRECENT COORDINATION EVENTS (newest first, UTC)');
+  for (const event of snapshot.events) lines.push(`  #${event.id} ${new Date(event.timestamp).toISOString().slice(11, 19)} · ${text(event.agent_id ?? 'system')} · ${text(event.event_type)}`);
   return lines.join('\n');
 }
 
-export async function runLiveDashboard(
-  repoRoot = process.cwd(),
-  options?: { once?: boolean; intervalMs?: number }
-): Promise<void> {
-  const engine = new KithEngine(repoRoot);
-  if (options?.once || !process.stdout.isTTY) {
-    console.log(renderDashboardFrame(engine));
-    engine.close();
-    return;
-  }
-
-  const intervalMs = options?.intervalMs ?? 600;
-  process.stdout.write(ANSI.hideCursor);
-
+export async function runLiveDashboard(repoRoot = process.cwd(), options?: { once?: boolean; intervalMs?: number }): Promise<void> {
+  const frame = () => renderDashboardFrame(readDashboardSnapshot(repoRoot));
+  if (options?.once || !process.stdout.isTTY || !process.stdin.isTTY) { console.log(frame()); return; }
+  const wasRaw = process.stdin.isRaw, wasPaused = process.stdin.isPaused();
+  let finish!: () => void;
+  const finished = new Promise<void>(resolve => { finish = resolve; });
   const render = () => {
-    const frame = renderDashboardFrame(engine);
-    process.stdout.write(
-      `${ANSI.clearScreen}${frame}\n\n${ANSI.dim}Controls: [r] Reap dead agents  [q] Quit${ANSI.reset}\n`
-    );
+    try { process.stdout.write(`\x1b[2J\x1b[H${frame()}\n\nRead-only controls: [r] Refresh  [q] Quit\n`); }
+    catch (error) { process.stdout.write(`\nObservation unavailable: ${text(error instanceof Error ? error.message : error)}\n`); }
   };
-
-  render();
-  const timer = setInterval(render, intervalMs);
-
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (key: string) => {
-      if (key === 'q' || key === '\u0003') {
-        clearInterval(timer);
-        process.stdout.write(ANSI.showCursor + '\n');
-        engine.close();
-        process.exit(0);
-      } else if (key === 'r') {
-        engine.fencing.reapDeadAgents();
-        render();
-      }
-    });
+  const interrupt = () => { process.exitCode = 130; finish(); };
+  const terminate = () => { process.exitCode = 143; finish(); };
+  const key = (value: string) => { if (value === 'q') finish(); else if (value === '\u0003') interrupt(); else if (value === 'r') render(); };
+  process.stdin.setRawMode(true); process.stdin.setEncoding('utf8'); process.stdin.resume();
+  process.stdin.on('data', key); process.once('SIGINT', interrupt); process.once('SIGTERM', terminate);
+  process.stdout.write('\x1b[?25l');
+  const timer = setInterval(render, options?.intervalMs ?? 1000);
+  try { render(); await finished; }
+  finally {
+    clearInterval(timer); process.stdin.off('data', key); process.off('SIGINT', interrupt); process.off('SIGTERM', terminate);
+    process.stdin.setRawMode(wasRaw); if (wasPaused) process.stdin.pause(); process.stdout.write('\x1b[?25h\n');
   }
 }

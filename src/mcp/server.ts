@@ -13,10 +13,10 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
   const server = new McpServer({
     name: 'kith-coordinator',
     version: '1.0.0',
-  }, { instructions: process.env.KITH_AGENT_ID
+  }, { instructions: 'Recommended workflow: one isolated worktree per parallel agent. Call kith_begin_work with isolateWorktree:true and explicit scopeGlobs; edit only the returned worktreePath, call kith_record_file_edit, run literal argv with kith_run_with_mutex, and finish with kith_complete_work plus a project verificationCmd. Heartbeat before the session expires. ' + (process.env.KITH_AGENT_ID
     ? `This server shares a session with CLI/hooks. Use agentId '${process.env.KITH_AGENT_ID}'. Its inherited capability is handled internally; do not request or log it.`
     : 'Start with kith_begin_work or kith_start_session and a unique agentId. This connection retains its granted capability. Another connection needs the session token to resume that ID. Keep tokens private.'
-  });
+  ) });
 
   const tokenFor = (args: { agentId: string; sessionToken?: string }) => args.sessionToken ??
     (process.env.KITH_AGENT_ID === args.agentId ? process.env.KITH_SESSION_TOKEN : undefined);
@@ -80,7 +80,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       title: z.string().describe('Short title of the task or intent'),
       intentSummary: z.string().optional().describe('Detailed description of what will be built or modified'),
       scopeGlobs: z.array(z.string()).describe('File paths or glob patterns this agent will edit (e.g. ["src/auth/**"])'),
-      isolateWorktree: z.boolean().optional().describe('Set true to spawn an isolated Copy-on-Write git worktree'),
+      isolateWorktree: z.boolean().optional().describe('Recommended: true, giving each parallel agent a separate Git worktree'),
       force: z.boolean().optional().describe('Bypass semantic overlap warning if intentional'),
     },
     async (args) => {

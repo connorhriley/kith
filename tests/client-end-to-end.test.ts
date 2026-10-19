@@ -297,3 +297,26 @@ it('shares real MCP clients across linked checkout/subdirectory discovery and gu
   expect(mainStatus.status).toBe(0);
   expect(JSON.parse(mainStatus.stdout).agents.some((a: any) => a.id === 'owner')).toBe(true);
 });
+
+
+it('uses generated MCP-only onboarding with no exported capability or installed edit hooks', async () => {
+  seed();
+  initializeKithRepository(root, 'kith', { integrations: ['claude', 'agents'], mcpOnly: true });
+  expect(fs.existsSync(path.join(root, '.claude/settings.json'))).toBe(false);
+  const config = JSON.parse(fs.readFileSync(path.join(root, '.mcp.json'), 'utf8')).mcpServers.kith;
+  const transport = new StdioClientTransport({ ...config, cwd: root, env, stderr: 'pipe' });
+  transport.stderr?.on('data', () => {});
+  const client = new Client({ name: 'mcp-only-onboarding', version: '1.0.0' }); clients.push(client);
+  await client.connect(transport);
+  const work = data(await tool(client, 'kith_begin_work', { agentId: 'worker', title: 'Add module', scopeGlobs: ['src/feature.mjs'], isolateWorktree: true }));
+  expect(work.worktree.worktreePath).not.toBe(root);
+  fs.writeFileSync(path.join(work.worktree.worktreePath, 'src/feature.mjs'), 'export const feature = 42;\n');
+  data(await tool(client, 'kith_record_file_edit', { agentId: 'worker', filePath: 'src/feature.mjs' }));
+  const command = data(await tool(client, 'kith_run_with_mutex', { agentId: 'worker', mutexName: 'checks', command: [process.execPath, '-p', 'process.cwd()'] }));
+  expect(command.exitCode).toBe(0);
+  expect(command.stdout.trim()).toBe(work.worktree.worktreePath);
+  data(await tool(client, 'kith_heartbeat', { agentId: 'worker' }));
+  const completed = data(await tool(client, 'kith_complete_work', { agentId: 'worker', verificationCmd: 'node --check src/feature.mjs' }));
+  expect(completed.ok).toBe(true);
+  expect(fs.readFileSync(path.join(root, 'src/feature.mjs'), 'utf8')).toContain('feature = 42');
+});

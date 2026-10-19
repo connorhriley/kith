@@ -58,3 +58,28 @@ it('blocks malformed hook input and edit payloads missing a file path', () => {
   expect(bad.stderr).toContain('hook input');
   expect(run('hook', 'pre', '--tool', 'Edit').status).toBe(2);
 });
+
+it('configures MCP without adding credential-dependent hooks or shims', () => {
+  const preview = run('init', '--mcp-only', '--dry-run');
+  expect(preview.status, preview.stderr).toBe(0);
+  expect(fs.readdirSync(root)).toEqual([]);
+  const result = run('init', '--mcp-only');
+  expect(result.status, result.stderr).toBe(0);
+  const report = JSON.parse(result.stdout);
+  expect(report.configuredFiles).toContain('.mcp.json');
+  expect(report.configuredFiles).toContain('.codex/config.toml');
+  expect(fs.existsSync(path.join(root, '.claude/settings.json'))).toBe(false);
+  expect(fs.existsSync(path.join(root, '.coord/bin'))).toBe(false);
+  expect(run('init', '--mcp-only', '--only', 'git').status).toBe(1);
+  expect(run('init', '--mcp-only', '--only', 'shims').status).toBe(1);
+});
+
+it('preserves existing edit guards byte for byte and flags their session requirements', () => {
+  initializeKithRepository(root, 'kith', { integrations: ['claude'] });
+  const file = path.join(root, '.claude/settings.json');
+  const before = fs.readFileSync(file, 'utf8');
+  const result = run('init', '--mcp-only', '--only', 'claude,agents');
+  expect(result.status, result.stderr).toBe(0);
+  expect(fs.readFileSync(file, 'utf8')).toBe(before);
+  expect(JSON.parse(result.stdout).warnings.join(' ')).toContain('does not disable guards');
+});
