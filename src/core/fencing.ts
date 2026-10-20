@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import { CoordDatabase } from './db.js';
 
 export interface AgentRecord {
@@ -40,6 +41,7 @@ export interface SessionRegistration { agent: AgentRecord; fencingToken: number;
 export class FencingAndAgentManager {
   public static readonly DEFAULT_LEASE_MS = 5 * 60 * 1000;
   private readonly capabilities = new Map<string, string>();
+  private static ownWindowsStart: string | null = null;
 
   constructor(private readonly coordDb: CoordDatabase) {}
 
@@ -57,6 +59,18 @@ export class FencingAndAgentManager {
       if (process.platform === 'linux') {
         const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
         return `linux:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+      }
+      if (process.platform === 'win32') {
+        // Only our own identity is immutable for this process lifetime. Never cache other PIDs.
+        if (pid === process.pid && this.ownWindowsStart) return this.ownWindowsStart;
+        const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+        const ticks = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command',
+          `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString([System.Globalization.CultureInfo]::InvariantCulture)`],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, windowsHide: true }).trim();
+        if (!/^\d+$/.test(ticks)) return null;
+        const identity = `windows:${ticks}`;
+        if (pid === process.pid) this.ownWindowsStart = identity;
+        return identity;
       }
       const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
         encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500,
