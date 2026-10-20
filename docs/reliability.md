@@ -1,6 +1,8 @@
 # Reliability contract and recovery
 
-Kith is a cooperative local coordinator. It does not provide an OS sandbox, distributed consensus, or proof that two changes are semantically compatible. Contract analysis is advisory. Scope intersection is exact within the documented grammar; unsupported scopes are rejected. Earlier prototype claims about deterministic prevention, zero disk cost, and fixed millisecond bounds were not supported by benchmarks.
+Kith coordinates cooperating coding agents through work claims, isolated worktrees, shared local resources and verification before integration. This contract describes tested behavior and recovery boundaries.
+
+Scope intersection is exact within the documented grammar; unsupported scopes are rejected. Contract analysis is advisory. Kith does not provide an OS sandbox, distributed consensus, or proof that two changes are semantically compatible.
 
 ## Behavior covered by regression tests
 

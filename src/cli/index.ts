@@ -385,7 +385,10 @@ async function main(): Promise<void> {
 }
 
 function printHelp(): void {
-  console.log(`Kith (v1.0.0) — Parallel Agent Coordination (experimental)
+  console.log(`Kith (v1.0.0) — Local coordination for coding agents
+
+Claim work, isolate changes with worktrees, share local resources, and verify integration.
+No hosted service required.
 
 Usage:
   kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure MCP clients (--dry-run, --only, --mcp-only)

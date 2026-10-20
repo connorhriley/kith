@@ -1,6 +1,6 @@
 # Security and reliability reports
 
-Kith is experimental and has no maintained stable release line yet. Work from the latest reviewed source. It runs with the invoking user's privileges and cannot contain a malicious agent that can bypass hooks, write the coordination database, or invoke Git directly.
+Use the latest reviewed source on `main` and include your commit or version when reporting an issue. Kith runs with the invoking user's privileges and cannot contain a malicious agent that can bypass hooks, write the coordination database, or invoke Git directly.
 
 Do not post exploit details, source snapshots, credentials, or quarantine contents in public issues. No private reporting channel is configured in this checkout. Before public launch, maintainers must enable private vulnerability reporting on the upstream repository or publish a monitored security contact. Until then, request a private channel without disclosing the vulnerability.
 

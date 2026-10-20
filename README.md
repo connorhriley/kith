@@ -11,7 +11,9 @@
   <a href="#quick-start">Quick start</a> · <a href="#see-it-work">Demo</a> · <a href="docs/integrations.md">Integrations</a> · <a href="docs/usage.md">CLI &amp; API</a> · <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
-**Run coding agents in parallel, with explicit ownership of the work.**
+**Local coordination for cooperating coding agents.**
+
+Claim work, isolate changes with Git worktrees, share local resources, and verify integration—without a hosted service.
 
 One agent changes an interface while another builds against it. Two agents edit the same file. Separate worktrees still compete for a dev-server port or a package install.
 
@@ -29,11 +31,11 @@ Kith gives cooperating agents shared local state: who owns a task, which files a
 
 Kith fits workflows where you already launch multiple coding agents and want them to coordinate. It does not choose models, write prompts, or launch a fleet for you. Worktrees separate files; Kith adds shared ownership and resource coordination.
 
-**Experimental.** Kith relies on cooperating clients. Hooks are not an OS security boundary, and contract analysis is advisory. Edit reports flag exact, case-sensitive symbol names of the same kind recorded in other files as possible reuse candidates; a matching name does not establish equivalent behavior or block work. Scope matching follows a [documented grammar](docs/path-and-scope-rules.md). Start in a disposable repository. Read the [reliability contract](docs/reliability.md) before using it on important work.
+The [reliability contract](docs/reliability.md) defines ownership, verification, recovery and enforcement boundaries. Claims coordinate cooperating clients; hooks do not sandbox filesystem access. Scope matching follows a [documented grammar](docs/path-and-scope-rules.md). Contract-change reports and exact-name reuse hints are advisory.
 
 ## Quick start
 
-Requires **Git 2.38+**, **Node.js 22.13+ on 22.x or Node.js 24+**, and the pinned **pnpm 10.20.0**. Development targets macOS and Linux. Windows is unvalidated. Node may print an experimental SQLite warning.
+Requires **Git 2.38+**, **Node.js 22.13+ on 22.x or Node.js 24+**, and the pinned **pnpm 10.20.0**. Development targets macOS and Linux. Windows is unvalidated.
 
 ```sh
 git clone https://github.com/connorhriley/kith.git
@@ -108,7 +110,7 @@ For MCP, CLI and library examples, see [workflows](docs/usage.md).
 
 The suite exercises process contention, session ownership, command cancellation and disconnects, generated hooks, MCP workflows, and worktree integration. Clean-package checks install the built distribution in a separate consumer project. Native-client reports include exact versions and outcomes.
 
-The CI badge links to current hosted results; local tests and recorded native runs do not establish that every platform or client release passes. Repository discovery, physical path checks, exact supported glob matching and conservative conflict resolution have dedicated regressions. Backup/recovery, broader client coverage and advisory source analysis still need work.
+The CI badge links to current hosted results; local tests and recorded native runs do not establish that every platform or client release passes. Repository discovery, physical path checks, exact supported glob matching and Git conflict refusal have dedicated regressions. Recovery checks cover interrupted upgrades, stopped database/WAL backups and retained worktree continuation. The [reliability contract](docs/reliability.md) records the boundaries of those scenarios; native-client coverage is listed above.
 
 - [Reliability contract](docs/reliability.md): behavior, boundaries, and recovery
 - [Architecture](docs/architecture.md): storage, adapters, and Git integration

@@ -1,7 +1,7 @@
 {
   "name": "kith",
   "version": "1.0.0",
-  "description": "Local coordination for parallel coding agents: scoped locks, task queues, contract-change hints, isolated worktrees, and verification before integration.",
+  "description": "Local coordination for cooperating coding agents: work claims, isolated worktrees, shared resources, and verified integration without a hosted service.",
   "type": "module",
   "bin": {
     "kith": "./dist/cli/index.js",

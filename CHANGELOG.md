@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Coordination positioning
+
+- Describe Kith consistently as local coordination for work claims, isolated worktrees, shared resources and verified integration across README, CLI, MCP instructions and package metadata.
+- Remove maturity labels from the current product description while retaining the documented support matrix, enforcement boundaries and recovery contract.
+
 ### Subtraction pass (supersedes earlier unreleased advisory/UI behavior)
 
 - Remove `top`/`ui` and their dashboard modules. Use existing CLI/MCP status; normal engine startup may migrate or reap state, so preserve stopped recovery data first.

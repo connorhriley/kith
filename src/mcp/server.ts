@@ -13,7 +13,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
   const server = new McpServer({
     name: 'kith-coordinator',
     version: '1.0.0',
-  }, { instructions: 'Recommended workflow: one isolated worktree per parallel agent. Call kith_begin_work with isolateWorktree:true and explicit scopeGlobs; edit only the returned worktreePath, call kith_record_file_edit, run literal argv with kith_run_with_mutex, and finish with kith_complete_work plus a project verificationCmd. Heartbeat before the session expires. ' + (process.env.KITH_AGENT_ID
+  }, { instructions: 'Kith coordinates work claims, isolated worktrees, local resources and verified integration for cooperating coding agents. State stays local; no hosted service or model API key is required. Recommended workflow: one isolated worktree per parallel agent. Call kith_begin_work with isolateWorktree:true and explicit scopeGlobs; edit only the returned worktreePath, call kith_record_file_edit, run literal argv with kith_run_with_mutex, and finish with kith_complete_work plus a project verificationCmd. Heartbeat before the session expires. ' + (process.env.KITH_AGENT_ID
     ? `This server shares a session with CLI/hooks. Use agentId '${process.env.KITH_AGENT_ID}'. Its inherited capability is handled internally; do not request or log it.`
     : 'Start with kith_begin_work or kith_start_session and a unique agentId. This connection retains its granted capability. Another connection needs the session token to resume that ID. Keep tokens private.'
   ) });

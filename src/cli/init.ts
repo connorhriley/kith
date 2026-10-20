@@ -132,7 +132,7 @@ export function initializeKithRepository(
     const block = `<!-- KITH:START -->
 ## Parallel Agent Coordination (kith)
 
-Use MCP for agent coordination. Keep one isolated worktree per parallel agent and keep the owning MCP connection open.
+Use Kith MCP to claim work, isolate changes in worktrees, share local resources and verify integration. Keep one isolated worktree per parallel agent and keep the owning MCP connection open.
 
 1. Call \`kith_begin_work\` with a unique \`agentId\`, an explicit \`scopeGlobs\` array and \`isolateWorktree: true\`.
 2. Edit only the returned \`worktree.worktreePath\`. Report changed files through \`kith_record_file_edit\` on that connection.
