@@ -79,11 +79,11 @@ try {
  assert.equal((await call(one,'kith_preview_integrate',{agentId:'alpha'})).clean,true);
  const head=git(root,'rev-parse','HEAD');
  assert.equal((await one.callTool({name:'kith_complete_work',arguments:{agentId:'alpha',verificationCmd:'node -e "process.exit(17)"'}})).isError,true);
- assert.equal(git(root,'rev-parse','HEAD'),head);assert.equal(fs.readFileSync(fileA,'utf8'),'export const alpha = true;\n');
+ assert.equal(git(root,'rev-parse','HEAD'),head,'Failed verification changed target HEAD');assert.equal(fs.readFileSync(fileA,'utf8'),'export const alpha = true;\n','Failed verification changed source bytes');
  await call(one,'kith_complete_work',{agentId:'alpha',verificationCmd:'node --check "src/routes/[id]/page.mjs"'});
  await call(two,'kith_complete_work',{agentId:'beta',verificationCmd:'node --check src/beta.mjs'});
- assert.equal(fs.readFileSync(path.join(root,'src/routes/[id]/page.mjs'),'utf8'),'export const alpha = true;\n');
- assert.equal(fs.readFileSync(path.join(root,'src/beta.mjs'),'utf8'),'export const beta = true;\n');
+ assert.equal(fs.readFileSync(path.join(root,'src/routes/[id]/page.mjs'),'utf8').replaceAll('\r\n','\n'),'export const alpha = true;\n','Integrated alpha content differs');
+ assert.equal(fs.readFileSync(path.join(root,'src/beta.mjs'),'utf8').replaceAll('\r\n','\n'),'export const beta = true;\n','Integrated beta content differs');
  report.checks.push('dirty preview refusal, committed preview, failed verification and successful retry/integration');
  const crash=await call(one,'kith_begin_work',{agentId:'crash',title:'Recover interrupted work',scopeGlobs:['src/recovered.mjs'],isolateWorktree:true});
  const saved=path.join(crash.worktree.worktreePath,'src/recovered.mjs');fs.writeFileSync(saved,'export const recovered = true;\n');
@@ -94,7 +94,7 @@ try {
  assert.equal(fs.readFileSync(saved,'utf8'),'export const recovered = true;\n');
  await call(replacement,'kith_record_file_edit',{agentId:'crash',filePath:saved});
  await call(replacement,'kith_complete_work',{agentId:'crash',verificationCmd:'node --check src/recovered.mjs'});
- assert.equal(fs.readFileSync(path.join(root,'src/recovered.mjs'),'utf8'),'export const recovered = true;\n');
+ assert.equal(fs.readFileSync(path.join(root,'src/recovered.mjs'),'utf8').replaceAll('\r\n','\n'),'export const recovered = true;\n');
  report.checks.push('killed MCP owner recovered with new capability and preserved worktree, then integrated');
  await Promise.all(clients.map(client=>client.close()));clients.length=0;
  report.phase='offline recovery and setup';
@@ -103,12 +103,20 @@ try {
  assert.deepEqual(fingerprints(state),before);
  command('init','--mcp-only','--only','cursor');
  const config=JSON.parse(fs.readFileSync(path.join(root,'.cursor/mcp.json'),'utf8')).mcpServers.kith;
- if(process.platform==='win32')assert.equal(config.command,process.execPath,'Native Windows config must not rely on spawning kith.cmd directly');
+ if(process.platform==='win32') {
+  assert.equal(config.command,process.execPath,'Native Windows config must not rely on spawning kith.cmd directly');
+  const configured=new Client({name:'generated-Windows-launcher',version:'1.0.0'});clients.push(configured);
+  await configured.connect(new StdioClientTransport({...config,cwd:root,env,stderr:'ignore'}));
+  assert.equal((await configured.listTools()).tools.length,13);await configured.close();
+  const unchanged=fingerprints(state);assert.throws(()=>command('init','--only','cursor'));
+  assert.deepEqual(fingerprints(state),unchanged);assert.equal(fs.existsSync(path.join(root,'.cursor/hooks.json')),false);
+ }
  assert.equal(JSON.parse(command('uninstall')).ok,true);assert.equal(fs.existsSync(path.join(root,'.cursor/mcp.json')),false);
- assert.equal(fs.readFileSync(path.join(root,'src/recovered.mjs'),'utf8'),'export const recovered = true;\n');
+ assert.equal(fs.readFileSync(path.join(root,'src/recovered.mjs'),'utf8').replaceAll('\r\n','\n'),'export const recovered = true;\n');
  report.checks.push('offline inspection preserves original state; tracked MCP setup/uninstall preserves integrated work');
  report.phase='complete';report.passed=true;
 } catch(error) {
+ report.location=error.stack?.split('\n').find(line=>line.includes('validate-windows.mjs:'))?.trim();
  report.error=String(error.message).split('\n')[0].replace(/[A-Za-z0-9_-]{43}/g,'[redacted]');process.exitCode=1;
 } finally {
  await Promise.allSettled(clients.map(client=>client.close()));

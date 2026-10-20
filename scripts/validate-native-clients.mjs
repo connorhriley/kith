@@ -11,7 +11,16 @@ const cli = fileURLToPath(new URL('../dist/cli/index.js', import.meta.url));
 const flags = process.argv.slice(2);
 const option = (name, fallback) => { const i = flags.indexOf(name); return i < 0 ? fallback : flags[i + 1]; };
 const client = option('--client', 'codex'), scenario = option('--scenario', 'all');
-assert.ok(['codex', 'claude'].includes(client) && ['all', 'isolated', 'shared', ...(client === 'claude' ? ['hook-failure'] : [])].includes(scenario), 'Use --client codex|claude [--scenario all|isolated|shared|hook-failure] [--output report.json]');
+const hasHooks = client === 'claude' || client === 'cursor';
+assert.ok(['codex', 'claude', 'cursor'].includes(client) && ['all', 'isolated', 'shared', ...(hasHooks ? ['hook-failure'] : [])].includes(scenario), 'Use --client codex|claude|cursor [--binary path] [--scenario all|isolated|shared|hook-failure] [--output report.json]');
+assert.notEqual(process.platform, 'win32', 'Model-driven native validation requires POSIX process groups; use validate-windows.mjs for native Windows platform checks.');
+const clientBinary = option('--binary', client === 'cursor' ? 'agent' : client);
+const cursorArgs = (root, prompt) => ['-p', '--output-format', 'stream-json', '--workspace', root, '--trust', '--approve-mcps', '--force', '--sandbox', 'enabled', prompt];
+const toolNames = JSON.parse(fs.readFileSync(new URL('../docs/protocol/tools.v1.json', import.meta.url), 'utf8')).tools.map(t => t.name);
+const cursorName = e => {
+  const name = e.tool_call?.mcpToolCall?.args?.toolName ?? e.tool_call?.mcpToolCall?.args?.name;
+  return toolNames.find(tool => typeof name === 'string' && (name === tool || name.endsWith('__' + tool) || name.endsWith('_' + tool)));
+};
 const report = { client, version: '', platform: process.platform, node: process.version, scenarios: [], passed: false };
 const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kith-native-'))), bin = path.join(base, 'bin'); fs.mkdirSync(bin);
 const quote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
@@ -19,7 +28,7 @@ fs.writeFileSync(path.join(bin, 'kith'), `#!/bin/sh\nexec ${quote(process.execPa
 const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
 for (const name of Object.keys(env)) if (name.startsWith('KITH_')) delete env[name];
 async function run(args, cwd, childEnv) {
-  const child = spawn(client, args, { cwd, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  const child = spawn(clientBinary, args, { cwd, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let stdout = '', bytes = 0, timedOut = false, overflow = false;
   const signal = (s) => { try { process.kill(-child.pid, s); } catch {} };
   const timer = setTimeout(() => { timedOut = true; signal('SIGTERM'); }, 180000);
@@ -34,14 +43,14 @@ async function run(args, cwd, childEnv) {
   } finally { clearTimeout(timer); clearTimeout(force); signal('SIGTERM'); }
 }
 try {
-  report.version = execFileSync(client, ['--version'], { env, encoding: 'utf8', timeout: 10000 }).trim();
-  for (const mode of scenario === 'all' ? ['isolated', 'shared', ...(client === 'claude' ? ['hook-failure'] : [])] : [scenario]) {
+  report.version = execFileSync(clientBinary, ['--version'], { env, encoding: 'utf8', timeout: 10000 }).trim();
+  for (const mode of scenario === 'all' ? ['isolated', 'shared', ...(hasHooks ? ['hook-failure'] : [])] : [scenario]) {
     const root = path.join(base, `${mode} repository ' spaces`); fs.mkdirSync(root);
     const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
     git('init', '-q'); git('config', 'user.name', 'Kith Compatibility'); git('config', 'user.email', 'test@example.test');
     fs.mkdirSync(path.join(root, 'src')); const protectedBytes = 'export const unchanged = true;\n';
     fs.writeFileSync(path.join(root, 'src/blocked.mjs'), protectedBytes);
-    fs.writeFileSync(path.join(root, '.gitignore'), '.coord/\n.codex/\n.claude/\n.mcp.json\n');
+    fs.writeFileSync(path.join(root, '.gitignore'), '.coord/\n.codex/\n.claude/\n.cursor/\n.mcp.json\n');
     git('add', '.'); git('commit', '-qm', 'Native fixture');
     execFileSync(process.execPath, [cli, '--repo', root, 'init', '--only', client], { env, stdio: 'pipe' });
     const initialHead = git('rev-parse', 'HEAD'), engine = new KithEngine(root);
@@ -49,42 +58,68 @@ try {
     try {
       engine.fencing.registerAgent({ id: 'peer' });
       assert.equal(engine.intents.declareIntent({ agentId: 'peer', title: 'Preserve shared API', scopeGlobs: ['src/blocked.mjs'] }).ok, true);
-      const agentId = `native-${client}`, childEnv = { ...env }, borrowed = mode === 'shared' || client === 'claude';
+      const agentId = `native-${client}`, childEnv = { ...env }, borrowed = mode === 'shared' || hasHooks;
       if (borrowed) { const session = engine.fencing.registerAgent({ id: agentId }); childEnv.KITH_AGENT_ID = agentId; childEnv.KITH_SESSION_TOKEN = session.sessionToken; }
       if (mode === 'hook-failure') {
-        const settingsFile = path.join(root, '.claude/settings.json');
+        const settingsFile = path.join(root, client === 'cursor' ? '.cursor/hooks.json' : '.claude/settings.json');
         const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-        settings.hooks.PreToolUse[0].hooks[0].command = quote(path.join(base, 'intentionally-missing-guard'));
+        const preHook = client === 'cursor' ? settings.hooks.preToolUse[0] : settings.hooks.PreToolUse[0].hooks[0];
+        preHook.command = quote(path.join(base, 'intentionally-missing-guard'));
         fs.writeFileSync(settingsFile, JSON.stringify(settings));
         const marker = path.join(root, 'marker.txt');
-        const prompt = `Bounded hook failure test. Use native Write exactly once to create ${marker} containing test. A deliberately unavailable Kith guard must block it. Do not retry, repair hooks, use shell, MCP or subagents. Report the denial and stop.`;
-        const events = await run(['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--setting-sources', 'project',
+        const prompt = `Bounded hook failure test. Use your native file editing tool exactly once to create ${marker} containing test. A deliberately unavailable Kith guard must block it. Do not retry, repair hooks, use shell, MCP or subagents. Report the denial and stop.`;
+        const events = await run(client === 'cursor' ? cursorArgs(root, prompt) : ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--setting-sources', 'project',
           '--strict-mcp-config', '--mcp-config', path.join(root, '.mcp.json'), '--permission-mode', 'acceptEdits', '--permission-prompts', 'none',
           '--allowedTools', 'Write', '--max-budget-usd', '1', prompt], root, childEnv);
-        const writes = events.flatMap((e) => e.type === 'assistant' ? e.message?.content ?? [] : []).filter((b) => b.type === 'tool_use' && b.name === 'Write');
-        assert.equal(writes.length, 1, 'Expected exactly one native Write probe');
-        const denied = events.flatMap((e) => e.type === 'user' ? e.message?.content ?? [] : []).find((b) => b.type === 'tool_result' && b.tool_use_id === writes[0].id);
-        assert.equal(denied?.is_error, true, 'Missing pre-hook did not deny native Write');
+        if (client === 'cursor') {
+          const writes = events.filter(e => e.type === 'tool_call' && e.subtype === 'completed' && e.tool_call?.editToolCall).map(e => e.tool_call.editToolCall);
+          assert.equal(writes.length, 1, 'Expected exactly one native edit probe');
+          assert.equal(writes[0].args.path, marker);
+          assert.ok(writes[0].result?.error, 'Missing pre-hook did not deny native edit');
+        } else {
+          const writes = events.flatMap((e) => e.type === 'assistant' ? e.message?.content ?? [] : []).filter((b) => b.type === 'tool_use' && b.name === 'Write');
+          assert.equal(writes.length, 1, 'Expected exactly one native Write probe');
+          const denied = events.flatMap((e) => e.type === 'user' ? e.message?.content ?? [] : []).find((b) => b.type === 'tool_result' && b.tool_use_id === writes[0].id);
+          assert.equal(denied?.is_error, true, 'Missing pre-hook did not deny native Write');
+        }
         assert.equal(fs.existsSync(marker), false, 'Missing guard allowed a write');
-        result.passed = true; result.checks = ['native Write attempted once', 'tool denied', 'marker absent'];
+        result.passed = true; result.checks = ['native edit attempted once', 'tool denied', 'marker absent'];
         console.log(`${client} ${mode}: passed`);
         continue;
       }
-      const hookProbe = client === 'claude' ? ` After the expected MCP conflict, also test native hook enforcement: Read ${path.join(root, 'src/blocked.mjs')}, then attempt exactly one native Edit of that file replacing true with false. Its PreToolUse hook must deny the edit. Continue only after that denial; never retry or bypass it.` : '';
+      const hookProbe = hasHooks ? ` After the expected MCP conflict, also test native hook enforcement: Read ${path.join(root, 'src/blocked.mjs')}, then attempt exactly one native Edit of that file replacing true with false. Its PreToolUse hook must deny the edit. Continue only after that denial; never retry or bypass it.` : '';
       const protectedCommand = [process.execPath, '-e', `const fs=require('node:fs'),path=require('node:path'),start=Date.now();setTimeout(()=>{fs.mkdirSync('.coord',{recursive:true});fs.writeFileSync('.coord/native-command-proof.json',JSON.stringify({cwd:process.cwd(),elapsed:Date.now()-start}));process.stdout.write('mutex-ok')},1200)`];
       const prompt = `Run this bounded compatibility test in this disposable Git repository. Do not use subagents or unrelated tools. Never print session tokens. Call the kith MCP tools directly. First call kith_begin_work with agentId ${agentId}, title Native conflict probe, scopeGlobs [src/blocked.mjs]. Expect a lock conflict.${hookProbe} Never change that file successfully. Then call kith_begin_work with the SAME agentId, title Add native compatibility module, scopeGlobs [src/native.mjs], isolateWorktree true. Use your native editing tool to create src/native.mjs IN THE RETURNED WORKTREE with exactly: export const nativeCompatibility = 42; followed by a newline. Call kith_record_file_edit with that absolute file path. Before completing, call kith_run_with_mutex with agentId ${agentId}, mutexName native-validation, command ${JSON.stringify(protectedCommand)}, leaseDurationMs 300, commandTimeoutMs 5000. It must return exitCode 0 and stdout mutex-ok. Then call kith_complete_work with verificationCmd node -e "process.exit(17)". That verification failure is expected: inspect kith_get_status to confirm your task and claims remain active. Retry completion on the SAME session/worktree with verificationCmd node --check src/native.mjs. Finally call kith_get_status without agentId. Stop on unexpected failure; never bypass coordination or substitute shell calls for MCP. End with a brief result.`;
       const generated = client === 'codex' ? parseToml(fs.readFileSync(path.join(root, '.codex/config.toml'), 'utf8')).mcp_servers.kith : undefined;
       // Project trust is persisted by the client outside this fixture. Pass generated values
       // explicitly for this invocation so the runner never edits global trust/configuration.
       const configArgs = generated ? Object.entries(generated).flatMap(([key, value]) => ['-c', `mcp_servers.kith.${key}=${JSON.stringify(value)}`]) : [];
-      const args = client === 'codex'
+      if (client === 'cursor') {
+        // Audit only tool/path/exit status while forwarding the generated guard unchanged.
+        const configPath = path.join(root, '.cursor/hooks.json');
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        const pre = config.hooks.preToolUse.find(h => h.command.includes(' hook pre'));
+        const wrapper = path.join(root, '.coord/native-cursor-guard.mjs');
+        fs.writeFileSync(wrapper, `import fs from 'node:fs';
+import {spawnSync} from 'node:child_process';
+const input=fs.readFileSync(0,'utf8'), payload=JSON.parse(input);
+const reply=spawnSync('sh',['-c',${JSON.stringify(pre.command)}],{input,encoding:'utf8'});
+fs.appendFileSync(${JSON.stringify(path.join(root, '.coord/native-hook-proof.jsonl'))},JSON.stringify({path:payload.tool_input?.file_path??payload.tool_input?.path,status:reply.status})+'\\n');
+process.stdout.write(reply.stdout??'');process.stderr.write(reply.stderr??'');process.exit(reply.status??2);`);
+        pre.command = quote(process.execPath) + ' ' + quote(wrapper);
+        fs.writeFileSync(configPath, JSON.stringify(config));
+      }
+      const args = client === 'cursor'
+        ? cursorArgs(root, prompt)
+        : client === 'codex'
         ? ['exec', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--json', '--color', 'never', '-s', 'workspace-write', '-C', root,
             ...configArgs, '-c', 'mcp_servers.kith.required=true', '-c', 'mcp_servers.kith.default_tools_approval_mode="approve"', prompt]
         : ['-p', '--output-format', 'stream-json', '--verbose', '--include-hook-events', '--no-session-persistence', '--setting-sources', 'project',
             '--strict-mcp-config', '--mcp-config', path.join(root, '.mcp.json'), '--permission-mode', 'acceptEdits', '--permission-prompts', 'none',
             '--allowedTools', 'mcp__kith,Read,Write,Edit', '--max-budget-usd', '2', prompt];
       const events = await run(args, root, childEnv);
-      const calls = client === 'codex'
+      const cursorEvents=events.filter(e=>e.type==='tool_call');
+      const calls = client === 'cursor' ? cursorEvents.filter(e=>e.subtype==='completed').map(cursorName).filter(Boolean) : client === 'codex'
         ? events.filter((e) => e.type === 'item.completed' && e.item?.type === 'mcp_tool_call' && e.item.server === 'kith').map((e) => e.item.tool)
         : events.flatMap((e) => e.type === 'assistant' ? e.message?.content ?? [] : []).filter((b) => b.type === 'tool_use' && b.name.startsWith('mcp__kith__')).map((b) => b.name.slice('mcp__kith__'.length));
       result.tools = calls;
@@ -107,6 +142,15 @@ try {
         const denied = events.flatMap((e) => e.type === 'user' ? e.message?.content ?? [] : []).find((b) => b.type === 'tool_result' && b.tool_use_id === attempt.id);
         assert.equal(denied?.is_error, true, 'Hook did not deny the native peer-file edit');
         assert.ok(native.some((b) => ['Write', 'Edit'].includes(b.name) && b.input?.file_path?.endsWith('/src/native.mjs')), 'Missing native editor event');
+        result.hookDenialVerified = true;
+      }
+      if (client === 'cursor') {
+        const proof = fs.readFileSync(path.join(root, '.coord/native-hook-proof.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        assert.ok(proof.some(p => p.path === path.join(root, 'src/blocked.mjs') && p.status === 2), 'Missing native Cursor peer-edit denial');
+        assert.ok(proof.some(p => p.path?.endsWith('/src/native.mjs') && p.status === 0), 'Missing native Cursor worktree edit guard');
+        const edits = cursorEvents.filter(e => e.subtype === 'completed' && e.tool_call?.editToolCall).map(e => e.tool_call.editToolCall);
+        assert.ok(edits.some(e => e.args.path === path.join(root, 'src/blocked.mjs') && e.result?.error), 'Missing native denied-edit event');
+        assert.ok(edits.some(e => e.args.path?.endsWith('/src/native.mjs') && e.result?.success), 'Missing native successful-edit event');
         result.hookDenialVerified = true;
       }
       for (const name of ['kith_record_file_edit', 'kith_run_with_mutex', 'kith_complete_work', 'kith_get_status']) assert.ok(calls.includes(name), `Missing ${name}; client exit zero is insufficient`);

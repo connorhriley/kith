@@ -1,0 +1,18 @@
+{
+  "client": "cursor",
+  "version": "2026.10.19-6bbf2c4",
+  "platform": "darwin",
+  "node": "v22.23.3",
+  "scenarios": [
+    {
+      "scenario": "hook-failure",
+      "passed": true,
+      "checks": [
+        "native edit attempted once",
+        "tool denied",
+        "marker absent"
+      ]
+    }
+  ],
+  "passed": true
+}
