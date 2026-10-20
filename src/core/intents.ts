@@ -17,30 +17,14 @@ export interface TaskRecord {
   updated_at: number;
 }
 
-export interface SemanticIntentOverlap {
-  taskId: string;
-  ownerAgentId: string;
-  title: string;
-  intentSummary: string;
-  similarityScore: number;
-  scopeGlobs: string[];
-}
-
 export interface DeclareIntentResult {
   ok: boolean;
   task: TaskRecord | null;
   fencingToken: number;
   locks: LockRecord[];
   lockConflicts: LockConflict[];
-  semanticOverlaps: SemanticIntentOverlap[];
   activeSiblingIntents: TaskRecord[];
 }
-
-const STOP_WORDS = new Set([
-  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'add', 'create',
-  'update', 'implement', 'fix', 'build', 'make', 'refactor', 'support', 'new',
-  'file', 'files', 'module', 'code', 'function', 'method', 'class', 'feature',
-]);
 
 export class IntentAndTaskEngine {
   constructor(
@@ -50,100 +34,23 @@ export class IntentAndTaskEngine {
   ) {}
 
   /**
-   * Tokenizes text into normalized stem-like tokens and bigrams for semantic intent comparison.
-   */
-  public static extractSemanticTokens(text: string): Set<string> {
-    const rawWords = text
-      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim()
-      .split(/\s+/)
-      .filter((w) => w.length >= 2 && !STOP_WORDS.has(w))
-      .map((w) => {
-        if (/^auth(enticat|entic|oriz|or)?/.test(w)) return 'auth';
-        if (/^verif(y|i|icat|ication)?/.test(w)) return 'verify';
-        if (/^valid(at|ation|ate)?/.test(w)) return 'valid';
-        if (/^config(ur|uration|ure)?/.test(w)) return 'config';
-        return w.replace(/(ing|tion|ions|ment|ments|ed|es|s)$/, '');
-      })
-      .filter((w) => w.length >= 2);
-
-    return new Set<string>(rawWords);
-  }
-
-  public static computeSimilarity(textA: string, textB: string): number {
-    const tokensA = IntentAndTaskEngine.extractSemanticTokens(textA);
-    const tokensB = IntentAndTaskEngine.extractSemanticTokens(textB);
-    if (tokensA.size === 0 || tokensB.size === 0) return 0;
-
-    let intersection = 0;
-    for (const t of tokensA) {
-      if (tokensB.has(t)) intersection++;
-    }
-
-    const union = tokensA.size + tokensB.size - intersection;
-    const jaccard = union > 0 ? intersection / union : 0;
-    const containment = intersection / Math.min(tokensA.size, tokensB.size);
-
-    return Number((jaccard * 0.45 + containment * 0.55).toFixed(3));
-  }
-
-  /**
-   * Peer-to-Peer Mode: Declares an agent's intent, checks for both scope-lock collisions
-   * and semantic duplicate intents across sibling agents, and reserves the scope if clean.
+   * Peer-to-Peer Mode: Declares an agent's intent, checks scope-lock collisions
+   * and reserves the scope if available.
    */
   public declareIntent(params: {
     agentId: string;
     title: string;
     intentSummary?: string;
     scopeGlobs: string[];
-    similarityThreshold?: number;
-    force?: boolean;
   }): DeclareIntentResult {
     this.fencing.reapDeadAgents();
     const summary = params.intentSummary ?? params.title;
-    const threshold = params.similarityThreshold ?? 0.52;
 
     return this.coordDb.withTransaction(() => {
       this.fencing.assertSession(params.agentId);
       const activeTasks = this.listTasks({ status: 'active' }).filter(
         (t) => t.owner_agent_id !== params.agentId
       );
-
-      const semanticOverlaps: SemanticIntentOverlap[] = [];
-      const candidateText = `${params.title} ${summary}`;
-
-      for (const active of activeTasks) {
-        const activeText = `${active.title} ${active.intent_summary}`;
-        const score = IntentAndTaskEngine.computeSimilarity(candidateText, activeText);
-        if (score >= threshold && active.owner_agent_id) {
-          semanticOverlaps.push({
-            taskId: active.id,
-            ownerAgentId: active.owner_agent_id,
-            title: active.title,
-            intentSummary: active.intent_summary,
-            similarityScore: score,
-            scopeGlobs: active.scope_globs,
-          });
-        }
-      }
-
-      if (semanticOverlaps.length > 0 && !params.force) {
-        this.coordDb.logEvent(params.agentId, 'intent_semantic_overlap', {
-          title: params.title,
-          overlaps: semanticOverlaps,
-        });
-        return {
-          ok: false,
-          task: null,
-          fencingToken: this.coordDb.currentFencingEpoch(),
-          locks: [],
-          lockConflicts: [],
-          semanticOverlaps,
-          activeSiblingIntents: activeTasks,
-        };
-      }
 
       const taskId = `task_${crypto.randomBytes(6).toString('hex')}`;
       const lockRes = this.lockEngine.acquireLocks({
@@ -160,7 +67,6 @@ export class IntentAndTaskEngine {
           fencingToken: lockRes.fencingToken,
           locks: [],
           lockConflicts: lockRes.conflicts,
-          semanticOverlaps,
           activeSiblingIntents: activeTasks,
         };
       }
@@ -203,7 +109,6 @@ export class IntentAndTaskEngine {
         fencingToken: lockRes.fencingToken,
         locks: lockRes.locks,
         lockConflicts: [],
-        semanticOverlaps,
         activeSiblingIntents: activeTasks,
       };
     });

@@ -24,7 +24,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close()));
-  fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(bin, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true }); fs.rmSync(bin, { recursive: true });
 });
 async function connect(directory = root, discover = false) {
   const transport = new StdioClientTransport({ command: process.execPath, args: [cli, 'mcp', ...(discover ? [] : ['--repo', directory])], cwd: directory, env, stderr: 'pipe' });
@@ -60,7 +60,7 @@ it('uses real MCP initialize/list/call flows and isolates two client session own
   expect(begun.sessionToken).toHaveLength(43);
   expect((await tool(two.client, 'kith_begin_work', { agentId: 'owner', title: 'Take over', scopeGlobs: ['src/auth/**'] })).isError).toBe(true);
   expect((await tool(two.client, 'kith_complete_work', { agentId: 'owner' })).isError).toBe(true);
-  const conflict = await tool(two.client, 'kith_begin_work', { agentId: 'peer', title: 'Billing integration', scopeGlobs: ['src/auth/a.ts'], force: true });
+  const conflict = await tool(two.client, 'kith_begin_work', { agentId: 'peer', title: 'Billing integration', scopeGlobs: ['src/auth/a.ts'] });
   expect(conflict.isError).toBe(true);
   const status = data(await tool(two.client, 'kith_get_status', {}));
   expect(status.locks[0].owner_agent_id).toBe('owner');
@@ -87,7 +87,7 @@ it('rejects stale tokens after expiry and requeues work when an MCP process disc
 
 it('runs generated client hooks, worktree edit reports, verification and completion with one session capability', async () => {
   seed();
-  initializeKithRepository(root, `${quote(process.execPath)} ${quote(cli)}`);
+  initializeKithRepository(root, `${quote(process.execPath)} ${quote(cli)}`, { integrations: ['claude', 'git', 'agents'] });
   // Start the server using the actual generated project MCP command/arguments.
   const config = JSON.parse(fs.readFileSync(path.join(root, '.mcp.json'), 'utf8')).mcpServers.kith;
   const transport = new StdioClientTransport({ ...config, cwd: root, env, stderr: 'pipe' });
@@ -272,8 +272,8 @@ it('shares real MCP clients across linked checkout/subdirectory discovery and gu
   const one = await connect(path.join(root, 'src'), true);
   const two = await connect(path.join(linked, 'src'), true);
   data(await tool(one.client, 'kith_begin_work', { agentId: 'owner', title: 'Protected base module', scopeGlobs: ['src/base.mjs'] }));
-  expect((await tool(two.client, 'kith_begin_work', { agentId: 'peer', title: 'Try conflicting scope', scopeGlobs: ['src/base.mjs'], force: true })).isError).toBe(true);
-  const begun = data(await tool(two.client, 'kith_begin_work', { agentId: 'peer', title: 'Linked route implementation', scopeGlobs: ['src/routes/**'], force: true }));
+  expect((await tool(two.client, 'kith_begin_work', { agentId: 'peer', title: 'Try conflicting scope', scopeGlobs: ['src/base.mjs'] })).isError).toBe(true);
+  const begun = data(await tool(two.client, 'kith_begin_work', { agentId: 'peer', title: 'Linked route implementation', scopeGlobs: ['src/routes/**'] }));
   const file = path.join(linked, 'src/routes/[id]/route.mjs');
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'export function route() { return 1; }\n');
   const tokenEnv = { ...env, KITH_AGENT_ID: 'peer', KITH_SESSION_TOKEN: begun.sessionToken };
@@ -300,9 +300,12 @@ it('shares real MCP clients across linked checkout/subdirectory discovery and gu
 });
 
 
-it('uses generated MCP-only onboarding with no exported capability or installed edit hooks', async () => {
+it('uses default MCP onboarding with no exported capability or installed edit hooks', async () => {
   seed();
-  initializeKithRepository(root, 'kith', { integrations: ['claude', 'agents'], mcpOnly: true });
+  initializeKithRepository(root);
+  expect(fs.existsSync(path.join(root, '.git/hooks/pre-commit'))).toBe(false);
+  expect(fs.existsSync(path.join(root, '.coord/bin'))).toBe(false);
+  expect(initializeKithRepository(root).configuredFiles).toEqual([]);
   expect(fs.existsSync(path.join(root, '.claude/settings.json'))).toBe(false);
   const config = JSON.parse(fs.readFileSync(path.join(root, '.mcp.json'), 'utf8')).mcpServers.kith;
   const transport = new StdioClientTransport({ ...config, cwd: root, env, stderr: 'pipe' });

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Subtraction pass (supersedes earlier unreleased advisory/UI behavior)
+
+- Remove `top`/`ui` and their dashboard modules. Use existing CLI/MCP status; normal engine startup may migrate or reap state, so preserve stopped recovery data first.
+- Remove fuzzy intent blocking, synonym/duplicate scoring, full-text search maintenance and their public APIs/result fields (`semanticOverlaps`, `duplicates`, `autoMergeableFiles`). Scope ownership remains authoritative; similar task titles no longer block disjoint scopes. The semantic-overlap `force` option is removed.
+- Refuse unresolved Git conflicts instead of rewriting source/JSON. Remove `checkAdditiveMergeability` and `autoResolvedFiles`; retain worktrees/checkpoints for explicit repair and verification retries. TypeScript is a development dependency only.
+- Share CLI/MCP begin/complete orchestration. Default init configures MCP clients/instructions; hooks and shims require explicit selection. Existing guards and state are preserved. No schema changes; legacy derived search tables are left unused. Stop older clients before upgrading; mixed versions/downgrades are not supported by this change.
+
+
 ### Interrupted upgrades and damaged-state refusal
 
 - Refuse missing/empty databases with retained recovery data, orphan sidecars, incomplete ownership schema, invalid/regressed counters and SQLite-detected page damage. Keep state intact for inspection rather than recreating empty ownership tables.

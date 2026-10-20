@@ -6,8 +6,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HookHandler } from '../src/cli/hook-handler.js';
 import { initializeKithRepository } from '../src/cli/init.js';
 import { KithEngine } from '../src/index.js';
-import { renderDashboardFrame } from '../src/tui/dashboard.js';
-import { readDashboardSnapshot } from '../src/tui/snapshot.js';
 
 describe('Bash Merkle Quarantine, Port/Mutex Broker, Auto-Installer & TUI', () => {
   let tmpDir: string;
@@ -141,16 +139,13 @@ describe('Bash Merkle Quarantine, Port/Mutex Broker, Auto-Installer & TUI', () =
     expect(m2Retry.acquired).toBe(true);
   });
 
-  it('auto-installs Claude Code, Cursor, Antigravity, AGENTS.md, Git hooks, and renders the TUI dashboard', () => {
-    const report = initializeKithRepository(tmpDir);
+  it('installs explicitly selected client configurations and guards', () => {
+    const report = initializeKithRepository(tmpDir, 'kith', { integrations: ['claude', 'codex', 'cursor', 'agents', 'git', 'shims'] });
     expect(report.configuredFiles).toContain('.claude/settings.json');
     expect(report.configuredFiles).toContain('.cursor/mcp.json');
     expect(report.configuredFiles).toContain('.agent/skills/kith/SKILL.md');
     expect(report.configuredFiles).toContain('AGENTS.md');
     expect(report.configuredFiles.some((file) => file.endsWith('/hooks/pre-commit'))).toBe(true);
 
-    const frame = renderDashboardFrame(readDashboardSnapshot(tmpDir));
-    expect(frame).toContain('KITH — PARALLEL AGENT COORDINATOR');
-    expect(frame).toContain('RECORDED CONFLICTS');
   });
 });

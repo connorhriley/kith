@@ -58,11 +58,11 @@ describe('Dirty-Tree Shadow Git (`git merge-tree`), CoW Worktrees & Speculative 
 
     expect(res2.dirtyMergeConflicts).toHaveLength(1);
     expect(res2.dirtyMergeConflicts[0].file_path).toBe('src/shared.ts');
-    expect(res2.dirtyMergeConflicts[0].severity).toBe('ast_conflict');
+    expect(res2.dirtyMergeConflicts[0].severity).toBe('text_conflict');
     expect(res2.warnings.some((w) => w.includes('LIVE DIRTY-TREE CONFLICT'))).toBe(true);
   });
 
-  it('filters out false-positive line conflicts when two agents append disjoint exports to the same file', () => {
+  it('reports Git conflicts even for apparently disjoint appended exports', () => {
     engine.fencing.registerAgent({ id: 'agent-1' });
     engine.fencing.registerAgent({ id: 'agent-2' });
 
@@ -80,12 +80,11 @@ describe('Dirty-Tree Shadow Git (`git merge-tree`), CoW Worktrees & Speculative 
       content: `export function baseHelper(): string {\n  return 'base';\n}\nexport function helperBeta(y: string): string {\n  return y.trim();\n}\n`,
     });
 
-    // Should be classified as auto_mergeable, NOT a blocking conflict!
-    expect(res2.dirtyMergeConflicts).toHaveLength(0);
-    expect(res2.autoMergeableFiles).toContain('src/index.ts');
+    expect(res2.dirtyMergeConflicts).toHaveLength(1);
+    expect(res2.dirtyMergeConflicts[0].file_path).toBe('src/index.ts');
   });
 
-  it('spawns Copy-on-Write worktrees, auto-resolves additive conflicts in Speculative Merge Train, and gates on verification', () => {
+  it('preserves conflicted worktrees for explicit repair and gates retry on verification', () => {
     engine.fencing.registerAgent({ id: 'wt-agent-1' });
     engine.fencing.registerAgent({ id: 'wt-agent-2' });
 
@@ -113,16 +112,23 @@ describe('Dirty-Tree Shadow Git (`git merge-tree`), CoW Worktrees & Speculative 
     });
     expect(merge1.merged).toBe(true);
 
-    // Merge wt-agent-2 via Speculative Merge Train -> Git sees a conflict on src/index.ts,
-    // but Kith's AST additive merger auto-resolves it and verifies it!
+    // Git conflicts require explicit repair in the retained source worktree.
     const merge2 = engine.mergeTrain.enqueueAndMerge({
       agentId: 'wt-agent-2',
       branch: wt2.branch,
       worktreePath: wt2.worktreePath,
       verificationCmd: 'node -e "process.exit(0)"',
     });
-    expect(merge2.merged).toBe(true);
-    expect(merge2.autoResolvedFiles).toContain('src/index.ts');
+    expect(merge2.merged).toBe(false);
+    expect(merge2.diagnostics).toContain('Resolve conflicts');
+    expect(fs.readFileSync(path.join(wt2.worktreePath, 'src/index.ts'), 'utf8')).toContain('fromAgentTwo');
+    expect(fs.readFileSync(path.join(tmpDir, 'src/index.ts'), 'utf8')).not.toContain('fromAgentTwo');
+    const target = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf8' }).trim();
+    expect(() => execFileSync('git', ['merge', target], { cwd: wt2.worktreePath, stdio: 'pipe' })).toThrow();
+    fs.writeFileSync(path.join(wt2.worktreePath, 'src/index.ts'), fs.readFileSync(path.join(tmpDir, 'src/index.ts'), 'utf8') + 'export function fromAgentTwo(): number { return 202; }\n');
+    execFileSync('git', ['add', 'src/index.ts'], { cwd: wt2.worktreePath });
+    execFileSync('git', ['commit', '-m', 'Resolve conflict explicitly'], { cwd: wt2.worktreePath, stdio: 'pipe' });
+    expect(engine.mergeTrain.enqueueAndMerge({ agentId: 'wt-agent-2', branch: wt2.branch, worktreePath: wt2.worktreePath, verificationCmd: 'node -e "process.exit(0)"' }).merged).toBe(true);
 
     const finalMainIndex = fs.readFileSync(path.join(tmpDir, 'src/index.ts'), 'utf8');
     expect(finalMainIndex).toContain('fromAgentOne');

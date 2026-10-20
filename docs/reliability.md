@@ -9,7 +9,7 @@ Kith is a cooperative local coordinator. It does not provide an OS sandbox, dist
 - Setup previews without writes, preserves unrelated JSON settings, and rejects malformed config before writing selected configuration.
 - Worktree creation refuses an existing path or branch; removal refuses local, untracked, or ignored changes.
 - Integration refuses a dirty target and concurrent Kith integrations; failed or mutating verification preserves the target and source worktree for retry. Checks cannot change the candidate commit, tracked/index contents, or leave new nonignored files behind.
-- Conflict resolution accepts only parsed, disjoint appended named declarations or lossless additive JSON objects. Imports, initializers, executable top-level additions, binding collisions, missing Git stages and changed/symlink modes remain conflicts.
+- Unresolved Git conflicts fail integration without custom source/JSON rewriting. Source and target work remain available for explicit repair and retry.
 - Shadow-tree deletions reach Git; invalid merge inputs surface errors.
 - Bash recovery preserves current workspace bytes by default and saves before/after copies.
 - Event pagination does not acknowledge unseen events.
@@ -39,7 +39,7 @@ These are test scenarios, not universal guarantees. CI coverage and real usage n
 
 ## Recovery
 
-1. Stop all clients, writers and supervised commands. Inspect `kith top --once` and Git status in every worktree; `top` observes without initializing, migrating or reaping state.
+1. Stop all clients, writers and supervised commands. Inspect Git status in every worktree. Preserve state before using Kith commands: normal CLI/MCP status opens the engine and may migrate or reap owners.
 2. Preserve worktree contents and quarantine files before removing state. Never delete `.coord` as routine cleanup: it contains worktrees, snapshots, and quarantine backups.
 3. If integration reports busy after a crash, inspect `.coord/merge-train.lock`, confirm its process is no longer running, and preserve any `_merge_train_*` worktree before manually removing the stale lock.
 4. Repair conflicts or failed checks in the source branch/worktree, then retry integration on the same session with a suitable verification command. Use checks that leave tracked/index contents and HEAD unchanged. Put formatters and fixers in the source worktree first. Ignored build/test outputs and Kith's unchanged dependency hydration are allowed; new nonignored staging files are rejected.
@@ -58,13 +58,10 @@ Unsupported or missing schema metadata requires inspection of a preserved copy. 
 
 The SQLite implementation requires Node's unflagged SQLite API: [Node SQLite documentation](https://nodejs.org/download/release/latest-jod/docs/api/sqlite.html). Generated Claude integration follows the [hook reference](https://code.claude.com/docs/en/hooks) and [project MCP configuration](https://code.claude.com/docs/en/mcp).
 
-## SQLite runtime capabilities
+## Existing databases
 
-Node 22.13.0 makes `node:sqlite` available without a flag, but its stock SQLite build has no FTS5 module. Kith detects available modules per connection. Contracts, dependency reports, name/type duplicate hints, tasks, locks and supervised commands work without FTS5; only the optional full-text similarity boost is absent. CLI/MCP status exposes `runtime.node` and `runtime.fts5`.
-
-The contracts table remains authoritative. A runtime without FTS5 leaves any existing virtual index intact and marks it dirty when contracts change. A capable runtime rebuilds that derived index transactionally, including updates and deletions, before using it again. No session or workspace reset is needed when switching supported runtimes. This is not a database backup or repair mechanism for corrupted state.
-
+No full-text SQLite extension is required. Contracts, tasks, locks and supervised commands use the canonical tables on every supported runtime. Older derived `contracts_fts` tables are left intact but are no longer read or maintained. Stop all clients before upgrading. Do not mix versions or rely on downgrading to an older search index after new contract writes. No schema reset, new tables or automatic repair are involved.
 
 ## Paths, scopes and merge boundaries
 
-See [path and scope rules](path-and-scope-rules.md) for repository discovery, literal route filenames, supported glob grammar, symlink handling and conservative resolution. These checks assume cooperating writers: a process replacing filesystem links between a check and a write can race path checks. Hardlink aliases and a hostile filesystem writer are outside the containment boundary. Git itself can merge non-conflicting edits without Kith's conflict resolver; project verification still determines whether that combined change works.
+See [path and scope rules](path-and-scope-rules.md) for repository discovery, literal route filenames, supported glob grammar, symlink handling and conflict refusal. These checks assume cooperating writers: a process replacing filesystem links between a check and a write can race path checks. Hardlink aliases and a hostile filesystem writer are outside the containment boundary. Git merges non-conflicting edits; project verification still determines whether that combined change works.

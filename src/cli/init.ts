@@ -42,8 +42,9 @@ export function initializeKithRepository(
   options: { dryRun?: boolean; integrations?: Integration[]; mcpOnly?: boolean } = {}
 ): InitReport {
   const absRoot = discoverRepository(repoRoot).checkoutRoot;
-  const selected = new Set(options.integrations ?? (options.mcpOnly ? ['claude', 'codex', 'cursor', 'agents'] as Integration[] : INTEGRATIONS));
-  if (options.mcpOnly && (selected.has('git') || selected.has('shims'))) {
+  const mcpOnly = options.mcpOnly ?? options.integrations === undefined;
+  const selected = new Set(options.integrations ?? ['claude', 'codex', 'cursor', 'agents'] as Integration[]);
+  if (mcpOnly && (selected.has('git') || selected.has('shims'))) {
     throw new Error('--mcp-only supports client MCP configurations and agent instructions; omit git and shims.');
   }
   for (const integration of selected) {
@@ -72,10 +73,10 @@ export function initializeKithRepository(
   if (selected.has('claude')) {
     const settings = readConfig(path.join(absRoot, '.claude/settings.json'));
     const hooks = object(settings.hooks ?? {}, 'Claude hooks');
-    if (options.mcpOnly && ['PreToolUse', 'PostToolUse'].some(event => Array.isArray(hooks[event]) && hooks[event].length)) {
+    if (mcpOnly && ['PreToolUse', 'PostToolUse'].some(event => Array.isArray(hooks[event]) && hooks[event].length)) {
       warnings.push('Existing Claude tool hooks preserved. Review whether they require inherited KITH credentials; --mcp-only does not disable guards.');
     }
-    for (const [event, phase] of (options.mcpOnly ? [] : [['PreToolUse', 'pre'], ['PostToolUse', 'post']]) as Array<['PreToolUse' | 'PostToolUse', 'pre' | 'post']>) {
+    for (const [event, phase] of (mcpOnly ? [] : [['PreToolUse', 'pre'], ['PostToolUse', 'post']]) as Array<['PreToolUse' | 'PostToolUse', 'pre' | 'post']>) {
       const entries = hooks[event] ?? [];
       if (!Array.isArray(entries)) throw new Error(`Claude hooks.${event} must be an array.`);
       const command = `${hookCommand} ${phase}`;
@@ -92,7 +93,7 @@ export function initializeKithRepository(
         hooks: [{ type: 'command', command, ...(event === 'PreToolUse' ? { onFailure: 'block' } : {}) }],
       }];
     }
-    if (!options.mcpOnly) { settings.hooks = hooks; json('.claude/settings.json', settings); }
+    if (!mcpOnly) { settings.hooks = hooks; json('.claude/settings.json', settings); }
     const mcp = readConfig(path.join(absRoot, '.mcp.json'));
     mcp.mcpServers = { ...object(mcp.mcpServers ?? {}, 'Claude MCP servers'), kith: server };
     json('.mcp.json', mcp);
@@ -136,7 +137,7 @@ Use MCP for agent coordination. Keep one isolated worktree per parallel agent an
 1. Call \`kith_begin_work\` with a unique \`agentId\`, an explicit \`scopeGlobs\` array and \`isolateWorktree: true\`.
 2. Edit only the returned \`worktree.worktreePath\`. Report changed files through \`kith_record_file_edit\` on that connection.
 3. Run serialized commands with \`kith_run_with_mutex\`: pass a literal executable/argument array. Its cwd defaults to the registered worktree. Commands run with server permissions and require client approval.
-4. Renew idle sessions with \`kith_heartbeat\` before their lease expires. Inspect \`kith_get_status\`; humans can use read-only \`kith top\` for worktrees, queues and recovery records.
+4. Renew idle sessions with \`kith_heartbeat\` before their lease expires. Inspect \`kith_get_status\`.
 5. Complete with \`kith_complete_work\` and a project-specific \`verificationCmd\`. Failed verification keeps the integration target unchanged. Successful worktrees are retained for inspection.
 
 The MCP connection retains its capability; do not copy or log session tokens. A new connection needs a valid capability to resume an existing ID. Locks coordinate cooperating writers; hooks are not an OS security sandbox.
@@ -150,7 +151,7 @@ If Claude edit hooks or CLI commands are also enabled, launch the client from a 
       ? content.replace(/<!-- KITH:START -->[\s\S]*?<!-- KITH:END -->/, () => block)
       : content.trimEnd() + '\n\n' + block + '\n';
     add('AGENTS.md', content);
-    add('.agent/skills/kith/SKILL.md', '---\nname: kith\ndescription: Coordinate parallel coding work through Kith MCP and isolated worktrees.\n---\n\nPrefer the Kith MCP tools on one persistent connection. Begin with kith_begin_work using a unique agentId, explicit scopeGlobs and isolateWorktree:true. Edit the returned worktreePath, report files with kith_record_file_edit, run literal command arrays with kith_run_with_mutex, heartbeat before expiry and finish with kith_complete_work plus a project verificationCmd. Inspect kith_get_status or the read-only kith top dashboard. Keep capabilities private. If CLI or Claude hooks are enabled, first launch the client from a persistent shell with the same KITH_AGENT_ID/KITH_SESSION_TOKEN and --owner-pid "$$". Stateless shell calls cannot retain that setup. Locks require cooperating clients.\n');
+    add('.agent/skills/kith/SKILL.md', '---\nname: kith\ndescription: Coordinate parallel coding work through Kith MCP and isolated worktrees.\n---\n\nPrefer the Kith MCP tools on one persistent connection. Begin with kith_begin_work using a unique agentId, explicit scopeGlobs and isolateWorktree:true. Edit the returned worktreePath, report files with kith_record_file_edit, run literal command arrays with kith_run_with_mutex, heartbeat before expiry and finish with kith_complete_work plus a project verificationCmd. Inspect kith_get_status. Keep capabilities private. If CLI or Claude hooks are enabled, first launch the client from a persistent shell with the same KITH_AGENT_ID/KITH_SESSION_TOKEN and --owner-pid "$$". Stateless shell calls cannot retain that setup. Locks require cooperating clients.\n');
   }
   if (selected.has('git')) {
     try {

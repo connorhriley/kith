@@ -11,15 +11,14 @@ Kith runs locally. There is no coordination server: CLI and MCP clients share `.
 | `repository.ts` | Canonical checkout/common-Git-directory discovery and physical path containment |
 | `locks.ts`, `glob.ts` | Scoped lock acquisition, exact supported glob intersection, write checks |
 | `intents.ts` | Work declarations, task dependencies, transactional claims |
-| `ast-analyzer.ts`, `dep-graph.ts`, `dedup.ts` | Source-derived contracts, import relationships, duplicate hints |
-| `additive-source.ts` | Lazy TypeScript parser for conservative conflict resolution and JSON key/number validation |
+| `ast-analyzer.ts`, `dep-graph.ts` | Advisory source-derived contracts and import relationships |
 | `shadow-git.ts` | Per-agent indexes, synthetic commits, dirty-tree merge probes |
 | `worktree-cow.ts` | Isolated worktree creation and dependency hydration |
 | `merge-train.ts` | Serialized integration through a disposable staging worktree |
 | `bash-guard.ts` | Best-effort snapshots and quarantine recovery |
 | `broker.ts` | Port reservations, FIFO mutex tickets, renewable command leases and process-group guards |
 
-`src/cli` adapts commands and hook payloads. `src/mcp/server.ts` exposes tools. `src/tui/dashboard.ts` renders shared state. Library consumers use `src/index.ts` exports and close engines explicitly.
+`engine.ts` shares begin/complete orchestration across adapters. `src/cli` adapts commands and hook payloads. `src/mcp/server.ts` exposes tools. Library consumers use `src/index.ts` exports and close engines explicitly.
 
 ## State boundaries
 
@@ -35,4 +34,4 @@ Worktree edit reports read source bytes from the registered worktree and store r
 
 ## Adaptation
 
-Use a new adapter for a new agent client, retaining the same core lock/task APIs. Keep heuristic analysis advisory. Add language-specific parsers behind the analyzer boundary, and preserve unsupported syntax rather than assuming that a text match proves compatibility. Custom verification commands belong to the target project.
+Use a new adapter for a new agent client, retaining the same core lock/task APIs. Keep heuristic analysis advisory. Source matching cannot establish compatibility. Git conflicts require explicit resolution in the source worktree. Custom verification commands belong to the target project.

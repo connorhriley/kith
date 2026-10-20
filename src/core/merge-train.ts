@@ -3,7 +3,6 @@ import { execFileSync, execSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { AstAnalyzer } from './ast-analyzer.js';
 import { FencingAndAgentManager } from './fencing.js';
 import { CoordDatabase } from './db.js';
 
@@ -23,7 +22,6 @@ export interface MergeTrainEntry {
 export interface SpeculativeMergeResult {
   merged: boolean;
   entry: MergeTrainEntry;
-  autoResolvedFiles: string[];
   mergedCommitSha: string | null;
   diagnostics: string;
 }
@@ -34,8 +32,7 @@ export class SpeculativeMergeTrain {
   /**
    * Enqueues and executes a Bors-style speculative integration test in an isolated staging
    * worktree before advancing the main repository branch.
-   * Automatically resolves AST-additive conflicts (like disjoint exports or JSON keys)
-   * and runs `verificationCmd` (e.g. `tsc --noEmit` or `npm test`) before fast-forwarding `main`.
+   * Refuses Git conflicts and runs `verificationCmd` (e.g. `tsc --noEmit` or `npm test`) before fast-forwarding `main`.
    */
   public enqueueAndMerge(params: {
     agentId: string;
@@ -74,7 +71,6 @@ export class SpeculativeMergeTrain {
     });
 
     const stageDir = path.join(this.coordDb.coordDir, 'worktrees', `_merge_train_${id}`);
-    const autoResolvedFiles: string[] = [];
     const lockPath = path.join(this.coordDb.coordDir, 'merge-train.lock');
     let lockFd: number | undefined;
 
@@ -154,58 +150,12 @@ export class SpeculativeMergeTrain {
           }
         );
       } catch {
-        // Check if conflicts can be AST-additively resolved!
-        const unmergedOut = execFileSync(
-          'git',
-          ['diff', '--name-only', '--diff-filter=U', '-z'],
-          { cwd: stageDir, env: sessionEnv, encoding: 'utf8' }
-        );
-
-        const conflictedFiles = unmergedOut.split('\0').filter(Boolean);
-        if (conflictedFiles.length === 0) {
-          throw new Error(`git merge failed on branch '${params.branch}'.`);
-        }
-
-        for (const relFile of conflictedFiles) {
-          const stages = execFileSync('git', ['--literal-pathspecs', 'ls-files', '--unmerged', '-z', '--', relFile], {
-            cwd: stageDir, encoding: 'utf8',
-          }).split('\0').filter(Boolean).map(record => /^(\d{6}) [0-9a-f]+ ([123])\t/.exec(record));
-          const modes = stages.map(stage => stage?.[1]);
-          if (stages.length !== 3 || new Set(stages.map(stage => stage?.[2])).size !== 3
-            || !modes.every(mode => mode === modes[0] && (mode === '100644' || mode === '100755'))) {
-            throw new Error(`Merge conflict in '${relFile}': missing stages, symlink, or changed file modes require explicit resolution.`);
-          }
-          const baseContent = this.readStageBlob(stageDir, 1, relFile);
-          const oursContent = this.readStageBlob(stageDir, 2, relFile);
-          const theirsContent = this.readStageBlob(stageDir, 3, relFile);
-
-          const check = AstAnalyzer.checkAdditiveMergeability(
-            relFile,
-            baseContent,
-            oursContent,
-            theirsContent
-          );
-
-          if (!check.autoMergeable || !check.mergedContent) {
-            throw new Error(
-              `Merge conflict in '${relFile}': ${check.reason}. Resolve conflicts in '${params.branch}' before merging.`
-            );
-          }
-
-          fs.writeFileSync(path.join(stageDir, relFile), check.mergedContent, 'utf8');
-          execFileSync('git', ['--literal-pathspecs', 'add', '--', relFile], { cwd: stageDir, env: sessionEnv, stdio: 'ignore' });
-          autoResolvedFiles.push(relFile);
-        }
-
-        execFileSync(
-          'git',
-          [
-            'commit',
-            '-m',
-            `Merge branch '${params.branch}' (${params.agentId}) [AST auto-resolved: ${autoResolvedFiles.join(', ')}]`,
-          ],
-          { cwd: stageDir, env: sessionEnv, stdio: 'ignore' }
-        );
+        const conflictedFiles = execFileSync('git', ['diff', '--name-only', '--diff-filter=U', '-z'], {
+          cwd: stageDir, encoding: 'utf8',
+        }).split('\0').filter(Boolean);
+        throw new Error(conflictedFiles.length
+          ? `Merge conflicts in ${conflictedFiles.map(file => JSON.stringify(file)).join(', ')}. Resolve conflicts in '${params.branch}' before merging.`
+          : `git merge failed on branch '${params.branch}'.`);
       }
 
       const verifiedSha = this.gitHead(stageDir);
@@ -268,14 +218,12 @@ export class SpeculativeMergeTrain {
           id,
           branch: params.branch,
           verifiedSha,
-          autoResolvedFiles,
         });
       });
 
       return {
         merged: true,
         entry: this.getEntry(id)!,
-        autoResolvedFiles,
         mergedCommitSha: verifiedSha,
         diagnostics,
       };
@@ -303,7 +251,6 @@ export class SpeculativeMergeTrain {
       return {
         merged: false,
         entry: this.getEntry(id)!,
-        autoResolvedFiles,
         mergedCommitSha: null,
         diagnostics,
       };
@@ -332,12 +279,6 @@ export class SpeculativeMergeTrain {
     if (status.split(/\r?\n/).some((line) => line && line !== '?? .coord/')) {
       throw new Error('Merge target has local changes. Commit or preserve them before integrating.');
     }
-  }
-
-  private readStageBlob(cwd: string, stage: 1 | 2 | 3, relFile: string): string {
-    return new TextDecoder('utf-8', { fatal: true }).decode(execFileSync('git', ['show', `:${stage}:${relFile}`], {
-      cwd, stdio: ['ignore', 'pipe', 'pipe'],
-    }));
   }
 
   private cleanupStageWorktree(stageDir: string): void {

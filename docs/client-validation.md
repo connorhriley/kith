@@ -36,3 +36,6 @@ After the repository/path/scope/merge hardening pass, the isolated workflows pas
 
 
 The recovery pass reran the isolated workflows on macOS / Node 22.23.3: [Codex](validation/2026-10-19-recovery-codex.json) and [Claude](validation/2026-10-19-recovery-claude.json) both passed an intentional verification failure followed by successful completion on the same session and worktree. Separate automated MCP regressions cover staging-only repairs being refused and a killed owner being recovered from a stopped database/WAL backup with a fresh capability and preserved worktree. These checks do not establish arbitrary corruption recovery or GUI behavior.
+
+
+The 2026-10-20 subtraction pass reran the isolated native workflows on macOS / Node 22.23.3: [Codex CLI 0.163.0-alpha.10.2](validation/2026-10-20-subtraction-codex.json) and [Claude Code 2.1.301](validation/2026-10-20-subtraction-claude.json) both passed edit reporting, renewable commands, failed verification followed by successful retry, integration and ownership release. Claude also verified native peer-edit denial with its inherited owner preserved. These runs use the shared begin/complete implementation after removing fuzzy advice, custom conflict rewriting and the dashboard.

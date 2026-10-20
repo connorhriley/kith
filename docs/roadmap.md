@@ -4,7 +4,7 @@ Success means a new contributor can reproduce a two-agent workflow, understand i
 
 ## 1. Reliability foundation — implemented
 
-Implemented: non-destructive configuration merging and previews, safer worktree lifecycle, serialized Kith integration, atomic port reservations, strictly additive JSON/source merge handling, surfaced Git errors, preserved command arguments, event pagination, non-destructive Bash recovery defaults, actual process contention coverage, contributor docs, license text, and a CI definition.
+Implemented: non-destructive configuration merging and previews, safer worktree lifecycle, serialized Kith integration, atomic port reservations, Git conflict refusal, surfaced Git errors, preserved command arguments, event pagination, non-destructive Bash recovery defaults, actual process contention coverage, contributor docs, license text, and a CI definition.
 
 The canonical upstream is [connorhriley/kith](https://github.com/connorhriley/kith). Hosted results are available in [Actions](https://github.com/connorhriley/kith/actions/workflows/ci.yml); workflow configuration alone is not evidence of a passing matrix.
 
@@ -19,7 +19,7 @@ These gates are covered locally. Version-specific native Codex and Claude CLI ru
 - Exact scope-language intersection for literals, `*`, `?` and whole-segment `**`, with generated witness checks, dotfile coverage, explicit literal-file scopes and conservative handling of legacy unsupported scopes.
 - Redesign shared-tree Bash attribution before considering automatic restoration as a default. Gate: sibling edits cannot be reverted by another agent's post-hook.
 - Shared common-Git-directory discovery from roots, subdirectories, linked worktrees, symlink aliases and separate Git directories; physical containment, external-link refusal, literal framework paths and invoking-index Git guards have regression coverage.
-- Parsed append-only declaration resolution rejects imports, initializers, top-level execution, name collisions, cross-branch bindings, unsupported syntax, lossy JSON and ambiguous Git stages/modes. Actual Git conflicts cover symlink refusal and unusual filenames.
+- Git conflicts require explicit source-worktree repair and retry; no custom source/JSON rewriting remains. Actual Git regressions preserve symlink targets, unusual filenames and non-UTF-8 bytes.
 - Legacy migration rollback/retry (including a process killed before commit), damaged-state refusal and stopped WAL backup restoration have regressions, including killed MCP ownership and worktree continuation. Broader upgrade/downgrade combinations and corrupted-state repair remain unvalidated.
 
 ## 4. Broaden integration validation

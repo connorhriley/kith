@@ -1,62 +1,50 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { AstAnalyzer, CoordDatabase, KithEngine } from '../src/index.js';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+import { KithEngine } from '../src/index.js';
 
-const probe = new DatabaseSync(':memory:');
-const nativeFts = CoordDatabase.hasFts5(probe); probe.close();
 let root: string;
 const engines: KithEngine[] = [];
 const open = () => { const engine = new KithEngine(root); engines.push(engine); return engine; };
 const source = (name: string) => `export function ${name}(value: number): string { return String(value); }\n`;
-const hint = (engine: KithEngine, name: string) => engine.dedup.findDuplicateSymbols({ filePath: 'other.ts', symbols: AstAnalyzer.analyzeSource(root, 'other.ts', source(name)).exports });
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'kith-sqlite-')); });
-afterEach(() => { vi.restoreAllMocks(); for (const engine of engines.splice(0)) engine.close(); fs.rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { for (const engine of engines.splice(0)) engine.close(); fs.rmSync(root, { recursive: true, force: true }); });
 
-it('preserves contract indexing, duplicate hints and coordination without FTS5', () => {
-  vi.spyOn(CoordDatabase, 'hasFts5').mockReturnValue(false);
+it('indexes, updates and removes contracts using only canonical coordination tables', () => {
   const engine = open();
-  expect(engine.coordDb.supportsFts5).toBe(false);
   engine.fencing.registerAgent({ id: 'owner' });
   expect(engine.locks.acquireLocks({ agentId: 'owner', patterns: ['one.ts'] }).ok).toBe(true);
   engine.depGraph.recordFileModification('owner', 'one.ts', source('formatCurrency'));
-  expect(hint(engine, 'formatCurrency')[0].existingContract.symbol_name).toBe('formatCurrency');
+  expect(engine.depGraph.listContracts().map(c => c.symbol_name)).toEqual(['formatCurrency']);
   engine.depGraph.recordFileModification('owner', 'one.ts', source('formatMoney'));
-  expect(engine.depGraph.listContracts().map((c) => c.symbol_name)).toEqual(['formatMoney']);
+  expect(engine.depGraph.listContracts().map(c => c.symbol_name)).toEqual(['formatMoney']);
   engine.depGraph.recordFileModification('owner', 'one.ts', '');
   expect(engine.depGraph.listContracts()).toEqual([]);
-  expect(hint(engine, 'formatMoney')).toEqual([]);
   expect(engine.coordDb.db.prepare("SELECT name FROM sqlite_master WHERE name='contracts_fts'").get()).toBeUndefined();
 });
 
-it.skipIf(!nativeFts)('builds an optional index from authoritative contracts after a no-FTS runtime created state', () => {
-  const capability = vi.spyOn(CoordDatabase, 'hasFts5').mockReturnValue(false);
-  const fallback = open();
-  fallback.depGraph.recordFileModification(null, 'one.ts', source('getAccount'));
-  capability.mockRestore();
-  const full = open();
-  expect(full.coordDb.supportsFts5).toBe(true);
-  expect(full.coordDb.db.prepare("SELECT symbol_name FROM contracts_fts WHERE contracts_fts MATCH 'account'").all()).toEqual([{ symbol_name: 'getAccount' }]);
-  // A still-open older runtime edits after the newer runtime has rebuilt the index.
-  fallback.depGraph.recordFileModification(null, 'one.ts', source('fetchProfile'));
-  full.coordDb.refreshContractSearch();
-  expect(full.coordDb.db.prepare("SELECT symbol_name FROM contracts_fts WHERE contracts_fts MATCH 'account'").all()).toEqual([]);
-  expect(full.coordDb.db.prepare("SELECT symbol_name FROM contracts_fts WHERE contracts_fts MATCH 'profile'").all()).toEqual([{ symbol_name: 'fetchProfile' }]);
-});
-
-it.skipIf(!nativeFts)('repairs a retained legacy FTS index after fallback updates and deletions without losing contracts', () => {
-  const full = open();
-  full.depGraph.recordFileModification(null, 'one.ts', source('oldHelper'));
-  full.depGraph.recordFileModification(null, 'two.ts', source('deletedHelper'));
-  const capability = vi.spyOn(CoordDatabase, 'hasFts5').mockReturnValue(false);
-  const fallback = open();
-  fallback.depGraph.recordFileModification(null, 'one.ts', source('newHelper'));
-  fallback.depGraph.recordFileModification(null, 'two.ts', '');
-  capability.mockRestore();
+it('opens older state without deleting derived search rows, contracts, capabilities or retained work', () => {
+  const old = open();
+  const session = old.fencing.registerAgent({ id: 'owner' });
+  old.locks.acquireLocks({ agentId: 'owner', patterns: ['one.ts'] });
+  old.depGraph.recordFileModification('owner', 'one.ts', source('oldHelper'));
+  // Use the real legacy virtual table where available; the floor runtime has no FTS module.
+  const fts = old.coordDb.db.prepare("SELECT 1 FROM pragma_module_list WHERE name='fts5'").get();
+  old.coordDb.db.exec(fts
+    ? 'CREATE VIRTUAL TABLE contracts_fts USING fts5(contract_id UNINDEXED,file_path,symbol_name,tokenized_name,signature,doc_comment)'
+    : 'CREATE TABLE contracts_fts(contract_id,file_path,symbol_name,tokenized_name,signature,doc_comment)');
+  old.coordDb.db.prepare('INSERT INTO contracts_fts VALUES(?,?,?,?,?,?)').run('legacy', 'one.ts', 'oldHelper', 'old helper', 'signature', 'doc');
+  old.coordDb.db.prepare("INSERT INTO meta(key,value) VALUES('contracts_fts_dirty','0')").run();
+  const recovery = path.join(old.coordDb.coordDir, 'quarantine', 'preserved.txt');
+  fs.writeFileSync(recovery, 'unfinished work');
+  old.close(); engines.pop();
   const reopened = open();
-  expect(reopened.depGraph.listContracts().map((c) => c.symbol_name)).toEqual(['newHelper']);
-  expect(reopened.coordDb.db.prepare('SELECT symbol_name FROM contracts_fts').all()).toEqual([{ symbol_name: 'newHelper' }]);
-  expect(hint(reopened, 'newHelper')).toHaveLength(1);
+  reopened.fencing.resumeSession('owner', session.sessionToken);
+  expect(reopened.locks.listLocks()[0].owner_agent_id).toBe('owner');
+  expect(reopened.depGraph.listContracts()[0].symbol_name).toBe('oldHelper');
+  reopened.depGraph.recordFileModification('owner', 'one.ts', source('newHelper'));
+  expect(reopened.depGraph.listContracts()[0].symbol_name).toBe('newHelper');
+  expect(reopened.coordDb.db.prepare('SELECT symbol_name FROM contracts_fts').all()).toEqual([{ symbol_name: 'oldHelper' }]);
+  expect(fs.readFileSync(recovery, 'utf8')).toBe('unfinished work');
 });

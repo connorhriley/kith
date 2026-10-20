@@ -15,8 +15,10 @@ function run(...args: string[]) {
 it('help, version, and invalid commands do not create local state', () => {
   expect(run('help').stdout).toContain('Usage:');
   expect(run('--version').stdout.trim()).toBe('1.0.0');
-  const bad = run('typo');
-  expect(bad.status).toBe(1); expect(bad.stderr).toContain('Unknown command');
+  for (const removed of ['typo', 'top', 'ui']) {
+    const bad = run(removed);
+    expect(bad.status).toBe(1); expect(bad.stderr).toContain('Unknown command');
+  }
   expect(fs.readdirSync(root)).toEqual([]);
 });
 it('previews setup and rejects an invalid integration without writes', () => {

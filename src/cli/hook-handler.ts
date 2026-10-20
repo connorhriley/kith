@@ -116,7 +116,7 @@ export class HookHandler {
 
   /**
    * Handles `PostToolUse` verification:
-   * - For file edits: AST export/import extraction, transitive blast radius, duplicate symbol hints (optionally using FTS5), and live dirty-tree `git merge-tree`.
+   * - For file edits: AST export/import extraction, transitive blast radius, live dirty-tree `git merge-tree`.
    * - For Bash commands: Merkle snapshot diff, automatic revert + quarantine of unauthorized mutations to files locked by sibling agents.
    */
   public handlePostToolUse(params: {

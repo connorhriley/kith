@@ -1,4 +1,3 @@
-import { additiveSource, assertUniqueJsonKeys } from './additive-source.js';
 import { repositoryFile } from './repository.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -312,97 +311,6 @@ export class AstAnalyzer {
     // Even if target file hasn't been flushed to disk yet, infer `.ts` relative path
     const inferred = `${baseTarget}.ts`;
     try { return repositoryFile(repoRoot, inferred); } catch { return null; }
-  }
-
-  /**
-   * Checks whether a 3-way merge conflict between two modified versions (`contentA` and `contentB`)
-   * over `baseContent` is strictly additive (e.g. both agents appended disjoint exports or JSON keys)
-   * and therefore auto-mergeable without human intervention.
-   */
-  public static checkAdditiveMergeability(
-    filePath: string,
-    baseContent: string,
-    contentA: string,
-    contentB: string
-  ): { autoMergeable: boolean; mergedContent?: string; reason: string } {
-    if ([baseContent, contentA, contentB].some(text => Buffer.byteLength(text) > 1_048_576 || text.includes('\0'))) {
-      return { autoMergeable: false, reason: 'Binary or oversized conflict requires explicit resolution' };
-    }
-    // Case 1: JSON files (e.g. package.json, tsconfig.json)
-    if (filePath.endsWith('.json')) {
-      try {
-        const baseObj = AstAnalyzer.parseMergeJson(baseContent || '{}') as Record<string, unknown>;
-        const objA = AstAnalyzer.parseMergeJson(contentA) as Record<string, unknown>;
-        const objB = AstAnalyzer.parseMergeJson(contentB) as Record<string, unknown>;
-        const merged = AstAnalyzer.tryAdditiveJsonMerge(baseObj, objA, objB);
-        if (merged !== null) {
-          return {
-            autoMergeable: true,
-            mergedContent: JSON.stringify(merged, null, 2) + '\n',
-            reason: 'Disjoint JSON keys added by both agents',
-          };
-        }
-      } catch {
-        // Not auto-mergeable JSON
-      }
-    }
-
-    if (filePath.endsWith('.json')) return { autoMergeable: false, reason: 'JSON changes are not strictly additive objects' };
-    return additiveSource(filePath, baseContent, contentA, contentB);
-  }
-
-  private static parseMergeJson(text: string): unknown {
-    // JSON.parse deliberately accepts duplicate keys and rounds large integers.
-    // Neither transformation is appropriate during conflict resolution.
-    const value: unknown = JSON.parse(text, (_key, child: unknown) => {
-      if (typeof child === 'number' && (Object.is(child, -0) || !Number.isFinite(child) || Number.isInteger(child) && !Number.isSafeInteger(child))) {
-        throw new Error('JSON number would lose precision');
-      }
-      return child;
-    });
-    assertUniqueJsonKeys(text);
-    return value;
-  }
-
-  private static tryAdditiveJsonMerge(
-    base: Record<string, unknown>,
-    a: Record<string, unknown>,
-    b: Record<string, unknown>
-  ): Record<string, unknown> | null {
-    const isObject = (value: unknown): value is Record<string, unknown> =>
-      value !== null && typeof value === 'object' && !Array.isArray(value);
-    if (!isObject(base) || !isObject(a) || !isObject(b)) return null;
-    const result: Record<string, unknown> = {};
-    const has = (obj: Record<string, unknown>, key: string) => Object.hasOwn(obj, key);
-    const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
-    for (const key of new Set([...Object.keys(base), ...Object.keys(a), ...Object.keys(b)])) {
-      const original = base[key];
-      const left = a[key];
-      const right = b[key];
-      if (has(base, key)) {
-        if (!has(a, key) || !has(b, key)) return null;
-        if (isObject(original) && isObject(left) && isObject(right)) {
-          const nested = AstAnalyzer.tryAdditiveJsonMerge(original, left, right);
-          if (!nested) return null;
-          Object.defineProperty(result, key, { value: nested, enumerable: true });
-        } else {
-          if (!equal(original, left) || !equal(original, right)) return null;
-          Object.defineProperty(result, key, { value: original, enumerable: true });
-        }
-      } else if (has(a, key) && has(b, key)) {
-        let value = left;
-        if (!equal(left, right)) {
-          if (!isObject(left) || !isObject(right)) return null;
-          const nested = AstAnalyzer.tryAdditiveJsonMerge({}, left, right);
-          if (!nested) return null;
-          value = nested;
-        }
-        Object.defineProperty(result, key, { value, enumerable: true });
-      } else {
-        Object.defineProperty(result, key, { value: has(a, key) ? left : right, enumerable: true });
-      }
-    }
-    return result;
   }
 
   private static extractBracedBlockSummary(lines: string[], startIndex: number): string {

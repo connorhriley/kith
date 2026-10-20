@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KithEngine } from '../src/index.js';
 
-describe('Pillar 3 & 4: Import-Graph Blast Radius, Contracts & Optional Full-Text Duplicate Hints', () => {
+describe('Advisory import-graph contract reports', () => {
   let tmpDir: string;
   let engine: KithEngine;
 
@@ -79,31 +79,4 @@ describe('Pillar 3 & 4: Import-Graph Blast Radius, Contracts & Optional Full-Tex
     );
   });
 
-  it('catches semantic duplicate helper functions across different files via name/type fingerprints and optional full-text hints', () => {
-    engine.fencing.registerAgent({ id: 'agent-a' });
-    engine.fencing.registerAgent({ id: 'agent-b' });
-
-    // Agent A creates formatCurrency in src/lib/currency.ts
-    const codeA = `// Formats cents into display currency string\nexport function formatCurrency(cents: number, currencyCode: string): string {\n  return \`\${currencyCode} \${(cents / 100).toFixed(2)}\`;\n}\n`;
-    fs.writeFileSync(path.join(tmpDir, 'src/lib/currency.ts'), codeA, 'utf8');
-    engine.processPostFileEdit({
-      agentId: 'agent-a',
-      filePath: 'src/lib/currency.ts',
-      content: codeA,
-    });
-
-    // Agent B writes a duplicate utility `formatMoney(amount: number, currency: string): string` in src/helpers/money.ts
-    const codeB = `export function formatMoney(amount: number, currency: string): string {\n  return \`$\${amount}\`;\n}\n`;
-    fs.writeFileSync(path.join(tmpDir, 'src/helpers/money.ts'), codeB, 'utf8');
-    const postB = engine.processPostFileEdit({
-      agentId: 'agent-b',
-      filePath: 'src/helpers/money.ts',
-      content: codeB,
-    });
-
-    expect(postB.duplicates.length).toBeGreaterThan(0);
-    expect(postB.duplicates[0].existingContract.symbol_name).toBe('formatCurrency');
-    expect(postB.duplicates[0].existingContract.file_path).toBe('src/lib/currency.ts');
-    expect(postB.warnings.some((w) => w.includes('DUPLICATE SYMBOL WARNING'))).toBe(true);
-  });
 });

@@ -72,7 +72,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
 
   server.tool(
     'kith_begin_work',
-    'Register an agent session, verify no scope lock or semantic duplicate intent conflicts exist with sibling agents, acquire monotonic fencing-token locks, and optionally spawn an instant Copy-on-Write git worktree.',
+    'Register an agent session, verify no scope lock conflicts exist with sibling agents, acquire monotonic fencing-token locks, and optionally spawn an instant Copy-on-Write git worktree.',
     {
       agentId: z.string().describe('Unique identifier for this agent session (e.g. claude-1, codex-auth)'),
       sessionToken: z.string().optional(),
@@ -81,23 +81,17 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       intentSummary: z.string().optional().describe('Detailed description of what will be built or modified'),
       scopeGlobs: z.array(z.string()).describe('File paths or glob patterns this agent will edit (e.g. ["src/auth/**"])'),
       isolateWorktree: z.boolean().optional().describe('Recommended: true, giving each parallel agent a separate Git worktree'),
-      force: z.boolean().optional().describe('Bypass semantic overlap warning if intentional'),
     },
     async (args) => {
       const reg = register(args);
 
-      const intentRes = engine.intents.declareIntent({
+      const intentRes = engine.beginWork({
         agentId: args.agentId,
         title: args.title,
         intentSummary: args.intentSummary,
         scopeGlobs: args.scopeGlobs,
-        force: args.force,
+        isolateWorktree: args.isolateWorktree,
       });
-
-      let worktree = null;
-      if (intentRes.ok && args.isolateWorktree) {
-        worktree = engine.worktrees.spawnWorktree({ agentId: args.agentId });
-      }
 
       const contracts = engine.depGraph.listContracts().slice(0, 30);
 
@@ -108,9 +102,8 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
         fencingToken: intentRes.fencingToken,
         task: intentRes.task,
         locks: intentRes.locks,
-        worktree,
+        worktree: intentRes.worktree,
         lockConflicts: intentRes.lockConflicts,
-        semanticOverlaps: intentRes.semanticOverlaps,
         activeSiblingIntents: intentRes.activeSiblingIntents,
         publishedContracts: contracts,
       });
@@ -168,7 +161,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
 
   server.tool(
     'kith_record_file_edit',
-    'Analyze a modified file to extract AST contracts, check transitive import blast radius, detect semantic duplicate utilities, and run a live dirty-tree git merge-tree conflict check.',
+    'Analyze a modified file to extract AST contracts, check transitive import blast radius, and run a live dirty-tree git merge-tree conflict check.',
     {
       agentId: z.string(),
       sessionToken: z.string().optional(),
@@ -267,7 +260,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       if (args.agentId) authorize({ ...args, agentId: args.agentId });
       const state = {
         repository: { root: engine.coordDb.repoRoot, commonGitDir: engine.coordDb.commonGitDir, coordDir: engine.coordDb.coordDir },
-        runtime: { node: process.version, fts5: engine.coordDb.supportsFts5 },
+        runtime: { node: process.version },
         fencingEpoch: engine.coordDb.currentFencingEpoch(),
         agents: engine.fencing.listAgents(true),
         locks: engine.locks.listLocks(),
@@ -295,42 +288,8 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     },
     async (args) => {
       authorize(args);
-      const agent = engine.fencing.getAgent(args.agentId);
-      let mergeResult = null;
-
-      if (args.mergeBranch || agent?.branch) {
-        mergeResult = engine.mergeTrain.enqueueAndMerge({
-          agentId: args.agentId,
-          branch: (args.mergeBranch ?? agent?.branch)!,
-          worktreePath: agent?.worktree_path,
-          verificationCmd: args.verificationCmd,
-        });
-
-        if (!mergeResult.merged) {
-          return formatReply(args.agentId, {
-            ok: false,
-            error: 'Speculative merge train failed. Fix the reported issues before completing work.',
-            mergeResult,
-          });
-        }
-
-        // Preserve the worktree for inspection, consistent with CLI completion.
-      }
-
-      const completedTasks = engine.intents.completeTask({
-        agentId: args.agentId,
-        taskId: args.taskId,
-        fencingToken: args.fencingToken,
-        releaseLocks: true,
-      });
-
-      engine.fencing.completeAgentSession(args.agentId);
-
-      return formatReply(undefined, {
-        ok: true,
-        completedTasks,
-        mergeResult,
-      });
+      const result = engine.completeWork(args);
+      return formatReply(result.ok ? undefined : args.agentId, result);
     }
   );
 

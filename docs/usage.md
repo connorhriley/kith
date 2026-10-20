@@ -37,7 +37,7 @@ kith session end
 unset KITH_AGENT_ID KITH_SESSION_TOKEN
 ```
 
-Quote globs so the shell does not expand them. CLI scopes are comma-separated. Use `file:src/routes/[id]/page.tsx` for a literal filename containing glob syntax; see [scope grammar and discovery](path-and-scope-rules.md). An ID alone cannot resume another session. Dead or expired sessions release coordination resources when a mutating operation reaps them; reading `kith top` never performs that cleanup. Active supervised command guards survive expiry until shutdown is confirmed.
+Quote globs so the shell does not expand them. CLI scopes are comma-separated. Use `file:src/routes/[id]/page.tsx` for a literal filename containing glob syntax; see [scope grammar and discovery](path-and-scope-rules.md). An ID alone cannot resume another session. Dead or expired sessions release coordination resources when a mutating operation reaps them. Active supervised command guards survive expiry until shutdown is confirmed.
 
 Completion checkpoints uncommitted worktree changes and integrates into the branch currently checked out in the selected repository checkout (`--repo` when supplied). The target must be clean. A verification failure leaves the target unchanged and the worktree available for repair. Successful completion also keeps the worktree for inspection; removal is explicit and refuses dirty, untracked, or ignored work. Existing branches are never reset to create a worktree. Hydration tries filesystem clones and falls back to an independent copy; cost depends on the filesystem and dependency size.
 
@@ -55,8 +55,8 @@ kith task add --id schema --title "Billing schema" --scope "src/db/**"
 kith task add --id api --title "Billing endpoints" --depends-on schema --scope "src/api/**"
 kith task claim --agent worker-1
 
-# Optional human inspection: recorded state only; omit --once for refresh
-kith top --once
+# Inspect coordination state (normal engine startup may reap expired owners)
+kith status
 
 # Allocate a cooperating client's port; start your service promptly
 kith port --agent worker-1 --service web

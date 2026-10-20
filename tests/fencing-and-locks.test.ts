@@ -129,7 +129,7 @@ describe('Pillar 1 & 6: Monotonic Fencing Tokens, Dead-PID Reaper, Glob Locks & 
     expect(rescued.task?.owner_agent_id).toBe('agent-rescuer');
   });
 
-  it('prevents semantic duplicate intents in P2P mode even when file globs differ', () => {
+  it('allows similar task descriptions in separate scopes while retaining scope exclusion', () => {
     engine.fencing.registerAgent({ id: 'claude-1' });
     engine.fencing.registerAgent({ id: 'codex-2' });
 
@@ -146,9 +146,11 @@ describe('Pillar 1 & 6: Monotonic Fencing Tokens, Dead-PID Reaper, Glob Locks & 
       title: 'Add JWT auth token verification middleware',
       scopeGlobs: ['src/security/**'],
     });
-    expect(res2.ok).toBe(false);
-    expect(res2.semanticOverlaps.length).toBeGreaterThan(0);
-    expect(res2.semanticOverlaps[0].ownerAgentId).toBe('claude-1');
+    expect(res2.ok).toBe(true);
+    expect(res2.activeSiblingIntents.map(task => task.owner_agent_id)).toContain('claude-1');
+    const collision = engine.intents.declareIntent({ agentId: 'codex-2', title: 'Different title', scopeGlobs: ['src/middleware/token.ts'] });
+    expect(collision.ok).toBe(false);
+    expect(collision.lockConflicts.length).toBeGreaterThan(0);
   });
 
   it('enforces DAG task dependencies and rejects circular graphs', () => {

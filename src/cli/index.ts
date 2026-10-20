@@ -2,7 +2,6 @@
 import { SessionOwnershipError } from '../core/fencing.js';
 import { KithEngine } from '../core/engine.js';
 import { runKithMcpStdioServer } from '../mcp/server.js';
-import { runLiveDashboard } from '../tui/dashboard.js';
 import { HookHandler } from './hook-handler.js';
 import { INTEGRATIONS, Integration, initializeKithRepository } from './init.js';
 
@@ -27,7 +26,7 @@ function parseFlags(argv: string[]): {
       } else {
         const key = arg.slice(2);
         const next = mainArgs[i + 1];
-        if (!['once', 'force', 'worktree', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only'].includes(key) && next && !next.startsWith('--')) {
+        if (!['worktree', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only'].includes(key) && next && !next.startsWith('--')) {
           flags[key] = next;
           i++;
         } else {
@@ -57,7 +56,7 @@ async function main(): Promise<void> {
       throw new Error(`--only accepts: ${INTEGRATIONS.join(', ')}`);
     }
     const report = initializeKithRepository(repoRoot, 'kith', {
-      dryRun: Boolean(flags['dry-run']), mcpOnly: Boolean(flags['mcp-only']), integrations: integrations as Integration[] | undefined,
+      dryRun: Boolean(flags['dry-run']), mcpOnly: flags['mcp-only'] ? true : undefined, integrations: integrations as Integration[] | undefined,
     });
     console.log(JSON.stringify({ ok: true, ...report }, null, 2));
     return;
@@ -65,11 +64,6 @@ async function main(): Promise<void> {
 
   if (cmd === 'mcp') {
     await runKithMcpStdioServer(repoRoot);
-    return;
-  }
-
-  if (cmd === 'top' || cmd === 'ui') {
-    await runLiveDashboard(repoRoot, { once: Boolean(flags.once) });
     return;
   }
 
@@ -123,7 +117,7 @@ async function main(): Promise<void> {
     if (cmd === 'status') {
       const state = {
         repository: { root: engine.coordDb.repoRoot, commonGitDir: engine.coordDb.commonGitDir, coordDir: engine.coordDb.coordDir },
-        runtime: { node: process.version, fts5: engine.coordDb.supportsFts5 },
+        runtime: { node: process.version },
         fencingEpoch: engine.coordDb.currentFencingEpoch(),
         agents: engine.fencing.listAgents(true),
         locks: engine.locks.listLocks(),
@@ -145,55 +139,27 @@ async function main(): Promise<void> {
 
       const session = register();
 
-      const res = engine.intents.declareIntent({
+      const res = engine.beginWork({
         agentId,
         title,
         intentSummary: typeof flags.summary === 'string' ? flags.summary : title,
         scopeGlobs,
-        force: Boolean(flags.force),
+        isolateWorktree: Boolean(flags.worktree),
       });
 
-      let worktree = null;
-      if (res.ok && flags.worktree) {
-        worktree = engine.worktrees.spawnWorktree({ agentId });
-      }
-
-      console.log(JSON.stringify({ ...res, worktree, sessionToken: session.sessionToken }, null, 2));
+      console.log(JSON.stringify({ ...res, sessionToken: session.sessionToken }, null, 2));
       process.exitCode = res.ok ? 0 : 1;
       return;
     }
 
     if (cmd === 'complete') {
       authorize();
-      if (!agentId) {
-        console.error('Error: --agent <id> is required for `kith complete`');
-        process.exitCode = 1;
-        return;
-      }
-
-      const agent = engine.fencing.getAgent(agentId);
-      let mergeResult = null;
-      const mergeBranch =
-        typeof flags.merge === 'string' ? flags.merge : agent?.branch ?? undefined;
-
-      if (mergeBranch) {
-        mergeResult = engine.mergeTrain.enqueueAndMerge({
-          agentId,
-          branch: mergeBranch,
-          worktreePath: agent?.worktree_path,
-          verificationCmd: typeof flags.verify === 'string' ? flags.verify : null,
-        });
-        if (!mergeResult.merged) {
-          console.error(JSON.stringify({ ok: false, mergeResult }, null, 2));
-          process.exitCode = 1;
-          return;
-        }
-        // Keep the worktree for inspection; removal is an explicit, non-destructive operation.
-      }
-
-      const completedTasks = engine.intents.completeTask({ agentId });
-      engine.fencing.completeAgentSession(agentId);
-      console.log(JSON.stringify({ ok: true, completedTasks, mergeResult }, null, 2));
+      const result = engine.completeWork({
+        agentId, mergeBranch: typeof flags.merge === 'string' ? flags.merge : undefined,
+        verificationCmd: typeof flags.verify === 'string' ? flags.verify : undefined,
+      });
+      (result.ok ? console.log : console.error)(JSON.stringify(result, null, 2));
+      process.exitCode = result.ok ? 0 : 1;
       return;
     }
 
@@ -422,8 +388,7 @@ function printHelp(): void {
   console.log(`Kith (v1.0.0) — Parallel Agent Coordination (experimental)
 
 Usage:
-  kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure integrations (--dry-run, --only, --mcp-only skips new Claude edit hooks)
-  kith top [--once]                               Observe sessions, worktrees and queues (read-only)
+  kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure MCP clients (--dry-run, --only, --mcp-only)
   kith heartbeat --agent <id>                   Refresh the owned session lease
   kith status                                     Output JSON coordination state
   kith mcp                                        Start stdio MCP server

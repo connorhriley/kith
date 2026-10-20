@@ -5,7 +5,6 @@ export * from './core/locks.js';
 export * from './core/intents.js';
 export * from './core/ast-analyzer.js';
 export * from './core/dep-graph.js';
-export * from './core/dedup.js';
 export * from './core/shadow-git.js';
 export * from './core/worktree-cow.js';
 export * from './core/merge-train.js';

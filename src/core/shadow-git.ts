@@ -2,7 +2,6 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { AstAnalyzer } from './ast-analyzer.js';
 import { CoordDatabase } from './db.js';
 import { FencingAndAgentManager } from './fencing.js';
 import { LockEngine } from './locks.js';
@@ -14,15 +13,12 @@ export interface ConflictRecord {
   file_path: string;
   severity:
     | 'text_conflict'
-    | 'ast_conflict'
-    | 'transitive_contract_break'
-    | 'auto_mergeable';
+    | 'transitive_contract_break';
   details: {
     reason: string;
     baseBlob?: string;
     blobA?: string;
     blobB?: string;
-    autoMergedPreview?: string;
   };
   detected_at: number;
 }
@@ -31,7 +27,6 @@ export interface DirtyMergeProbeResult {
   clean: boolean;
   mergedTreeSha: string | null;
   conflicts: ConflictRecord[];
-  autoMergeableFiles: string[];
 }
 
 export class ShadowGitEngine {
@@ -183,7 +178,7 @@ export class ShadowGitEngine {
 
   /**
    * Runs `git merge-tree --write-tree` across `agentId`'s dirty shadow commit and every
-   * other active agent's dirty shadow commit (or branch), filtering false positives with AST analysis.
+   * other active agent's dirty shadow commit (or branch).
    */
   public probeAllActiveConflicts(
     agentId: string,
@@ -197,7 +192,7 @@ export class ShadowGitEngine {
     });
 
     if (!myShadowCommit) {
-      return { clean: true, mergedTreeSha: null, conflicts: [], autoMergeableFiles: [] };
+      return { clean: true, mergedTreeSha: null, conflicts: [] };
     }
 
     const activeAgents = this.fencing
@@ -205,10 +200,9 @@ export class ShadowGitEngine {
       .filter((a) => a.id !== agentId && a.shadow_tree_sha);
 
     const allConflicts: ConflictRecord[] = [];
-    const autoMergeableFiles: string[] = [];
     let lastMergedTreeSha: string | null = null;
 
-    // Clear outdated text/ast conflicts for this agent before re-probing
+    // Also clear legacy derived conflict classifications before re-probing.
     this.coordDb.withTransaction(() => {
       this.fencing.assertSession(agentId);
       this.coordDb.db.prepare(`DELETE FROM conflicts WHERE (agent_a = ? OR agent_b = ?) AND severity IN ('text_conflict', 'ast_conflict', 'auto_mergeable')`).run(agentId, agentId);
@@ -225,20 +219,13 @@ export class ShadowGitEngine {
       if (res.mergedTreeSha) {
         lastMergedTreeSha = res.mergedTreeSha;
       }
-      for (const c of res.conflicts) {
-        if (c.severity === 'auto_mergeable') {
-          autoMergeableFiles.push(c.file_path);
-        } else {
-          allConflicts.push(c);
-        }
-      }
+      allConflicts.push(...res.conflicts);
     }
 
     return {
       clean: allConflicts.length === 0,
       mergedTreeSha: lastMergedTreeSha,
       conflicts: allConflicts,
-      autoMergeableFiles,
     };
   }
 
@@ -265,7 +252,6 @@ export class ShadowGitEngine {
         clean: true,
         mergedTreeSha,
         conflicts: [],
-        autoMergeableFiles: [],
       };
     } catch (err: unknown) {
       const stdout =
@@ -275,16 +261,15 @@ export class ShadowGitEngine {
 
       const stageBlobsByFile = new Map<
         string,
-        { stage1?: string; stage2?: string; stage3?: string; modes: Map<string, string> }
+        { stage1?: string; stage2?: string; stage3?: string }
       >();
 
       for (const line of stdout.split('\0')) {
         // Format: 100644 <blob-sha> <stage>\t<file-path>
         const m = line.match(/^(\d{6}) ([0-9a-f]+) ([123])\t([\s\S]+)$/);
         if (m) {
-          const [, mode, blobSha, stage, filePath] = m;
-          const entry = stageBlobsByFile.get(filePath) ?? { modes: new Map<string, string>() };
-          entry.modes.set(stage, mode);
+          const [, , blobSha, stage, filePath] = m;
+          const entry = stageBlobsByFile.get(filePath) ?? {};
           if (stage === '1') entry.stage1 = blobSha;
           if (stage === '2') entry.stage2 = blobSha;
           if (stage === '3') entry.stage3 = blobSha;
@@ -296,30 +281,10 @@ export class ShadowGitEngine {
         throw new Error(`git merge-tree failed without a usable conflict result: ${err instanceof Error ? err.message : String(err)}`);
       }
       const conflicts: ConflictRecord[] = [];
-      const autoMergeableFiles: string[] = [];
       const now = Date.now();
 
       for (const [filePath, stages] of stageBlobsByFile.entries()) {
-        const baseContent = stages.stage1 ? this.readGitBlob(stages.stage1) : '';
-        const contentA = stages.stage2 ? this.readGitBlob(stages.stage2) : '';
-        const contentB = stages.stage3 ? this.readGitBlob(stages.stage3) : '';
-
-        const modes = [...stages.modes.values()];
-        const regular = stages.stage1 && stages.stage2 && stages.stage3 && modes.length === 3
-          && modes.every(mode => mode === modes[0] && (mode === '100644' || mode === '100755'));
-        const additiveCheck = regular
-          ? AstAnalyzer.checkAdditiveMergeability(filePath, baseContent, contentA, contentB)
-          : { autoMergeable: false, reason: 'Missing stages, symlink, or changed file modes require explicit resolution', mergedContent: undefined };
-
-        const severity: ConflictRecord['severity'] = additiveCheck.autoMergeable
-          ? 'auto_mergeable'
-          : /\.(ts|tsx|js|jsx|py)$/.test(filePath)
-            ? 'ast_conflict'
-            : 'text_conflict';
-
-        if (additiveCheck.autoMergeable) {
-          autoMergeableFiles.push(filePath);
-        }
+        const severity = 'text_conflict' as const;
 
         const record: ConflictRecord = {
           id: `conf_${crypto.randomBytes(6).toString('hex')}`,
@@ -328,19 +293,18 @@ export class ShadowGitEngine {
           file_path: filePath,
           severity,
           details: {
-            reason: additiveCheck.reason,
+            reason: 'Git merge conflict requires explicit resolution',
             baseBlob: stages.stage1,
             blobA: stages.stage2,
             blobB: stages.stage3,
-            autoMergedPreview: additiveCheck.mergedContent,
           },
           detected_at: now,
         };
 
         this.coordDb.withTransaction(() => {
           this.fencing.assertSession(agentA);
-        this.coordDb.db
-          .prepare(`
+          this.coordDb.db
+            .prepare(`
             INSERT OR REPLACE INTO conflicts (
               id, agent_a, agent_b, file_path, severity, details_json, detected_at
             )
@@ -361,28 +325,19 @@ export class ShadowGitEngine {
       }
 
       this.fencing.assertSession(agentA);
-      if (conflicts.some((c) => c.severity !== 'auto_mergeable')) {
+      if (conflicts.length) {
         this.coordDb.logEvent(agentA, 'dirty_merge_conflict', {
           peerAgent: agentB,
-          files: conflicts
-            .filter((c) => c.severity !== 'auto_mergeable')
-            .map((c) => c.file_path),
+          files: conflicts.map((c) => c.file_path),
         });
       }
 
       return {
-        clean: conflicts.every((c) => c.severity === 'auto_mergeable'),
+        clean: false,
         mergedTreeSha: null,
         conflicts,
-        autoMergeableFiles,
       };
     }
-  }
-
-  private readGitBlob(blobSha: string): string {
-    return new TextDecoder('utf-8', { fatal: true }).decode(execFileSync('git', ['cat-file', '-p', blobSha], {
-      cwd: this.coordDb.repoRoot, stdio: ['ignore', 'pipe', 'pipe'],
-    }));
   }
 
   public listConflicts(): ConflictRecord[] {

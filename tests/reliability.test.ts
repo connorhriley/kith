@@ -34,7 +34,7 @@ describe('non-destructive setup', () => {
     const hook = { matcher: 'Bash', hooks: [{ type: 'command', command: 'my-check' }] };
     fs.writeFileSync(path.join(root, '.claude/settings.json'), JSON.stringify({ permissions: { allow: ['Read'] }, hooks: { PreToolUse: [hook], Stop: [hook] } }));
     fs.writeFileSync(path.join(root, '.cursor/mcp.json'), JSON.stringify({ mcpServers: { other: { command: 'other' } }, extra: true }));
-    initializeKithRepository(root);
+    initializeKithRepository(root, 'kith', { integrations: ['claude', 'cursor', 'agents'] });
     const claude = JSON.parse(fs.readFileSync(path.join(root, '.claude/settings.json'), 'utf8'));
     expect(claude.permissions.allow).toEqual(['Read']);
     expect(claude.hooks.PreToolUse).toHaveLength(2);
@@ -42,7 +42,7 @@ describe('non-destructive setup', () => {
     const cursor = JSON.parse(fs.readFileSync(path.join(root, '.cursor/mcp.json'), 'utf8'));
     expect(cursor.mcpServers.other.command).toBe('other');
     expect(cursor.extra).toBe(true);
-    expect(initializeKithRepository(root).configuredFiles).toEqual([]);
+    expect(initializeKithRepository(root, 'kith', { integrations: ['claude', 'cursor', 'agents'] }).configuredFiles).toEqual([]);
     expect(fs.readFileSync(path.join(root, "AGENTS.md"), "utf8")).toContain('--owner-pid "$$"');
   });
   it('rejects malformed config before writing anything else', () => {
@@ -208,37 +208,6 @@ it('refuses to remove ignored worktree files such as environment secrets', () =>
   expect(() => engine!.worktrees.removeWorktree('worker')).toThrow('ignored');
   expect(fs.readFileSync(path.join(wt.worktreePath, '.env'), 'utf8')).toBe('SECRET=preserve');
 });
-
-it('keeps complete appended function blocks instead of deduplicating closing braces', () => {
-  const base = 'export function base() {\n  return 1;\n}\n';
-  const left = base + 'export function left() {\n  return 2;\n}\n';
-  const right = base + 'export function right() {\n  return 3;\n}\n';
-  const merged = AstAnalyzer.checkAdditiveMergeability('file.ts', base, left, right);
-  expect(merged.autoMergeable).toBe(true);
-  expect(merged.mergedContent).toContain('export function right() {\n  return 3;\n}');
-  expect(merged.mergedContent!.split('}')).toHaveLength(4);
-  expect(AstAnalyzer.checkAdditiveMergeability('file.ts', base, left.replace('return 1', 'return 10'), right).autoMergeable).toBe(false);
-});
-
-it('only merges additive object JSON, refusing removals, modifications, nulls and arrays', () => {
-  for (const [base, a, b] of [
-    ['{"x":1}', '{}', '{}'],
-    ['{"x":1}', '{"x":2,"a":1}', '{"x":2,"b":1}'],
-    ['{}', '[]', '[]'], ['{}', 'null', 'null'],
-  ]) expect(AstAnalyzer.checkAdditiveMergeability('file.json', base, a, b).autoMergeable).toBe(false);
-  const result = AstAnalyzer.checkAdditiveMergeability('file.json', '{"nested":{"x":1}}', '{"nested":{"x":1,"a":2}}', '{"nested":{"x":1,"b":3}}');
-  expect(result.autoMergeable).toBe(true);
-  expect(JSON.parse(result.mergedContent!)).toEqual({ nested: { x: 1, a: 2, b: 3 } });
-});
-
-
-it('keeps identical newly-added export names as a conflict instead of duplicating declarations', () => {
-  const base = 'export const base = 1;\n';
-  const a = base + 'export const same = 2;\n';
-  const b = base + 'export const same = 2;\nexport const other = 3;\n';
-  expect(AstAnalyzer.checkAdditiveMergeability('file.ts', base, a, b).autoMergeable).toBe(false);
-});
-
 
 it('does not install repository-specific hooks into an external hooks directory', () => {
   seedGit();

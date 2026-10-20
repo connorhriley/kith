@@ -38,12 +38,8 @@ A wildcard can hide a symlink below its literal prefix. When a lexical compariso
 
 Path checks assume a stable layout during the check/write boundary. They do not provide protection against a hostile process swapping symlinks concurrently, hardlink aliases or clients bypassing Kith. Windows path behavior remains unvalidated.
 
-## Automatic conflict resolution
+## Integration and conflicts
 
-Before staging source changes, integration verifies the agent's registered worktree, common repository and requested branch. Worktree removal refuses normalized-ID collisions and a path registered to another active agent. Git resolves ordinary clean merges. Kith's additional conflict resolver requires three regular-file stages with identical modes. Missing stages, symlinks and mode changes require explicit resolution. Executable mode is preserved in shadow reports. Git path lists are NUL-delimited, so conflict paths containing tabs/newlines are not split or interpreted as quoted names.
+Before staging source changes, integration verifies the agent's registered worktree, common repository and requested branch. Worktree removal refuses normalized-ID collisions and a path registered to another active agent. Executable mode is preserved in shadow reports. Git path lists are NUL-delimited, so conflict paths containing tabs/newlines are not split or interpreted as quoted names.
 
-For JS/TS conflicts, both sides must preserve the exact base bytes and append complete named exported functions, interfaces or type aliases. The base must end with a newline. A TypeScript parser validates each input and the combined source. Imports, default exports, variable initializers, classes, top-level calls, invalid/unsupported syntax, overlapping names, references to sibling additions and collisions with existing identifiers remain conflicts. JavaScript additions cannot contain TypeScript-only types. The parser is loaded on demand so idle coordinator processes do not each load a compiler.
-
-JSON resolution only combines additive object keys, including nested keys. Existing values cannot be removed or changed. Duplicate keys, unsafe integers, negative zero and numeric precision changes are refused rather than silently rewritten. Prototype-like keys remain ordinary data. Non-UTF-8 Git blobs, binary inputs and conflicts larger than 1 MiB per input require explicit resolution.
-
-This is a narrow conflict policy, not a semantic compatibility proof. Supply project-specific verification before integration and review combined changes.
+Git handles clean merges. Any unresolved Git conflict fails integration, including apparently additive source or JSON changes. Kith does not parse or rewrite conflicting contents. The target stays unchanged and the source worktree/checkpoint remains available for explicit repair and retry. Merge the current target into that source branch, resolve and commit the conflict there, then retry completion with a project-specific verification command. Checks must leave the candidate unchanged. A clean Git merge alone does not establish compatibility.

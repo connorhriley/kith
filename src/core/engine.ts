@@ -4,7 +4,6 @@ import { AstAnalyzer, ExtractedSymbol } from './ast-analyzer.js';
 import { BashMerkleGuard } from './bash-guard.js';
 import { ResourceBroker } from './broker.js';
 import { CoordDatabase, CoordEvent } from './db.js';
-import { DuplicateSymbolMatch, SemanticDeduplicator } from './dedup.js';
 import {
   BlastRadiusAlert,
   DependencyAndContractEngine,
@@ -26,9 +25,7 @@ export interface AgentUnreadDelta {
 export interface PostFileEditHookResult {
   filePath: string;
   contractReport: FileModificationReport;
-  duplicates: DuplicateSymbolMatch[];
   dirtyMergeConflicts: ConflictRecord[];
-  autoMergeableFiles: string[];
   warnings: string[];
 }
 
@@ -38,7 +35,6 @@ export class KithEngine {
   public readonly locks: LockEngine;
   public readonly intents: IntentAndTaskEngine;
   public readonly depGraph: DependencyAndContractEngine;
-  public readonly dedup: SemanticDeduplicator;
   public readonly shadowGit: ShadowGitEngine;
   public readonly worktrees: CoWWorktreeManager;
   public readonly mergeTrain: SpeculativeMergeTrain;
@@ -51,7 +47,6 @@ export class KithEngine {
     this.locks = new LockEngine(this.coordDb, this.fencing);
     this.intents = new IntentAndTaskEngine(this.coordDb, this.fencing, this.locks);
     this.depGraph = new DependencyAndContractEngine(this.coordDb, this.locks, this.fencing);
-    this.dedup = new SemanticDeduplicator(this.coordDb);
     this.shadowGit = new ShadowGitEngine(this.coordDb, this.fencing);
     this.worktrees = new CoWWorktreeManager(this.coordDb, this.fencing);
     this.mergeTrain = new SpeculativeMergeTrain(this.coordDb, this.fencing);
@@ -69,8 +64,7 @@ export class KithEngine {
    * Executes the complete PostToolUse pipeline whenever an agent writes or edits a file:
    * 1. Extracts AST exports/imports and updates the Contract Blackboard & Import Graph
    * 2. Computes transitive breaking-change blast radius across downstream dependent files
-   * 3. Checks for semantic duplicate utilities/functions via name/type fingerprints and optional FTS5 hints
-   * 4. Updates the agent's shadow Git index (`GIT_INDEX_FILE`) and runs `git merge-tree` against sibling dirty trees
+   * 3. Updates the agent's shadow Git index (`GIT_INDEX_FILE`) and runs `git merge-tree` against sibling dirty trees
    */
   public processPostFileEdit(params: {
     agentId: string;
@@ -85,38 +79,19 @@ export class KithEngine {
     if (!access.allowed) throw new Error(access.reason);
     const content = params.content ?? (fs.existsSync(path.join(targetRoot, file)) ? fs.readFileSync(path.join(targetRoot, file), 'utf8') : '');
 
-    const analysis = AstAnalyzer.analyzeSource(
-      targetRoot,
-      file,
-      content
-    );
-
-    const duplicates = this.dedup.findDuplicateSymbols({
-      filePath: analysis.filePath,
-      symbols: analysis.exports,
-    });
-
     const contractReport = this.depGraph.recordFileModification(
       params.agentId,
-      analysis.filePath,
+      file,
       content
     );
 
     const mergeProbe = this.shadowGit.probeAllActiveConflicts(
       params.agentId,
-      [{ filePath: analysis.filePath, content }],
+      [{ filePath: file, content }],
       targetRoot
     );
 
     const warnings: string[] = [];
-
-    for (const dup of duplicates) {
-      warnings.push(
-        `[DUPLICATE SYMBOL WARNING] '${dup.newSymbolName}' in '${dup.newFilePath}' closely matches '${dup.existingContract.symbol_name}' (${dup.existingContract.signature}) in '${dup.existingContract.file_path}' [similarity: ${Math.round(
-          dup.similarityScore * 100
-        )}%, ${dup.reason}]. Import the existing symbol instead of duplicating.`
-      );
-    }
 
     for (const brk of contractReport.breakingChanges) {
       const targetWho = brk.affectedAgentId
@@ -135,11 +110,9 @@ export class KithEngine {
     }
 
     return {
-      filePath: analysis.filePath,
+      filePath: file,
       contractReport,
-      duplicates,
       dirtyMergeConflicts: mergeProbe.conflicts,
-      autoMergeableFiles: mergeProbe.autoMergeableFiles,
       warnings,
     };
   }
@@ -167,8 +140,7 @@ export class KithEngine {
       .listConflicts()
       .filter(
         (c) =>
-          (c.agent_a === agentId || c.agent_b === agentId) &&
-          c.severity !== 'auto_mergeable'
+          c.agent_a === agentId || c.agent_b === agentId
       );
 
     const lines: string[] = [];
@@ -198,8 +170,36 @@ export class KithEngine {
     return {
       events: allNewEvents,
       activeConflicts,
-     formattedFooter,
+      formattedFooter,
     };
+  }
+
+  public beginWork(params: Parameters<IntentAndTaskEngine['declareIntent']>[0] & { isolateWorktree?: boolean }) {
+    const intent = this.intents.declareIntent(params);
+    const worktree = intent.ok && params.isolateWorktree
+      ? this.worktrees.spawnWorktree({ agentId: params.agentId }) : null;
+    return { ...intent, worktree };
+  }
+
+  public completeWork(params: {
+    agentId: string; taskId?: string; fencingToken?: number;
+    mergeBranch?: string; verificationCmd?: string;
+  }) {
+    this.fencing.assertSession(params.agentId);
+    const agent = this.fencing.getAgent(params.agentId);
+    const branch = params.mergeBranch ?? agent?.branch;
+    const mergeResult = branch ? this.mergeTrain.enqueueAndMerge({
+      agentId: params.agentId, branch, worktreePath: agent?.worktree_path,
+      verificationCmd: params.verificationCmd,
+    }) : null;
+    if (mergeResult && !mergeResult.merged) return {
+      ok: false, mergeResult,
+      error: 'Speculative merge train failed. Fix the reported issues before completing work.',
+    };
+    // Retain worktrees for inspection; release ownership only after integration succeeds.
+    const completedTasks = this.intents.completeTask(params);
+    this.fencing.completeAgentSession(params.agentId);
+    return { ok: true, completedTasks, mergeResult };
   }
 
   public close(): void {
@@ -215,8 +215,6 @@ export {
   ResourceBroker,
   CoordDatabase,
   CoordEvent,
-  SemanticDeduplicator,
-  DuplicateSymbolMatch,
   DependencyAndContractEngine,
   BlastRadiusAlert,
   FileModificationReport,

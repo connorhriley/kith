@@ -25,7 +25,7 @@ Kith gives cooperating agents shared local state: who owns a task, which files a
 | Give agents separate working files | Git worktrees with an explicit integration step |
 | Check work before integration | Your project's verification command |
 | Share local tools | Port reservations and supervised command mutexes |
-| See what is happening | Session/task state through `kith status`, `kith top`, and MCP |
+| See what is happening | Session/task state through `kith status` and MCP |
 
 Kith fits workflows where you already launch multiple coding agents and want them to coordinate. It does not choose models, write prompts, or launch a fleet for you. Worktrees separate files; Kith adds shared ownership and resource coordination.
 
@@ -74,11 +74,11 @@ pnpm link --global
 kith help
 
 # From your target repository, preview the selected integrations first
-kith init --mcp-only --dry-run --only claude,codex,agents
-kith init --mcp-only --only claude,codex,agents
+kith init --dry-run
+kith init
 ```
 
-Choose only the clients you use. Review and commit the generated configuration before starting work; integration requires a clean target checkout. Restart your client with `kith` on its `PATH`. `--mcp-only` installs MCP configuration and agent instructions without adding edit hooks, Git hooks or package-manager shims. Existing hooks are preserved; review warnings if they require an inherited session. See [hook setup](docs/integrations.md) if you need them.
+Default setup installs MCP configuration for Claude, Codex and Cursor plus agent instructions, without adding hooks or package-manager shims. Review and commit the generated configuration before starting work; integration requires a clean target checkout. Restart your client with `kith` on its `PATH`. To select clients, use `--mcp-only --only claude,codex,agents`. Existing hooks are preserved; review warnings if they require an inherited session. See [hook setup](docs/integrations.md) if you need them.
 
 | Client | Setup and validation |
 | --- | --- |
@@ -100,7 +100,7 @@ Source installation is the current distribution path. Package-name ownership and
 
 Failed verification leaves the target unchanged and keeps the worktree for repair. Successful integration also retains the worktree until explicit cleanup. External Git writers must still coordinate.
 
-Inspect through `kith_get_status` or `kith status`. Humans can optionally use `kith top --once` (or `kith top` for refresh). It reads recorded worktrees, queues and recovery copies without reaping owners or changing leases; it does not inspect Git contents or prove processes are alive.
+Inspect through `kith_get_status` or `kith status`. These use the normal engine startup and may reap expired owners; they are not offline recovery readers.
 
 For MCP, CLI and library examples, see [workflows](docs/usage.md).
 
