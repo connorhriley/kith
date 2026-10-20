@@ -1,8 +1,13 @@
 name: Windows validation
 on:
+  push:
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   workflows:
     runs-on: windows-latest
@@ -30,3 +35,4 @@ jobs:
           name: windows-node-${{ matrix.node }}
           path: artifacts/windows.json
           if-no-files-found: error
+          retention-days: 14

@@ -35,7 +35,7 @@ The [reliability contract](docs/reliability.md) defines ownership, verification,
 
 ## Quick start
 
-Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Development targets macOS and Linux. Windows is unvalidated.
+Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workflows target macOS and Linux. Current source also validates native Windows MCP claims, worktrees, ports, integration and recovery; supervised mutex commands and shell hooks require macOS/Linux or WSL. The Windows fixes are unreleased and are not in npm 0.1.0. See the [support evidence](docs/client-validation.md#native-windows).
 
 Install the release, then configure your project:
 
@@ -96,7 +96,7 @@ Default setup installs MCP configuration for Claude, Codex and Cursor plus agent
 | --- | --- |
 | Claude Code | MCP; optional edit hooks need shared session setup; recorded native CLI runs |
 | Codex | Project MCP configuration; recorded native CLI runs with configuration overrides |
-| Cursor | MCP and optional native hooks; generated-command fixtures tested; native application behavior unvalidated |
+| Cursor | Native CLI workflow and fail-closed edit hooks validated; GUI discovery/trust unvalidated |
 | Other MCP clients | stdio server via `kith mcp`; client-specific validation required |
 
 Native checks are version-specific. GUI discovery and persisted project trust need separate checks. See [integration setup](docs/integrations.md), [recorded validation](docs/client-validation.md), and [session ownership](docs/sessions-and-mutexes.md) before mixing hooks, CLI commands, and MCP clients.

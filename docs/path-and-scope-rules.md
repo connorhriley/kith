@@ -36,7 +36,7 @@ Existing literal path prefixes are physically resolved before containment checks
 
 A wildcard can hide a symlink below its literal prefix. When a lexical comparison is disjoint, Kith checks relevant filesystem entries in active checkouts and retains exclusion if an alias makes the result uncertain. Scan errors or the 10,000-entry scan bound also retain exclusion. This favors extra conflicts over overlapping access. Release scopes or use narrower literal prefixes to reduce uncertainty.
 
-Path checks assume a stable layout during the check/write boundary. They do not provide protection against a hostile process swapping symlinks concurrently, hardlink aliases or clients bypassing Kith. Windows path behavior remains unvalidated.
+Path checks assume a stable layout during the check/write boundary. They do not provide protection against a hostile process swapping symlinks concurrently, hardlink aliases or clients bypassing Kith. Current source exercises native Windows absolute/Git-style concrete paths and internal/escaping directory junctions in the platform workflow. Concrete native Windows file paths accept backslash separators; scope expressions still use the documented forward-slash grammar. Native shell hooks remain unsupported.
 
 ## Integration and conflicts
 

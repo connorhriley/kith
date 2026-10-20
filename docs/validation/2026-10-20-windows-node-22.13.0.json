@@ -1,0 +1,17 @@
+{
+  "platform": "win32",
+  "node": "v22.13.0",
+  "passed": true,
+  "phase": "complete",
+  "checks": [
+    "owned sessions, refused overlap and refused capability theft",
+    "native absolute and Git-style paths, literal brackets, internal/escaping links, isolated worktrees and distinct port leases",
+    "unsupported process-group supervision refused without execution or leaked guards",
+    "dirty preview refusal, committed preview, failed verification and successful retry/integration",
+    "killed MCP owner recovered with new capability and preserved worktree, then integrated",
+    "offline inspection preserves original state; tracked MCP setup/uninstall preserves integrated work"
+  ],
+  "git": "git version 2.56.0.windows.2",
+  "sourceCommit": "5babcfee7fd8977352f3b58ac9e54fdd45e2ce79",
+  "hostedRun": "https://github.com/connorhriley/kith/actions/runs/39408240569"
+}

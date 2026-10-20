@@ -12,7 +12,7 @@ export function doctorReport(directory=process.cwd()) {
   const check=(name:string,ok:boolean,detail:string)=>checks.push({name,ok,detail});
   const [major,minor]=process.versions.node.split('.').map(Number);
   check('node',major===22 && minor>=13 || major>=24,process.version);
-  check('platform',process.platform==='darwin'||process.platform==='linux',process.platform==='win32'?'Windows ownership and process-group supervision are not validated':process.platform);
+  check('platform',process.platform==='darwin'||process.platform==='linux',process.platform==='win32'?'Native Windows is limited to MCP coordination; supervised mutex commands and shell hooks require macOS/Linux or WSL':process.platform);
   try {
     const version=execFileSync('git',['--version'],{encoding:'utf8',timeout:2000}).trim();
     const parts=/\b(\d+)\.(\d+)/.exec(version);

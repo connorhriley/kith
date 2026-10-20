@@ -1,6 +1,6 @@
 # Client integrations
 
-Build and link the checkout first. Generated configurations use the `kith` executable already on PATH; they do not download an unverified package at hook execution time.
+Install Kith persistently or build and link the checkout first. On macOS/Linux, generated configurations use the `kith` executable already on PATH; they do not download an unverified package at hook execution time.
 
 | Selection | Files and behavior |
 | --- | --- |
@@ -50,7 +50,7 @@ Cursor's native `preToolUse`/`postToolUse` adapter handles `Shell`, `Write` and 
 
 ## Diagnose and undo setup
 
-`kith doctor` checks Node/Git versions, supported platform, the CLI on PATH, parseable MCP configuration, recorded session environment, guard failure policy and worktree health. It does not execute configured hooks, establish project trust, authenticate clients or prove that a supplied token is valid. Windows is reported unvalidated. A missing/broken check exits nonzero and leaves configuration/state untouched.
+`kith doctor` checks Node/Git versions, supported platform, the CLI on PATH, parseable MCP configuration, recorded session environment, guard failure policy and worktree health. It does not execute configured hooks, establish project trust, authenticate clients or prove that a supplied token is valid. Native Windows is reported limited: MCP coordination is tested, while supervised mutex commands and shell hooks require macOS/Linux or WSL. A missing/broken check exits nonzero and leaves configuration/state untouched.
 
 Before writing selected client files, init persists private original-byte/mode backups in the shared coordination directory's `setup/` subdirectory. Each checkout has its own ledger. An exclusive `setup.lock` serializes cooperative setup/uninstall. A partial write can leave configuration requiring review; original backups remain available. Stop clients and inspect a stale lock before removing it manually. Never delete the ledger as routine cleanup.
 
@@ -73,3 +73,8 @@ An MCP client can instead use a pinned registry launcher without a global instal
 ```
 
 Use a version you have verified; the unrelated npm package named `kith` is not Kith's distribution. Hook commands still need their configured executable to remain available. The clean-package smoke check exercises the installed binary, library, supervised worker and actual MCP discovery/status in a separate consumer.
+
+
+## Native Windows source setup
+
+The unreleased Windows fixes generate MCP configuration using the current absolute Node executable and built CLI path, avoiding `.cmd` launcher/shell quoting. Use `kith init --mcp-only` and review the generated paths; rerun setup if the Node/Kith installation moves. Native Windows setup refuses shell hooks and shims before configuration writes. Supervised mutex commands are also refused. Use WSL for those full workflows. The `npx` example above is a POSIX launcher; do not assume a native Windows client can spawn `npx.cmd` directly. See [platform proof and limits](client-validation.md#native-windows).

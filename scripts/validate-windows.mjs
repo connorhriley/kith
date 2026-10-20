@@ -43,6 +43,7 @@ try {
  fs.mkdirSync(path.join(root,'src'));fs.writeFileSync(path.join(root,'src/base.mjs'),'export const base = true;\n');
  git(root,'add','.');git(root,'commit','-qm','Platform fixture');
  report.git=git(root,'--version');
+ try {report.autocrlf=git(root,'config','--get','core.autocrlf');}catch{report.autocrlf='unset';}
  const {client:one,transport}=await connect(),{client:two}=await connect();
  const a=await call(one,'kith_begin_work',{agentId:'alpha',title:'Alpha',scopeGlobs:['file:src/routes/[id]/page.mjs'],isolateWorktree:true});
  const refused=await two.callTool({name:'kith_begin_work',arguments:{agentId:'beta',title:'Overlap probe',scopeGlobs:['file:src/routes/[id]/page.mjs']}});
@@ -114,6 +115,18 @@ try {
  assert.equal(JSON.parse(command('uninstall')).ok,true);assert.equal(fs.existsSync(path.join(root,'.cursor/mcp.json')),false);
  assert.equal(fs.readFileSync(path.join(root,'src/recovered.mjs'),'utf8').replaceAll('\r\n','\n'),'export const recovered = true;\n');
  report.checks.push('offline inspection preserves original state; tracked MCP setup/uninstall preserves integrated work');
+ report.phase='damaged state preservation';
+ fs.writeFileSync(path.join(state,'state.db'),'deliberately damaged disposable database');
+ const damaged=fingerprints(state);
+ for(const args of [['status','--offline'],['recover']]) {
+  let response;try{response=command(...args);}catch(error){response=error.stdout;}
+  assert.equal(JSON.parse(String(response)).state,'unavailable');
+ }
+ assert.throws(()=>command('init','--mcp-only','--only','cursor'));
+ assert.deepEqual(fingerprints(state),damaged);
+ assert.equal(fs.existsSync(path.join(root,'.cursor/mcp.json')),false);
+ assert.equal(fs.readFileSync(path.join(root,'src/recovered.mjs'),'utf8').replaceAll('\r\n','\n'),'export const recovered = true;\n');
+ report.checks.push('damaged state refused without replacing database, creating client config or losing integrated work');
  report.phase='complete';report.passed=true;
 } catch(error) {
  report.location=error.stack?.split('\n').find(line=>line.includes('validate-windows.mjs:'))?.trim();
