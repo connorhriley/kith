@@ -35,12 +35,12 @@ The [reliability contract](docs/reliability.md) defines ownership, verification,
 
 ## Quick start
 
-Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workflows target macOS and Linux. Current source also validates native Windows MCP claims, worktrees, ports, integration and recovery; supervised mutex commands and shell hooks require macOS/Linux or WSL. The Windows fixes are unreleased and are not in npm 0.1.0. See the [support evidence](docs/client-validation.md#native-windows).
+Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workflows target macOS and Linux. Version 0.1.1 also validates native Windows MCP claims, worktrees, ports, integration and recovery; supervised mutex commands and shell hooks require macOS/Linux or WSL. See the [support evidence](docs/client-validation.md#native-windows).
 
 Install the release, then configure your project:
 
 ```sh
-npm install --global kith-coord@0.1.0
+npm install --global kith-coord@0.1.1
 cd /path/to/your/project
 kith init
 ```

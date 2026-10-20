@@ -1,11 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 — 2026-10-20
 
 - Validate the real Cursor CLI model/editor/MCP workflow and missing-guard refusal, with redacted reusable proof.
 - Identify native Windows session owners through process creation time; accept native and Git-style concrete paths while preserving link containment.
 - Generate Windows MCP launchers with the current Node executable and built CLI, avoiding npm `.cmd` spawning. Refuse unsupported native shell-hook setup before writes.
-- Exercise native Windows worktrees, conflict refusal, ports, verification/retry, crash recovery and conservative setup/uninstall on hosted runners. Supervised mutex commands remain refused on native Windows.
+- Exercise native Windows worktrees, conflict refusal, ports, verification/retry, crash recovery and conservative setup/uninstall on hosted runners against clean installed packages (registry installs on release tags). Supervised mutex commands remain refused on native Windows.
 - Flush setup backup files on Windows without unsupported directory fsync; directory-entry durability across power loss is not promised there.
 
 ## 0.1.0 — 2026-10-20

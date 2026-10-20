@@ -1,6 +1,6 @@
 {
   "name": "kith-coord",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local coordination for cooperating coding agents: work claims, isolated worktrees, shared resources, and verified integration without a hosted service.",
   "type": "module",
   "bin": {

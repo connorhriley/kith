@@ -33,7 +33,7 @@ These are test scenarios, not universal guarantees. CI coverage and real usage n
 
 **Bash recovery.** Snapshots skip large files, symlinks, and generated/dependency directories. One snapshot is stored per agent. Overlapping commands can replace snapshots, and a shared-workspace snapshot cannot distinguish a sibling's legitimate concurrent edits from a command's unauthorized edits. The default saves current and pre-command recovery copies without changing workspace bytes. Explicit library callers can opt into `restoreLockedFiles: true` only when they control all writers; restoration is best effort and can restore older bytes. Prefer worktrees. This is not a safe attribution or security mechanism.
 
-**Native Windows.** Current source validates MCP claims, worktrees, ports, integration, killed-owner recovery and conservative setup. Supervised mutex commands and shell hooks remain refused; use macOS/Linux or WSL for those guarantees. See [platform evidence](client-validation.md#native-windows). These fixes are not in npm 0.1.0.
+**Native Windows.** Version 0.1.1 validates MCP claims, worktrees, ports, integration, killed-owner recovery and conservative setup. Supervised mutex commands and shell hooks remain refused; use macOS/Linux or WSL for those guarantees. See [platform evidence](client-validation.md#native-windows). These fixes are included in npm `kith-coord@0.1.1`.
 
 **Ports.** A reservation coordinates Kith clients but releases its OS probe socket immediately. Another process can bind the port before your service does. Handle bind failures.
 

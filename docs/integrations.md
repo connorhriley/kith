@@ -64,17 +64,17 @@ Uninstall restores the exact original bytes/permissions or deletes files created
 
 ## Registry installation
 
-The package is `kith-coord`, and its binary remains `kith`. Install it persistently (`npm install --global kith-coord@0.1.0`) before `kith init`, because generated configurations launch `kith` on PATH. Invoking init through npx alone does not create that persistent executable.
+The package is `kith-coord`, and its binary remains `kith`. Install it persistently (`npm install --global kith-coord@0.1.1`) before `kith init`, because generated configurations launch `kith` on PATH. Invoking init through npx alone does not create that persistent executable.
 
 An MCP client can instead use a pinned registry launcher without a global install:
 
 ```json
-{"mcpServers":{"kith":{"command":"npx","args":["--yes","--package","kith-coord@0.1.0","kith","mcp","--repo","/absolute/checkout"]}}}
+{"mcpServers":{"kith":{"command":"npx","args":["--yes","--package","kith-coord@0.1.1","kith","mcp","--repo","/absolute/checkout"]}}}
 ```
 
 Use a version you have verified; the unrelated npm package named `kith` is not Kith's distribution. Hook commands still need their configured executable to remain available. The clean-package smoke check exercises the installed binary, library, supervised worker and actual MCP discovery/status in a separate consumer.
 
 
-## Native Windows source setup
+## Native Windows setup
 
-The unreleased Windows fixes generate MCP configuration using the current absolute Node executable and built CLI path, avoiding `.cmd` launcher/shell quoting. Use `kith init --mcp-only` and review the generated paths; rerun setup if the Node/Kith installation moves. Native Windows setup refuses shell hooks and shims before configuration writes. Supervised mutex commands are also refused. Use WSL for those full workflows. The `npx` example above is a POSIX launcher; do not assume a native Windows client can spawn `npx.cmd` directly. See [platform proof and limits](client-validation.md#native-windows).
+Version 0.1.1 generates MCP configuration using the current absolute Node executable and built CLI path, avoiding `.cmd` launcher/shell quoting. Use `kith init --mcp-only` and review the generated paths; rerun setup if the Node/Kith installation moves. Native Windows setup refuses shell hooks and shims before configuration writes. Supervised mutex commands are also refused. Use WSL for those full workflows. The `npx` example above is a POSIX launcher; do not assume a native Windows client can spawn `npx.cmd` directly. See [platform proof and limits](client-validation.md#native-windows).

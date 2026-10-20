@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-const cli=fileURLToPath(new URL('../dist/cli/index.js',import.meta.url));
+const cli=process.env.KITH_VALIDATION_CLI??fileURLToPath(new URL('../dist/cli/index.js',import.meta.url));
 const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"kith platform ' spaces ")));
 const env=Object.fromEntries(Object.entries(process.env).filter(([key,value])=>value!==undefined&&!key.startsWith('KITH_')));
 const clients=[];
@@ -38,6 +38,9 @@ function fingerprints(dir) {
  }));
 }
 try {
+ report.packageVersion=execFileSync(process.execPath,[cli,'--version'],{encoding:'utf8'}).trim();
+ report.packageSource=process.env.KITH_VALIDATION_SOURCE??'source';
+ assert.equal(report.packageVersion,JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8')).version);
  git(root,'init','-q');git(root,'config','user.name','Kith platform fixture');git(root,'config','user.email','fixture@example.test');
  fs.writeFileSync(path.join(root,'.gitignore'),'.coord/\n.cursor/\n.claude/\n.codex/\n.mcp.json\nAGENTS.md\n.agent/\n');
  fs.mkdirSync(path.join(root,'src'));fs.writeFileSync(path.join(root,'src/base.mjs'),'export const base = true;\n');

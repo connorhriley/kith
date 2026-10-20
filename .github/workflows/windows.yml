@@ -27,6 +27,27 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - name: Install a clean package consumer
+        shell: pwsh
+        run: |
+          $releaseManifest = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -eq "v$($releaseManifest.version)") {
+            $packageSource = "$($releaseManifest.name)@$($releaseManifest.version)"
+            $sourceKind = 'registry'
+          } else {
+            $packed = npm pack --ignore-scripts --json --pack-destination $env:RUNNER_TEMP | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $packageSource = Join-Path $env:RUNNER_TEMP $packed[0].filename
+            $sourceKind = 'archive'
+          }
+          $consumer = Join-Path $env:RUNNER_TEMP 'kith clean consumer'
+          $cache = Join-Path $env:RUNNER_TEMP 'kith clean npm cache'
+          New-Item -ItemType Directory -Force $consumer | Out-Null
+          npm install --prefix $consumer --cache $cache --registry https://registry.npmjs.org --ignore-scripts --no-audit --no-fund $packageSource
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installedCli = Join-Path $consumer "node_modules/$($releaseManifest.name)/dist/cli/index.js"
+          "KITH_VALIDATION_CLI=$installedCli" >> $env:GITHUB_ENV
+          "KITH_VALIDATION_SOURCE=$sourceKind" >> $env:GITHUB_ENV
       - run: node scripts/validate-windows.mjs artifacts/windows.json
       - name: Preserve native Windows evidence
         if: always()
