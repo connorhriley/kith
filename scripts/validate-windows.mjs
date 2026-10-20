@@ -54,10 +54,17 @@ try {
  fs.mkdirSync(path.dirname(fileA),{recursive:true});fs.writeFileSync(fileA,'export const alpha = true;\n');
  fs.writeFileSync(path.join(b.worktree.worktreePath,'src/beta.mjs'),'export const beta = true;\n');
  await call(one,'kith_record_file_edit',{agentId:'alpha',filePath:fileA});
+ const alias=path.join(a.worktree.worktreePath,'route-link'),escape=path.join(a.worktree.worktreePath,'outside-link');
+ fs.symlinkSync(path.dirname(fileA),alias,process.platform==='win32'?'junction':'dir');
+ await call(one,'kith_record_file_edit',{agentId:'alpha',filePath:path.join(alias,'page.mjs').split(path.sep).join('/')});
+ fs.symlinkSync(path.join(root,'src'),escape,process.platform==='win32'?'junction':'dir');
+ assert.equal((await one.callTool({name:'kith_record_file_edit',arguments:{agentId:'alpha',filePath:path.join(escape,'base.mjs')}})).isError,true);
+ fs.rmSync(alias);fs.rmSync(escape);
+
  await call(two,'kith_record_file_edit',{agentId:'beta',filePath:path.join(b.worktree.worktreePath,'src/beta.mjs')});
  const ports=await Promise.all([call(one,'kith_acquire_port',{agentId:'alpha',serviceName:'web'}),call(two,'kith_acquire_port',{agentId:'beta',serviceName:'web'})]);
  assert.notEqual(ports[0].port,ports[1].port);
- report.checks.push('native absolute paths, literal bracket filenames, independent worktrees and distinct port leases');
+ report.checks.push('native absolute and Git-style paths, literal brackets, internal/escaping links, isolated worktrees and distinct port leases');
  if(process.platform==='win32') {
   const marker=path.join(root,'must-not-run');
   const blocked=await one.callTool({name:'kith_run_with_mutex',arguments:{agentId:'alpha',mutexName:'unsupported',command:[process.execPath,'-e',`require('node:fs').writeFileSync(${JSON.stringify(marker)},'bad')`]}});

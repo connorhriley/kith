@@ -4,6 +4,7 @@ import { discoverRepository, isWithin, physicalPath } from '../core/repository.j
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { KithEngine } from '../core/engine.js';
 import { enforcementMode, type EnforcementMode } from './hook-handler.js';
@@ -55,6 +56,9 @@ export function initializeKithRepository(
   for (const integration of selected) {
     if (!INTEGRATIONS.includes(integration)) throw new Error(`Unknown integration: ${integration}`);
   }
+  if (process.platform === 'win32' && !mcpOnly && ['claude', 'cursor', 'git', 'shims'].some(name => selected.has(name as Integration))) {
+    throw new Error('Native Windows setup supports MCP-only configuration; use --mcp-only or WSL for shell hooks and shims.');
+  }
   if (!fs.statSync(absRoot).isDirectory()) throw new Error(`Not a directory: ${absRoot}`);
   const plan = new Map<string, { content: string; mode?: number }>();
   const warnings: string[] = [];
@@ -67,7 +71,13 @@ export function initializeKithRepository(
   };
   const json = (name: string, value: unknown) => add(name, JSON.stringify(value, null, 2) + '\n');
   const hookCommand = `${cliBinaryCommand} --repo ${shellQuote(absRoot)} hook`;
-  const server = { command: 'kith', args: ['mcp', '--repo', absRoot] };
+  // Native clients cannot spawn npm's .cmd launcher directly. Avoid cmd.exe quoting entirely.
+  const windowsCli = process.platform === 'win32' ? ['./cli/index.js', './index.js', '../../dist/cli/index.js']
+    .map(relative => fileURLToPath(new URL(relative, import.meta.url))).find(file => fs.existsSync(file)) : undefined;
+  if (process.platform === 'win32' && !windowsCli) throw new Error('Build Kith before generating native Windows MCP configuration');
+  const server = windowsCli
+    ? { command: process.execPath, args: [windowsCli, 'mcp', '--repo', absRoot] }
+    : { command: 'kith', args: ['mcp', '--repo', absRoot] };
 
   const ignorePath = path.join(absRoot, '.gitignore');
   const ignore = fs.existsSync(ignorePath) ? fs.readFileSync(ignorePath, 'utf8') : '';

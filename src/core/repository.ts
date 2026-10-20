@@ -11,6 +11,7 @@ export interface RepositoryLayout {
 
 /** Resolve missing leaves through their nearest existing parent; never hide a broken link. */
 export function physicalPath(input: string): string {
+  if (process.platform === 'win32') input = input.replaceAll('/', path.sep);
   const absolute = path.isAbsolute(input) ? input : process.cwd() + path.sep + input;
   let current = path.parse(absolute).root;
   for (const component of absolute.slice(current.length).split(path.sep)) {
@@ -38,7 +39,7 @@ export function isWithin(root: string, target: string): boolean {
 
 /** Resolve a concrete file, including missing leaves, and refuse symlinks leaving the checkout. */
 export function repositoryFile(root: string, file: string): string {
-  if (!file || /[\\\x00-\x1f\x7f]/u.test(file)) throw new Error(`Invalid file path: ${file}`);
+  if (!file || /[\x00-\x1f\x7f]/u.test(file) || process.platform !== 'win32' && file.includes('\\')) throw new Error(`Invalid file path: ${file}`);
   const canonicalRoot = physicalPath(root);
   const target = physicalPath(path.isAbsolute(file) ? file : canonicalRoot + path.sep + file);
   if (!isWithin(canonicalRoot, target) || target === canonicalRoot) {

@@ -35,7 +35,8 @@ function persist(root:string,coordDir:string,ledger:Ledger) {
   const fd=fs.openSync(temp,'wx',0o600);
   try {fs.writeFileSync(fd,JSON.stringify(ledger,null,2)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
   fs.renameSync(temp,file);
-  for (const parent of [path.dirname(file), coordDir]) {
+  // Node cannot open directory handles for fsync on Windows; the backup file itself is flushed above.
+  for (const parent of process.platform === 'win32' ? [] : [path.dirname(file), coordDir]) {
     const dir=fs.openSync(parent,'r');try{fs.fsyncSync(dir);}finally{fs.closeSync(dir);}
   }
 }
@@ -58,7 +59,7 @@ export function applySetupPlan(root:string,coordDir:string,plan:Plan,warnings:st
       if(previous&&(previous.drifted||previous.after!==current||previous.afterMode!==mode)) {
         previous.drifted=true;warnings.push(`User changes in ${relative} will be preserved by uninstall; review that file manually.`);
       } else ledger.files[relative]={before:previous?previous.before:current,after:Buffer.from(planned.content).toString('base64'),beforeMode:previous?previous.beforeMode:mode,
-        afterMode:mode??((planned.mode??0o666)&~process.umask())};
+        afterMode:mode??(process.platform === 'win32' ? 0o666 : ((planned.mode??0o666)&~process.umask()))};
     }
     persist(root,coordDir,ledger);
     for(const [name,planned] of plan) {
