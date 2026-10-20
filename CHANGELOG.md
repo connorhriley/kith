@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 — 2026-10-20
+
+- Add the official MCP Registry ownership marker and server manifest, with pinned npm launch and a required repository path.
+- Clarify npm-first client onboarding and expose the public package version in the README. No coordination/runtime behavior, dependencies or schema changes.
+
 ## 0.1.1 — 2026-10-20
 
 - Validate the real Cursor CLI model/editor/MCP workflow and missing-guard refusal, with redacted reusable proof.

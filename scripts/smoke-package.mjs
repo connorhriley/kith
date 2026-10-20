@@ -16,6 +16,12 @@ try {
   const [packed] = JSON.parse(run('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', temp], root));
   const files = packed.files.map((file) => file.path);
   assert(files.includes('LICENSE'));
+  assert(files.includes('server.json'));
+  const listing = JSON.parse(fs.readFileSync(path.join(root, 'server.json'), 'utf8'));
+  assert.equal(listing.name, manifest.mcpName);
+  assert.equal(listing.version, manifest.version);
+  assert.equal(listing.packages[0].identifier, manifest.name);
+  assert.equal(listing.packages[0].version, manifest.version);
   assert(files.includes('dist/index.d.ts'));
   assert(files.includes('dist/command-worker.js'));
   assert(!files.some((file) => file.startsWith('.coord/') || file.startsWith('node_modules/')));

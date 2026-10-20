@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/connorhriley/kith/actions/workflows/ci.yml"><img src="https://github.com/connorhriley/kith/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://www.npmjs.com/package/kith-coord"><img src="https://img.shields.io/npm/v/kith-coord" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22C55E" alt="MIT license"></a>
 </p>
 
@@ -40,8 +41,9 @@ Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workf
 Install the release, then configure your project:
 
 ```sh
-npm install --global kith-coord@0.1.1
+npm install --global kith-coord@0.1.2
 cd /path/to/your/project
+kith init --dry-run
 kith init
 ```
 
@@ -78,17 +80,7 @@ The implementation is in [examples/two-agents.mjs](examples/two-agents.mjs). Thi
 
 ### Connect your client
 
-Link the built CLI, then switch to the repository you want to coordinate:
-
-```sh
-# From the Kith checkout
-pnpm link --global
-kith help
-
-# From your target repository, preview the selected integrations first
-kith init --dry-run
-kith init
-```
+After the npm quick start above, restart your coding client in that project and approve its Kith MCP connection. Generated configuration uses the installed `kith` executable; no source checkout or `pnpm link` is needed. Review and commit the generated files before asking agents to integrate work.
 
 Default setup installs MCP configuration for Claude, Codex and Cursor plus agent instructions, without adding hooks or package-manager shims. Review and commit the generated configuration before starting work; integration requires a clean target checkout. Restart your client with `kith` on its `PATH`. To select clients, use `--mcp-only --only claude,codex,agents`. Existing hooks are preserved; review warnings if they require an inherited session. See [hook setup](docs/integrations.md) if you need them.
 

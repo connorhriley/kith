@@ -1,6 +1,6 @@
 {
   "name": "kith-coord",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local coordination for cooperating coding agents: work claims, isolated worktrees, shared resources, and verified integration without a hosted service.",
   "type": "module",
   "bin": {
@@ -17,6 +17,7 @@
   },
   "files": [
     "dist",
+    "server.json",
     "README.md",
     "LICENSE",
     "docs",
@@ -81,5 +82,6 @@
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org"
-  }
+  },
+  "mcpName": "io.github.connorhriley/kith"
 }
