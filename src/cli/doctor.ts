@@ -18,10 +18,14 @@ export function doctorReport(directory=process.cwd()) {
     const parts=/\b(\d+)\.(\d+)/.exec(version);
     check('git',Boolean(parts && (Number(parts[1])>2 || Number(parts[1])===2 && Number(parts[2])>=38)),version);
   } catch {check('git',false,'Git 2.38+ must be available on PATH');}
-  const executable=(process.env.PATH??'').split(path.delimiter).some(dir=>{
-    try {fs.accessSync(path.join(dir,process.platform==='win32'?'kith.cmd':'kith'),fs.constants.X_OK);return true;} catch{return false;}
-  });
-  check('kith-on-path',executable,'Generated client configurations launch kith; install/link the CLI and restart the client after PATH changes');
+  const executable = (command: string) => {
+    const candidates = path.isAbsolute(command) ? [command]
+      : (process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, command));
+    return candidates.some(file => {
+      try { fs.accessSync(file, fs.constants.X_OK); return fs.statSync(file).isFile(); }
+      catch { return false; }
+    });
+  };
   let configured=0;
   for(const [client,file] of [['claude','.mcp.json'],['cursor','.cursor/mcp.json'],['codex','.codex/config.toml']] as const) {
     const target=path.join(root,file); if(!fs.existsSync(target)) continue;
@@ -31,7 +35,7 @@ export function doctorReport(directory=process.cwd()) {
       const config=client==='codex'?parseToml(text):JSON.parse(text);
       const server=client==='codex'?config.mcp_servers?.kith:config.mcpServers?.kith;
       if(!server) continue;configured++;
-      check(`${client}-mcp`,typeof server.command==='string' && Array.isArray(server.args),'Kith stdio command/arguments configured; native client trust and discovery require client validation');
+      check(`${client}-mcp`,typeof server.command==='string' && Array.isArray(server.args) && executable(server.command),'Kith stdio launcher must be executable by absolute path or PATH; native client trust and MCP discovery require client validation');
     } catch {check(`${client}-mcp`,false,`Cannot parse ${file}; existing configuration was preserved`);}
   }
   check('mcp-configuration',configured>0,'Configure the clients you use with kith init; diagnostics do not change client settings');

@@ -44,3 +44,14 @@ it('diagnoses missing inherited ownership when native hooks are installed withou
  const before=fs.readFileSync(path.join(root,'.coord/state.db')),report=doctorReport(root);
  expect(report.checks.find(c=>c.name==='session-environment')?.ok).toBe(false);expect(fs.readFileSync(path.join(root,'.coord/state.db'))).toEqual(before);
 });
+
+
+it('diagnoses the configured MCP launcher instead of requiring a global kith binary for an explicit launcher',()=>{
+ initializeKithRepository(root,'kith',{integrations:['claude'],mcpOnly:true});
+ const file=path.join(root,'.mcp.json'),config=JSON.parse(fs.readFileSync(file,'utf8'));
+ config.mcpServers.kith={command:process.execPath,args:[path.resolve('dist/cli/index.js'),'mcp','--repo',root]};
+ fs.writeFileSync(file,JSON.stringify(config));
+ expect(doctorReport(root).checks.find(c=>c.name==='claude-mcp')?.ok).toBe(true);
+ config.mcpServers.kith.command=path.join(root,'missing-launcher');fs.writeFileSync(file,JSON.stringify(config));
+ expect(doctorReport(root).checks.find(c=>c.name==='claude-mcp')?.ok).toBe(false);
+});
