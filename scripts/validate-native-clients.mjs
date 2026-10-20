@@ -88,6 +88,18 @@ try {
         ? events.filter((e) => e.type === 'item.completed' && e.item?.type === 'mcp_tool_call' && e.item.server === 'kith').map((e) => e.item.tool)
         : events.flatMap((e) => e.type === 'assistant' ? e.message?.content ?? [] : []).filter((b) => b.type === 'tool_use' && b.name.startsWith('mcp__kith__')).map((b) => b.name.slice('mcp__kith__'.length));
       result.tools = calls;
+      // Preserve outcome fields, never raw arguments/results (which contain bearer capabilities).
+      if (client === 'codex') result.toolOutcomes = events
+        .filter(e => e.type === 'item.completed' && e.item?.type === 'mcp_tool_call' && e.item.server === 'kith')
+        .map(({item}) => {
+          const reply = item.result?.structured_content ?? {};
+          const diagnostic = JSON.stringify(item.error ?? item.result ?? {});
+          const category = ['Mutex lease lost', 'session capability', 'process identity', 'Operation not permitted', 'Command timed out', 'Worker exited', 'No such file', 'Invalid arguments']
+            .find(label => diagnostic.toLowerCase().includes(label.toLowerCase()));
+          return {tool:item.tool, status:item.status, ok:typeof reply.ok === 'boolean' ? reply.ok : undefined,
+            exitCode:typeof reply.exitCode === 'number' ? reply.exitCode : undefined,
+            isError:item.result?.is_error ?? item.result?.isError, category};
+        });
       if (client === 'claude') {
         const native = events.flatMap((e) => e.type === 'assistant' ? e.message?.content ?? [] : []).filter((b) => b.type === 'tool_use');
         const attempt = native.find((b) => b.name === 'Edit' && b.input?.file_path === path.join(root, 'src/blocked.mjs'));

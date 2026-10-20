@@ -2,7 +2,7 @@
 
 Use the latest reviewed source on `main` and include your commit or version when reporting an issue. Kith runs with the invoking user's privileges and cannot contain a malicious agent that can bypass hooks, write the coordination database, or invoke Git directly.
 
-Do not post exploit details, source snapshots, credentials, or quarantine contents in public issues. No private reporting channel is configured in this checkout. Before public launch, maintainers must enable private vulnerability reporting on the upstream repository or publish a monitored security contact. Until then, request a private channel without disclosing the vulnerability.
+Do not post exploit details, source snapshots, credentials, or quarantine contents in public issues. Use [GitHub private vulnerability reporting](https://github.com/connorhriley/kith/security/advisories/new), enabled on the canonical upstream. Include a minimal reproduction and affected version; do not disclose the report in a public issue.
 
 For ordinary reliability bugs, provide a minimal disposable repository and redacted steps. Quarantine and snapshot files can contain full source files and secrets. Treat `.coord` as sensitive local state, keep it out of Git, and inspect it before sharing diagnostics.
 

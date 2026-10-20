@@ -1,6 +1,6 @@
 {
-  "name": "kith",
-  "version": "1.0.0",
+  "name": "kith-coord",
+  "version": "0.1.0",
   "description": "Local coordination for cooperating coding agents: work claims, isolated worktrees, shared resources, and verified integration without a hosted service.",
   "type": "module",
   "bin": {
@@ -39,7 +39,9 @@
     "prepack": "tsup",
     "test:package": "pnpm build && node scripts/smoke-package.mjs",
     "demo": "pnpm build && node examples/two-agents.mjs",
-    "test:clients": "pnpm build && node scripts/validate-native-clients.mjs"
+    "test:clients": "pnpm build && node scripts/validate-native-clients.mjs",
+    "protocol:export": "pnpm build && node scripts/export-protocol.mjs",
+    "protocol:check": "node scripts/export-protocol.mjs --check"
   },
   "keywords": [
     "ai-agents",
@@ -75,5 +77,9 @@
   "homepage": "https://github.com/connorhriley/kith#readme",
   "bugs": {
     "url": "https://github.com/connorhriley/kith/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   }
 }

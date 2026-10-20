@@ -24,12 +24,19 @@ These gates are covered locally. Version-specific native Codex and Claude CLI ru
 
 ## 4. Broaden integration validation
 
-Add more client adapter payload fixtures, tested setup rollback/uninstall, and manual workflows against actual Claude/Cursor/Codex application releases. Extend the current stdio/hook lifecycle and cancellation tests to other supported payload shapes. Cover paths with spaces, nested workspaces, custom Git hooks, missing Git identity, and crashes. Measure latency and memory in reproducible small and large repository fixtures before publishing performance claims.
+Cursor native hook payload/command fixtures, enforcement modes, private setup backups and conservative uninstall are implemented. Add manual workflows against actual Claude/Cursor/Codex application releases. Extend the current stdio/hook lifecycle and cancellation tests to other supported payload shapes. Cover paths with spaces, nested workspaces, custom Git hooks, missing Git identity, and crashes. Measure latency and memory in reproducible small and large repository fixtures before publishing performance claims.
 
 ## 5. Public project and release operations
 
-The canonical upstream is established. Confirm the package namespace, maintainers, private security/moderation contacts, and decision process. Run the CI matrix on real pull requests. Publish a prerelease only after a packed-package clean-install check, dependency review, documented support matrix, changelog, rollback procedure, and end-to-end demo. Add provenance and automated publishing after ownership and credentials are established.
+The canonical upstream is established. The package identity is `kith-coord` (CLI `kith`); release checks include an actual installed-package MCP consumer. Input schemas and claim/status semantics are recorded under protocol 1.0 with a CI drift check. Maintain registry ownership, maintainer access, security/moderation contacts and the decision process. Private vulnerability reporting is enabled on the canonical upstream. Run the CI matrix on real pull requests. Publish a prerelease only after a packed-package clean-install check, dependency review, documented support matrix, changelog, rollback procedure, and end-to-end demo. Add provenance and automated publishing after ownership and credentials are established.
 
 ## 6. Adaptability after the core is sound
 
 Define parser and client adapter interfaces, add configuration for project-specific verification/hydration, and ship small runnable examples. Prioritize requests backed by concrete user workflows. Keep enforcement, advisory analysis, and presentation separate.
+
+
+## Requested priorities and remaining gates
+
+The current adoption pass adds optional Claude/Cursor block/warn/off hooks, richer status and committed-tree conflict previews, offline inspection/recovery reports, doctor, tracked setup/uninstall and a versioned input-schema snapshot. Atomic task claims/dependencies, port leases, supervised command mutexes, explicit contracts/symbol lock scopes and stopped WAL restore already exist; keep their canonical tool names rather than adding aliases.
+
+Next work needs concrete workflow validation: capability-filtered queue claims, named port/env/install bundles, broader Windows/process validation, and MCP registry publication. Optional notes, PR helpers, interoperable third-party ledgers and fleet spawning are proposals, not implemented behavior or release promises. No dashboard, model router or autonomous PR fixer is planned. Public adoption claims require actual user evidence.

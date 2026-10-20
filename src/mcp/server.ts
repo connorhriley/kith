@@ -1,3 +1,4 @@
+import { KITH_VERSION } from '../version.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -12,7 +13,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
   const engine = new KithEngine(repoRoot);
   const server = new McpServer({
     name: 'kith-coordinator',
-    version: '1.0.0',
+    version: KITH_VERSION,
   }, { instructions: 'Kith coordinates work claims, isolated worktrees, local resources and verified integration for cooperating coding agents. State stays local; no hosted service or model API key is required. Recommended workflow: one isolated worktree per parallel agent. Call kith_begin_work with isolateWorktree:true and explicit scopeGlobs; edit only the returned worktreePath, call kith_record_file_edit, run literal argv with kith_run_with_mutex, and finish with kith_complete_work plus a project verificationCmd. Heartbeat before the session expires. ' + (process.env.KITH_AGENT_ID
     ? `This server shares a session with CLI/hooks. Use agentId '${process.env.KITH_AGENT_ID}'. Its inherited capability is handled internally; do not request or log it.`
     : 'Start with kith_begin_work or kith_start_session and a unique agentId. This connection retains its granted capability. Another connection needs the session token to resume that ID. Keep tokens private.'
@@ -72,7 +73,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
 
   server.tool(
     'kith_begin_work',
-    'Register an agent session, verify no scope lock conflicts exist with sibling agents, acquire monotonic fencing-token locks, and optionally spawn an instant Copy-on-Write git worktree.',
+    'Register an agent session, verify no scope lock conflicts exist with sibling agents, acquire monotonic fencing-token locks, and optionally create an isolated Git worktree.',
     {
       agentId: z.string().describe('Unique identifier for this agent session (e.g. claude-1, codex-auth)'),
       sessionToken: z.string().optional(),
@@ -161,7 +162,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
 
   server.tool(
     'kith_record_file_edit',
-    'Analyze a modified file to extract AST contracts, flag exact name/kind matches in other files as non-blocking reuse hints, check transitive import blast radius, and run a live dirty-tree git merge-tree conflict check.',
+    'Analyze a modified file for supported contract signatures, flag exact name/kind matches in other files as non-blocking reuse hints, check transitive import blast radius, and run a live dirty-tree git merge-tree conflict check.',
     {
       agentId: z.string(),
       sessionToken: z.string().optional(),
@@ -200,7 +201,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
 
   server.tool(
     'kith_acquire_port',
-    'Lease a collision-free local TCP port for running dev servers or test suites in parallel.',
+    'Reserve a local TCP port among cooperating Kith clients; start the service promptly and handle unrelated bind races.',
     {
       agentId: z.string(),
       sessionToken: z.string().optional(),
@@ -251,28 +252,23 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
 
   server.tool(
     'kith_get_status',
-    'Retrieve live coordination state: active agents, file locks, tasks, contracts, dirty-tree conflicts, and leased ports/mutexes.',
+    'Retrieve coordination state, FIFO waiters and guarded commands, plus worktree paths, actual branches, dirty-file overlaps, commit age and ahead/behind against the current integration target HEAD. Normal engine startup may reap expired ownership.',
     {
       agentId: z.string().optional(),
       sessionToken: z.string().optional(),
     },
     async (args) => {
       if (args.agentId) authorize({ ...args, agentId: args.agentId });
-      const state = {
-        repository: { root: engine.coordDb.repoRoot, commonGitDir: engine.coordDb.commonGitDir, coordDir: engine.coordDb.coordDir },
-        runtime: { node: process.version },
-        fencingEpoch: engine.coordDb.currentFencingEpoch(),
-        agents: engine.fencing.listAgents(true),
-        locks: engine.locks.listLocks(),
-        tasks: engine.intents.listTasks(),
-        conflicts: engine.shadowGit.listConflicts(),
-        contracts: engine.depGraph.listContracts(),
-        resources: engine.broker.listResources(),
-        mergeQueue: engine.mergeTrain.listQueue(),
-        quarantined: engine.bashGuard.listQuarantined(),
-      };
+      const state = engine.getStatus();
       return formatReply(args.agentId, state);
     }
+  );
+
+  server.tool(
+    'kith_preview_integrate',
+    'Preview exact Git conflict paths for a committed registered worktree against the current integration target. Refuses dirty inputs; never checkpoints or changes source/target files. A clean preview does not run project verification.',
+    { agentId: z.string(), sessionToken: z.string().optional() },
+    async args => { authorize(args); return formatReply(args.agentId, engine.previewIntegration(args.agentId)); }
   );
 
   server.tool(

@@ -30,6 +30,7 @@ jobs:
       - run: node --check scripts/validate-native-clients.mjs
       - run: pnpm typecheck
       - run: pnpm test --reporter=default --reporter=junit --outputFile=artifacts/tests.xml
+      - run: pnpm protocol:check
       - run: git diff --check
       - run: pnpm test:package
       - run: node examples/two-agents.mjs

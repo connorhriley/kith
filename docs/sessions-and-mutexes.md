@@ -63,7 +63,7 @@ This uses [Node’s POSIX detached-process support](https://nodejs.org/download/
 `executeWithMutex` is asynchronous. Await it before closing the engine; `close()` refuses an engine with active supervised commands.
 
 ```js
-import { KithEngine } from 'kith';
+import { KithEngine } from 'kith-coord';
 const engine = new KithEngine('/absolute/path/to/repository');
 try {
   const session = engine.fencing.registerAgent({ id: 'worker' });

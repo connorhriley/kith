@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0 — 2026-10-20
+
+- Use the npm identity `kith-coord` with CLI `kith`. Protocol version 1.0.0 and storage schema 2 are independent. Earlier source manifests used 1.0.0 without a registry release.
+- Add optional Cursor native hooks and block/warn/off policy modes for native/Git hooks. Ownership and path checks remain mandatory; preserve custom hooks and update recognized generated guards in place.
+- Share CLI/MCP status assembly and report observed worktree branches, dirty paths/overlap, relative commits, heartbeat/commit age, FIFO waiters and command guards. Add owned committed-tree integration previews with exact Git conflict paths and dirty-input refusal.
+- Add offline status, recovery inspection and doctor without initializing, migrating, reaping or writing the original database/sidecars. Unstable/damaged state is unavailable rather than guessed clean.
+- Save private per-checkout setup backups before configuration writes. Uninstall restores only unchanged tracked writes, retaining edited configuration, state, worktrees, recovery copies and ignore protection.
+- Export the 13 canonical MCP input schemas from actual stdio discovery and check snapshot drift in CI; document protocol ownership and integration semantics. No database tables or runtime dependencies added.
+
 ## Unreleased
 
 ### Coordination positioning

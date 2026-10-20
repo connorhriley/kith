@@ -1,8 +1,12 @@
 #!/usr/bin/env node
+import { KITH_VERSION } from '../version.js';
+import { uninstallKith } from './setup-ledger.js';
+import { doctorReport } from './doctor.js';
+import { readCoordinationState, recoveryReport } from '../core/observation.js';
 import { SessionOwnershipError } from '../core/fencing.js';
 import { KithEngine } from '../core/engine.js';
 import { runKithMcpStdioServer } from '../mcp/server.js';
-import { HookHandler } from './hook-handler.js';
+import { enforcementMode, HookHandler } from './hook-handler.js';
 import { INTEGRATIONS, Integration, initializeKithRepository } from './init.js';
 
 function parseFlags(argv: string[]): {
@@ -26,7 +30,7 @@ function parseFlags(argv: string[]): {
       } else {
         const key = arg.slice(2);
         const next = mainArgs[i + 1];
-        if (!['worktree', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only'].includes(key) && next && !next.startsWith('--')) {
+        if (!['worktree', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline'].includes(key) && next && !next.startsWith('--')) {
           flags[key] = next;
           i++;
         } else {
@@ -47,7 +51,7 @@ async function main(): Promise<void> {
   const subCmd = positional[1];
   const repoRoot = typeof flags.repo === 'string' ? flags.repo : process.cwd();
 
-  if (flags.version || cmd === 'version') { console.log('1.0.0'); return; }
+  if (flags.version || cmd === 'version') { console.log(KITH_VERSION); return; }
   if (flags.help || cmd === 'help') { printHelp(); return; }
 
   if (cmd === 'init') {
@@ -56,7 +60,7 @@ async function main(): Promise<void> {
       throw new Error(`--only accepts: ${INTEGRATIONS.join(', ')}`);
     }
     const report = initializeKithRepository(repoRoot, 'kith', {
-      dryRun: Boolean(flags['dry-run']), mcpOnly: flags['mcp-only'] ? true : undefined, integrations: integrations as Integration[] | undefined,
+      enforcement: enforcementMode(flags.enforcement), dryRun: Boolean(flags['dry-run']), mcpOnly: flags['mcp-only'] ? true : undefined, integrations: integrations as Integration[] | undefined,
     });
     console.log(JSON.stringify({ ok: true, ...report }, null, 2));
     return;
@@ -67,12 +71,21 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cmd === 'uninstall') { const report=uninstallKith(repoRoot,Boolean(flags['dry-run'])); console.log(JSON.stringify(report,null,2)); process.exitCode=report.ok?0:1; return; }
+
+  if (cmd === 'doctor') { const report=doctorReport(repoRoot); console.log(JSON.stringify(report,null,2)); process.exitCode=report.ok?0:1; return; }
+
+  if (cmd === 'recover' || cmd === 'status' && flags.offline) {
+    const state = cmd === 'recover' ? recoveryReport(repoRoot) : readCoordinationState(repoRoot);
+    console.log(JSON.stringify(state,null,2)); process.exitCode = state.state === 'unavailable' ? 1 : 0; return;
+  }
+
   const commands = ['session', 'status', 'begin', 'complete', 'heartbeat', 'task', 'lock', 'contract', 'worktree', 'port', 'mutex', 'hook'];
   if (!commands.includes(cmd)) throw new Error(`Unknown command '${cmd}'. Run kith help.`);
   const subcommands: Record<string, string[]> = {
     session: ['start', 'end'],
     task: ['add', 'claim', 'list'], lock: ['acquire', 'release', 'list'],
-    contract: ['publish', 'list'], worktree: ['spawn', 'remove', 'list'],
+    contract: ['publish', 'list'], worktree: ['spawn', 'remove', 'list', 'preview'],
     hook: ['pre', 'post', 'pre-commit'],
   };
   if (subcommands[cmd] && (!subCmd || !subcommands[cmd].includes(subCmd))) {
@@ -115,19 +128,7 @@ async function main(): Promise<void> {
     }
 
     if (cmd === 'status') {
-      const state = {
-        repository: { root: engine.coordDb.repoRoot, commonGitDir: engine.coordDb.commonGitDir, coordDir: engine.coordDb.coordDir },
-        runtime: { node: process.version },
-        fencingEpoch: engine.coordDb.currentFencingEpoch(),
-        agents: engine.fencing.listAgents(true),
-        locks: engine.locks.listLocks(),
-        tasks: engine.intents.listTasks(),
-        conflicts: engine.shadowGit.listConflicts(),
-        contracts: engine.depGraph.listContracts(),
-        resources: engine.broker.listResources(),
-        mergeQueue: engine.mergeTrain.listQueue(),
-        quarantined: engine.bashGuard.listQuarantined(),
-      };
+      const state = engine.getStatus();
       console.log(JSON.stringify(state, null, 2));
       return;
     }
@@ -236,6 +237,7 @@ async function main(): Promise<void> {
     }
 
     if (cmd === 'worktree') {
+      if (subCmd === 'preview') { authorize(); const result=engine.previewIntegration(agentId); console.log(JSON.stringify(result,null,2)); process.exitCode=result.ok && result.clean ? 0 : 1; return; }
       if (subCmd === 'spawn') {
         const session = register();
         const wt = engine.worktrees.spawnWorktree({
@@ -306,7 +308,7 @@ async function main(): Promise<void> {
     }
 
     if (cmd === 'hook') {
-      const handler = new HookHandler(engine);
+      const handler = new HookHandler(engine, enforcementMode(flags.enforcement));
       const stdinPayload = HookHandler.readJsonStdinSync();
       const agentId = HookHandler.resolveAgentId(
         stdinPayload,
@@ -336,9 +338,10 @@ async function main(): Promise<void> {
           filePath,
           command,
         });
-        if (!res.allowed) {
-          console.error(res.message);
-        }
+        if (flags.client === 'cursor') {
+          console.log(JSON.stringify({ permission: res.allowed ? 'allow' : 'deny', ...(res.message ? { user_message: res.message, agent_message: res.message } : {}) }));
+        } else if (!res.allowed) console.error(res.message);
+        else if (res.message) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: res.message } }));
         process.exitCode = res.exitCode;
         return;
       }
@@ -350,6 +353,11 @@ async function main(): Promise<void> {
           filePath,
           command,
         });
+        if (flags.client === 'cursor') {
+          console.log(JSON.stringify({ additional_context: [...res.warnings, res.deltaFooter].filter(Boolean).join('\n') }));
+          process.exitCode = res.exitCode;
+          return;
+        }
         if (res.warnings.length > 0 || res.deltaFooter) {
           const msg = [...res.warnings, res.deltaFooter].filter(Boolean).join('\n');
           if (!res.allowed) {
@@ -369,9 +377,9 @@ async function main(): Promise<void> {
 
       if (subCmd === 'pre-commit') {
         const res = handler.handleGitPreCommit(agentId, process.cwd());
-        if (!res.allowed) {
+        if (res.violations.length) {
           console.error(
-            `[KITH GIT PRE-COMMIT GUARD] Cannot commit files locked by sibling agents:\n` +
+            `[KITH GIT PRE-COMMIT ${res.allowed ? 'WARNING' : 'GUARD'}] Files claimed by sibling agents:\n` +
               res.violations.map((v) => `  - ${v}`).join('\n')
           );
         }
@@ -385,7 +393,7 @@ async function main(): Promise<void> {
 }
 
 function printHelp(): void {
-  console.log(`Kith (v1.0.0) — Local coordination for coding agents
+  console.log(`Kith (v${KITH_VERSION}) — Local coordination for coding agents
 
 Claim work, isolate changes with worktrees, share local resources, and verify integration.
 No hosted service required.
@@ -393,14 +401,14 @@ No hosted service required.
 Usage:
   kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure MCP clients (--dry-run, --only, --mcp-only)
   kith heartbeat --agent <id>                   Refresh the owned session lease
-  kith status                                     Output JSON coordination state
+  kith status [--offline]                         Output JSON state and workspaces; offline never migrates or reaps\n  kith uninstall [--dry-run]                      Restore unchanged tracked setup files; retain work and recovery state\n  kith doctor                                     Check runtime, PATH, configuration, sessions and worktree health without writes\n  kith recover                                    Inspect retained work, expired claims and recovery records offline
   kith mcp                                        Start stdio MCP server
   kith begin --agent <id> --title <t> --scope <g> Declare intent, check overlaps, lock scope
   kith complete --agent <id> [--merge <branch>]   Run Speculative Merge Train & release locks
   kith task add|claim|list                        Manage orchestrated DAG task queue
   kith lock acquire|release|list                  Manage fencing-token file/glob locks
   kith contract publish|list                      Manage Contract Blackboard
-  kith worktree spawn|remove|list                 Manage isolated Git worktrees
+  kith worktree spawn|remove|list|preview                 Manage isolated Git worktrees
   kith port --agent <id> --service <name>         Lease collision-free TCP port
   kith mutex --agent <id> --name <m> -- <cmd>     Serialize commands via mutex
   kith hook pre|post|pre-commit                   Tool & git hook handlers

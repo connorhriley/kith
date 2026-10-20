@@ -1,0 +1,20 @@
+{
+  "client": "codex",
+  "version": "codex-cli 0.163.0-alpha.10.2",
+  "platform": "darwin",
+  "node": "v22.23.3",
+  "scenarios": [
+    {
+      "scenario": "isolated",
+      "passed": false,
+      "tools": [
+        "kith_begin_work",
+        "kith_begin_work",
+        "kith_record_file_edit",
+        "kith_run_with_mutex"
+      ],
+      "error": "Missing kith_complete_work; client exit zero is insufficient"
+    }
+  ],
+  "passed": false
+}

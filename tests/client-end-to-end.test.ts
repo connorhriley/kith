@@ -412,3 +412,30 @@ it('delivers exact-name reuse hints over MCP without blocking separate worktrees
   expect(status.tasks.every((task: any) => task.status === 'done')).toBe(true);
   expect(status.locks).toEqual([]);
 });
+
+
+it('exposes workspace observations and committed conflict previews through actual MCP calls', async () => {
+  seed();
+  const {client:one}=await connect(), {client:two}=await connect();
+  const a=data(await tool(one,'kith_begin_work',{agentId:'preview-a',title:'A',scopeGlobs:['src/a.mjs'],isolateWorktree:true}));
+  const b=data(await tool(two,'kith_begin_work',{agentId:'preview-b',title:'B',scopeGlobs:['src/b.mjs'],isolateWorktree:true}));
+  const aPath=a.worktree.worktreePath, bPath=b.worktree.worktreePath;
+  // The fixture simulates changes made outside the claim protocol to exercise Git's final conflict boundary.
+  fs.writeFileSync(path.join(aPath,'src/base.mjs'),'export const base = 2;\n');
+  fs.writeFileSync(path.join(bPath,'src/base.mjs'),'export const base = 3;\n');
+  const state=data(await tool(one,'kith_get_status',{}));
+  expect(state.protocolVersion).toBe('1.0.0');
+  expect(state.workspaces.find((w:any)=>w.agentId==='preview-a').overlaps).toContainEqual({path:'src/base.mjs',agentIds:['preview-b']});
+  expect((await tool(one,'kith_preview_integrate',{agentId:'preview-a'})).isError).toBe(true);
+  expect((await tool(two,'kith_preview_integrate',{agentId:'preview-a'})).isError).toBe(true);
+  for(const cwd of [aPath,bPath]) {
+    execFileSync('git',['add','src/base.mjs'],{cwd,env});
+    execFileSync('git',['commit','-qm','Fixture change'],{cwd,env});
+  }
+  expect(data(await tool(one,'kith_preview_integrate',{agentId:'preview-a'})).clean).toBe(true);
+  data(await tool(one,'kith_complete_work',{agentId:'preview-a',verificationCmd:'node --check src/base.mjs'}));
+  const head=git('rev-parse','HEAD'), before=fs.readFileSync(path.join(bPath,'src/base.mjs'));
+  const conflict=data(await tool(two,'kith_preview_integrate',{agentId:'preview-b'}));
+  expect(conflict.clean).toBe(false);expect(conflict.conflicts).toEqual(['src/base.mjs']);expect(conflict.verified).toBe(false);
+  expect(git('rev-parse','HEAD')).toBe(head);expect(fs.readFileSync(path.join(bPath,'src/base.mjs'))).toEqual(before);
+});

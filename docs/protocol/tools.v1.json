@@ -1,0 +1,425 @@
+{
+  "protocolVersion": "1.0.0",
+  "tools": [
+    {
+      "name": "kith_start_session",
+      "description": "Create a capability-owned session or resume one with its token.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "leaseDurationMs": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_heartbeat",
+      "description": "Renew an active, owned session. Expired sessions cannot be revived.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_begin_work",
+      "description": "Register an agent session, verify no scope lock conflicts exist with sibling agents, acquire monotonic fencing-token locks, and optionally create an isolated Git worktree.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string",
+            "description": "Unique identifier for this agent session (e.g. claude-1, codex-auth)"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "client": {
+            "type": "string",
+            "description": "Client name (claude-code, antigravity, codex, cursor)"
+          },
+          "title": {
+            "type": "string",
+            "description": "Short title of the task or intent"
+          },
+          "intentSummary": {
+            "type": "string",
+            "description": "Detailed description of what will be built or modified"
+          },
+          "scopeGlobs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "File paths or glob patterns this agent will edit (e.g. [\"src/auth/**\"])"
+          },
+          "isolateWorktree": {
+            "type": "boolean",
+            "description": "Recommended: true, giving each parallel agent a separate Git worktree"
+          }
+        },
+        "required": [
+          "agentId",
+          "title",
+          "scopeGlobs"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_claim_next_task",
+      "description": "Atomically claim the highest-priority unblocked task from the DAG task queue and lock its declared file scope.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string",
+            "description": "Agent ID claiming the task"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "client": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_add_task",
+      "description": "Add a task to the orchestrated DAG queue with optional task dependencies and file scope globs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "intentSummary": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "number"
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scopeGlobs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_check_and_lock_files",
+      "description": "Acquire exclusive or shared fencing-token locks on file paths, globs, or symbols.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "patterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "exclusive",
+              "shared"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "patterns"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_record_file_edit",
+      "description": "Analyze a modified file for supported contract signatures, flag exact name/kind matches in other files as non-blocking reuse hints, check transitive import blast radius, and run a live dirty-tree git merge-tree conflict check.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "filePath": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "filePath"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_publish_contract",
+      "description": "Explicitly publish a shared interface, function signature, API route, or schema to the Contract Blackboard.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "filePath": {
+            "type": "string"
+          },
+          "symbolName": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "function",
+              "type",
+              "interface",
+              "class",
+              "schema",
+              "route",
+              "const"
+            ]
+          },
+          "signature": {
+            "type": "string"
+          },
+          "docComment": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId",
+          "filePath",
+          "symbolName",
+          "kind",
+          "signature"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_acquire_port",
+      "description": "Reserve a local TCP port among cooperating Kith clients; start the service promptly and handle unrelated bind races.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "serviceName": {
+            "type": "string"
+          },
+          "basePort": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "agentId",
+          "serviceName"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_run_with_mutex",
+      "description": "Run an argv command under a renewable named mutex, using the MCP server process permissions. Useful when a sandboxed client shell cannot inspect process identities. Requires an owned session. Cancellation or connection loss stops the supervised command before release. This is command execution, not a filesystem sandbox.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "mutexName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "Executable followed by literal arguments; no implicit shell"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Directory under the registered worktree or repository; defaults to the worktree when present"
+          },
+          "leaseDurationMs": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 86400000
+          },
+          "waitTimeoutMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600000
+          },
+          "commandTimeoutMs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600000
+          },
+          "maxOutputBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1048576
+          }
+        },
+        "required": [
+          "agentId",
+          "mutexName",
+          "command"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_get_status",
+      "description": "Retrieve coordination state, FIFO waiters and guarded commands, plus worktree paths, actual branches, dirty-file overlaps, commit age and ahead/behind against the current integration target HEAD. Normal engine startup may reap expired ownership.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_preview_integrate",
+      "description": "Preview exact Git conflict paths for a committed registered worktree against the current integration target. Refuses dirty inputs; never checkpoints or changes source/target files. A clean preview does not run project verification.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_complete_work",
+      "description": "Complete an agent task, optionally run the Speculative Merge Train to verify and merge its worktree branch, and release all locks and resources.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "fencingToken": {
+            "type": "number"
+          },
+          "mergeBranch": {
+            "type": "string",
+            "description": "If work was done on a worktree/branch, run Speculative Merge Train to integrate it"
+          },
+          "verificationCmd": {
+            "type": "string",
+            "description": "Command to run in speculative merge tree (e.g. \"npm run typecheck\")"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    }
+  ]
+}

@@ -35,7 +35,17 @@ The [reliability contract](docs/reliability.md) defines ownership, verification,
 
 ## Quick start
 
-Requires **Git 2.38+**, **Node.js 22.13+ on 22.x or Node.js 24+**, and the pinned **pnpm 10.20.0**. Development targets macOS and Linux. Windows is unvalidated.
+Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Development targets macOS and Linux. Windows is unvalidated.
+
+Install the release, then configure your project:
+
+```sh
+npm install --global kith-coord@0.1.0
+cd /path/to/your/project
+kith init
+```
+
+For source installation and the disposable demo, use the pinned **pnpm 10.20.0**:
 
 ```sh
 git clone https://github.com/connorhriley/kith.git
@@ -86,12 +96,12 @@ Default setup installs MCP configuration for Claude, Codex and Cursor plus agent
 | --- | --- |
 | Claude Code | MCP; optional edit hooks need shared session setup; recorded native CLI runs |
 | Codex | Project MCP configuration; recorded native CLI runs with configuration overrides |
-| Cursor | Generated MCP configuration; native application behavior unvalidated |
+| Cursor | MCP and optional native hooks; generated-command fixtures tested; native application behavior unvalidated |
 | Other MCP clients | stdio server via `kith mcp`; client-specific validation required |
 
 Native checks are version-specific. GUI discovery and persisted project trust need separate checks. See [integration setup](docs/integrations.md), [recorded validation](docs/client-validation.md), and [session ownership](docs/sessions-and-mutexes.md) before mixing hooks, CLI commands, and MCP clients.
 
-Source installation is the current distribution path. Package-name ownership and registry publication have not been verified.
+The npm package is **`kith-coord`**, with the command name **`kith`**. For a pinned npx MCP launcher, see [registry setup](docs/integrations.md#registry-installation). The unrelated npm package `kith` is not this project.
 
 ## How a task moves through Kith
 
@@ -102,7 +112,15 @@ Source installation is the current distribution path. Package-name ownership and
 
 Failed verification leaves the target unchanged and keeps the worktree for repair. Successful integration also retains the worktree until explicit cleanup. External Git writers must still coordinate.
 
-Inspect through `kith_get_status` or `kith status`. These use the normal engine startup and may reap expired owners; they are not offline recovery readers.
+Inspect through `kith_get_status` or `kith status`: worktree paths/branches, dirty-file overlap, ahead/behind, heartbeat/commit age and FIFO waiters are included. Use `kith_preview_integrate` for committed-tree conflict paths before completing. Normal status may reap expired owners. For non-mutating recovery inspection use:
+
+```sh
+kith status --offline
+kith recover
+kith doctor
+```
+
+Optional Claude/Cursor hooks support `--enforcement block` (default), `warn` and `off`; see [setup and safe uninstall](docs/integrations.md). The [versioned protocol](docs/protocol.md) records the tool schemas and ownership semantics.
 
 For MCP, CLI and library examples, see [workflows](docs/usage.md).
 

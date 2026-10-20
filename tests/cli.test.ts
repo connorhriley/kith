@@ -1,3 +1,4 @@
+import { KITH_VERSION } from '../src/version.js';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -14,7 +15,7 @@ function run(...args: string[]) {
 }
 it('help, version, and invalid commands do not create local state', () => {
   expect(run('help').stdout).toContain('Usage:');
-  expect(run('--version').stdout.trim()).toBe('1.0.0');
+  expect(run('--version').stdout.trim()).toBe(KITH_VERSION);
   for (const removed of ['typo', 'top', 'ui']) {
     const bad = run(removed);
     expect(bad.status).toBe(1); expect(bad.stderr).toContain('Unknown command');

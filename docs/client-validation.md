@@ -39,3 +39,13 @@ The recovery pass reran the isolated workflows on macOS / Node 22.23.3: [Codex](
 
 
 The 2026-10-20 subtraction pass reran the isolated native workflows on macOS / Node 22.23.3: [Codex CLI 0.163.0-alpha.10.2](validation/2026-10-20-subtraction-codex.json) and [Claude Code 2.1.301](validation/2026-10-20-subtraction-claude.json) both passed edit reporting, renewable commands, failed verification followed by successful retry, integration and ownership release. Claude also verified native peer-edit denial with its inherited owner preserved. These runs use the shared begin/complete implementation after removing fuzzy advice, custom conflict rewriting and the dashboard.
+
+
+## Cursor adapter coverage
+
+Generated Cursor hooks use the documented native `preToolUse`/`postToolUse` protocol and `failClosed:true`. Subprocess fixtures exercise allow/deny JSON, block/warn/off mode changes, preservation of unrelated hooks, and missing/forged ownership refusal. Native Cursor application discovery, hook invocation/failure handling and model workflows remain unvalidated; payload fixtures do not establish those outcomes. The shared Git/worktree and MCP boundaries have separate automated coverage.
+
+
+The 2026-10-20 adoption pass reran the isolated workflows on macOS / Node 22.23.3: [Codex CLI 0.163.0-alpha.10.2](validation/2026-10-20-adoption-codex.json) and [Claude Code 2.1.301](validation/2026-10-20-adoption-claude.json) passed native editing, renewable mutex execution, failed verification/retry, integration and ownership release. Claude also passed the separate [unavailable-guard denial](validation/2026-10-20-adoption-hook-failure.json).
+
+The [first Codex attempt](validation/2026-10-20-adoption-codex-first-attempt.json) stopped after its mutex call without completing the fixture; the runner correctly marked it failed despite the client exiting zero. Its cause was not established. A diagnostic rerun passed and now records redacted outcome fields without raw tool arguments/results. Keep the incomplete attempt visible: model-driven validation can vary, and one successful rerun does not explain an earlier incomplete workflow.

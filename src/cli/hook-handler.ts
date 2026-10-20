@@ -19,8 +19,21 @@ export interface HookInputPayload {
   };
 }
 
+export type EnforcementMode = 'block' | 'warn' | 'off';
+export function enforcementMode(value: unknown = 'block'): EnforcementMode {
+  if (value !== 'block' && value !== 'warn' && value !== 'off') throw new Error('Enforcement must be block, warn or off');
+  return value;
+}
+
 export class HookHandler {
-  constructor(private readonly engine: KithEngine) {}
+  constructor(private readonly engine: KithEngine, private readonly mode: EnforcementMode = 'block') {
+    enforcementMode(mode);
+  }
+
+  private conflict(message: string): { allowed: boolean; exitCode: number; message: string } {
+    return this.mode === 'block' ? { allowed: false, exitCode: 2, message }
+      : { allowed: true, exitCode: 0, message: this.mode === 'warn' ? `[KITH WARNING] ${message}` : '' };
+  }
 
   public static resolveAgentId(payload?: HookInputPayload, explicitAgentId?: string): string {
     return (
@@ -45,19 +58,21 @@ export class HookHandler {
     this.engine.fencing.assertSession(params.agentId);
 
     const agent = this.engine.fencing.getAgent(params.agentId);
-    if (params.filePath && agent?.worktree_path) {
-      params = { ...params, filePath: LockEngine.normalizeFile(agent.worktree_path, params.filePath) };
+    if (params.filePath) {
+      params = { ...params, filePath: LockEngine.normalizeFile(agent?.worktree_path ?? this.engine.coordDb.repoRoot, params.filePath) };
     }
     const tool = params.toolName.toLowerCase();
 
-    if ((tool.includes('edit') || tool.includes('write') || tool.includes('replace')) && !params.filePath) {
+    if ((tool.includes('edit') || tool.includes('write') || tool.includes('replace') || tool.includes('delete')) && !params.filePath) {
       return { allowed: false, exitCode: 2, message: '[KITH LOCK GUARD] Missing file path in edit hook payload.' };
     }
+
+    if (this.mode === 'off') return { allowed: true, exitCode: 0, message: '' };
 
     // 1. Pre-Edit / Pre-Write File Lock Enforcement
     if (
       params.filePath &&
-      (tool.includes('edit') || tool.includes('write') || tool.includes('replace'))
+      (tool.includes('edit') || tool.includes('write') || tool.includes('replace') || tool.includes('delete'))
     ) {
       const check = this.engine.locks.checkFileWriteAccess({
         agentId: params.agentId,
@@ -65,11 +80,7 @@ export class HookHandler {
       });
 
       if (!check.allowed) {
-        return {
-          allowed: false,
-          exitCode: 2,
-          message: `[KITH LOCK GUARD] Blocked write to '${params.filePath}'. ${check.reason}`,
-        };
+        return this.conflict(`[KITH LOCK GUARD] Write to '${params.filePath}' conflicts with a claim. ${check.reason}`);
       }
 
       // Auto-acquire an advisory/exclusive file lock if the file was unlocked so sibling agents see it immediately
@@ -81,7 +92,7 @@ export class HookHandler {
       });
 
       if (!acquired.ok) {
-        return { allowed: false, exitCode: 2, message: '[KITH LOCK GUARD] Another agent acquired the file lock. Retry after resolving the conflict.' };
+        return this.conflict('[KITH LOCK GUARD] Another agent acquired the file lock. Retry after resolving the conflict.');
       }
       return { allowed: true, exitCode: 0, message: '' };
     }
@@ -96,19 +107,14 @@ export class HookHandler {
         inIsolatedWorktree: Boolean(agent?.worktree_path),
       });
 
-      if (!safety.safe) {
-        return {
-          allowed: false,
-          exitCode: 2,
-          message: `[KITH BASH FIREWALL] ${safety.reason}`,
-        };
-      }
+      const conflict = !safety.safe ? this.conflict(`[KITH BASH FIREWALL] ${safety.reason}`) : null;
+      if (conflict && !conflict.allowed) return conflict;
 
       this.engine.bashGuard.capturePreBashSnapshot(
         params.agentId,
         agent?.worktree_path ?? this.engine.coordDb.repoRoot
       );
-      return { allowed: true, exitCode: 0, message: '' };
+      return conflict ?? { allowed: true, exitCode: 0, message: '' };
     }
 
     return { allowed: true, exitCode: 0, message: '' };
@@ -117,7 +123,7 @@ export class HookHandler {
   /**
    * Handles `PostToolUse` verification:
    * - For file edits: AST export/import extraction, transitive blast radius, live dirty-tree `git merge-tree`.
-   * - For Bash commands: Merkle snapshot diff, automatic revert + quarantine of unauthorized mutations to files locked by sibling agents.
+   * - For Bash commands: snapshot diff and preserved recovery copies of unauthorized changes.
    */
   public handlePostToolUse(params: {
     agentId: string;
@@ -126,17 +132,23 @@ export class HookHandler {
     command?: string;
   }): { allowed: boolean; exitCode: number; warnings: string[]; deltaFooter: string } {
     const agent = this.engine.fencing.getAgent(params.agentId);
-    if (params.filePath && agent?.worktree_path) {
-      params = { ...params, filePath: LockEngine.normalizeFile(agent.worktree_path, params.filePath) };
+    if (params.filePath) {
+      params = { ...params, filePath: LockEngine.normalizeFile(agent?.worktree_path ?? this.engine.coordDb.repoRoot, params.filePath) };
     }
     const tool = params.toolName.toLowerCase();
+    this.engine.fencing.assertSession(params.agentId);
     const warnings: string[] = [];
 
     if (
       params.filePath &&
-      (tool.includes('edit') || tool.includes('write') || tool.includes('replace'))
+      (tool.includes('edit') || tool.includes('write') || tool.includes('replace') || tool.includes('delete'))
     ) {
       const agent = this.engine.fencing.getAgent(params.agentId);
+      const access = this.engine.locks.checkFileWriteAccess({ agentId: params.agentId, filePath: params.filePath });
+      if (!access.allowed && this.mode !== 'block') {
+        if (this.mode === 'warn') warnings.push(`[KITH WARNING] ${access.reason}. Edit was not indexed as authorized work.`);
+        return { allowed: true, exitCode: 0, warnings, deltaFooter: this.engine.consumeAgentDelta(params.agentId).formattedFooter };
+      }
       const postRes = this.engine.processPostFileEdit({
         agentId: params.agentId,
         filePath: params.filePath,
@@ -144,6 +156,7 @@ export class HookHandler {
       });
       warnings.push(...postRes.warnings);
     } else if (tool === 'bash' || tool === 'run_command' || params.command) {
+      if (this.mode === 'off') return { allowed: true, exitCode: 0, warnings, deltaFooter: this.engine.consumeAgentDelta(params.agentId).formattedFooter };
       const agent = this.engine.fencing.getAgent(params.agentId);
       const report = this.engine.bashGuard.verifyPostBashAndQuarantine({
         agentId: params.agentId,
@@ -159,8 +172,8 @@ export class HookHandler {
         }
         const deltaFooter = this.engine.consumeAgentDelta(params.agentId).formattedFooter;
         return {
-          allowed: false,
-          exitCode: 2,
+          allowed: this.mode !== 'block',
+          exitCode: this.mode === 'block' ? 2 : 0,
           warnings,
           deltaFooter,
         };
@@ -184,6 +197,7 @@ export class HookHandler {
     exitCode: number;
     violations: string[];
   } {
+    this.engine.fencing.assertSession(agentId);
     let stagedFiles: string[] = [];
     try {
       const layout = discoverRepository(indexCwd);
@@ -199,7 +213,7 @@ export class HookHandler {
     }
 
     const violations: string[] = [];
-    for (const file of stagedFiles) {
+    for (const file of this.mode === 'off' ? [] : stagedFiles) {
       const check = this.engine.locks.checkFileWriteAccess({
         agentId,
         filePath: file,
@@ -210,8 +224,8 @@ export class HookHandler {
     }
 
     return {
-      allowed: violations.length === 0,
-      exitCode: violations.length === 0 ? 0 : 1,
+      allowed: violations.length === 0 || this.mode !== 'block',
+      exitCode: violations.length === 0 || this.mode !== 'block' ? 0 : 1,
       violations,
     };
   }

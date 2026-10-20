@@ -55,8 +55,14 @@ kith task add --id schema --title "Billing schema" --scope "src/db/**"
 kith task add --id api --title "Billing endpoints" --depends-on schema --scope "src/api/**"
 kith task claim --agent worker-1
 
-# Inspect coordination state (normal engine startup may reap expired owners)
+# Inspect worktrees, overlaps, relative commits, FIFO tickets and command guards
 kith status
+# Offline observations do not reap or migrate
+kith status --offline
+kith recover
+kith doctor
+# Preview committed source/target trees; dirty inputs are refused
+kith worktree preview --agent worker-1
 
 # Allocate a cooperating client's port; start your service promptly
 kith port --agent worker-1 --service web
@@ -71,7 +77,7 @@ kith mcp
 The `coord` executable is an alias for `kith`. The library exports `KithEngine` and its component classes for custom integrations:
 
 ```js
-import { KithEngine } from 'kith';
+import { KithEngine } from 'kith-coord';
 const kith = new KithEngine('/absolute/path/to/repository');
 try {
   kith.fencing.registerAgent({ id: 'custom-worker' });

@@ -42,8 +42,8 @@ export class CoordDatabase {
     if (physicalPath(this.coordDir) !== this.coordDir) throw new Error('Coordination directory must not be a symlink');
     this.dbPath = customDbPath ?? path.join(this.coordDir, 'state.db');
     if (!customDbPath && physicalPath(this.dbPath) !== this.dbPath) throw new Error('Coordination database must not be a symlink');
-    const recoveryFiles = !customDbPath && (fs.existsSync(path.join(this.coordDir, 'merge-train.lock')) ||
-      ['shadow-index', 'quarantine', 'snapshots', 'worktrees'].some(name => {
+    const recoveryFiles = !customDbPath && (fs.existsSync(path.join(this.coordDir, 'merge-train.lock')) || fs.existsSync(path.join(this.coordDir, 'setup.lock')) ||
+      ['shadow-index', 'quarantine', 'snapshots', 'worktrees', 'setup'].some(name => {
         const dir = path.join(this.coordDir, name);
         return fs.existsSync(dir) && (!fs.lstatSync(dir).isDirectory() || fs.readdirSync(dir).length > 0);
       }));
@@ -76,6 +76,14 @@ export class CoordDatabase {
       this.configurePragmas(); this.migrate(!recoveryFiles);
     }
     catch (err) { this.db.close(); throw err; }
+  }
+
+  /** Validate an existing snapshot without migration or ownership changes. */
+  public static inspectSchema(db: DatabaseSyncType): number {
+    const version = this.schemaVersion(db, false);
+    const check = db.prepare('PRAGMA quick_check(1)').get() as { quick_check: string };
+    if (check.quick_check !== 'ok') throw new Error('Damaged coordination database. Preserve all state before repair.');
+    return version;
   }
 
   private configurePragmas(): void {

@@ -1,3 +1,5 @@
+import { KITH_PROTOCOL_VERSION } from '../version.js';
+import { observeWorkspaces, previewIntegration } from './workspace-observation.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { AstAnalyzer, ExtractedSymbol } from './ast-analyzer.js';
@@ -183,6 +185,26 @@ export class KithEngine {
       activeConflicts,
       formattedFooter,
     };
+  }
+
+  public getStatus() {
+    const agents = this.fencing.listAgents(true);
+    return {
+      protocolVersion: KITH_PROTOCOL_VERSION,
+      repository: { root: this.coordDb.repoRoot, commonGitDir: this.coordDb.commonGitDir, coordDir: this.coordDb.coordDir },
+      runtime: { node: process.version }, fencingEpoch: this.coordDb.currentFencingEpoch(),
+      agents, locks: this.locks.listLocks(), tasks: this.intents.listTasks(),
+      conflicts: this.shadowGit.listConflicts(), contracts: this.depGraph.listContracts(), resources: this.broker.listResources(),
+      mergeQueue: this.mergeTrain.listQueue(), quarantined: this.bashGuard.listQuarantined(),
+      mutexWaiters: this.coordDb.db.prepare('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket').all(),
+      commandGuards: this.coordDb.db.prepare('SELECT mutex_name,owner_agent_id,worker_pid,supervisor_pid FROM mutex_runs ORDER BY mutex_name').all(),
+      workspaces: observeWorkspaces(this.coordDb.repoRoot, agents),
+    };
+  }
+
+  public previewIntegration(agentId: string) {
+    this.fencing.assertSession(agentId);
+    return previewIntegration(this.coordDb.repoRoot, this.fencing.getAgent(agentId)!);
   }
 
   public beginWork(params: Parameters<IntentAndTaskEngine['declareIntent']>[0] & { isolateWorktree?: boolean }) {

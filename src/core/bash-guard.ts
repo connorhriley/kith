@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { physicalPath } from './repository.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CoordDatabase } from './db.js';
@@ -32,20 +33,9 @@ export interface BashGuardPostReport {
   quarantinedViolations: QuarantineRecord[];
 }
 
-const DESTRUCTIVE_SHARED_TREE_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
-  {
-    regex: /\bgit\s+reset\s+--hard\b/,
-    reason: 'Blocked destructive `git reset --hard` in shared workspace while parallel agents are active.',
-  },
-  {
-    regex: /\bgit\s+clean\s+-[a-zA-Z]*f/,
-    reason: 'Blocked destructive `git clean -f` in shared workspace while parallel agents are active.',
-  },
-  {
-    regex: /\bgit\s+(?:checkout|restore)\s+(?:--\s+)?\.(?:\s|$)/,
-    reason: 'Blocked whole-tree `git checkout/restore .` in shared workspace while parallel agents are active.',
-  },
-];
+const GIT_PREFIX = String.raw`\bgit(?:\s+(?:-C|-c|--git-dir|--work-tree)(?:=|\s+)(?:"[^"]*"|'[^']*'|[^\s;&|]+)|\s+--(?:no-pager|literal-pathspecs|no-optional-locks))*\s+`;
+const DESTRUCTIVE_SHARED_TREE = new RegExp(GIT_PREFIX + String.raw`(?:reset|clean|checkout|restore|switch|stash|merge|rebase|pull|cherry-pick|revert|am)\b`);
+const DESTRUCTIVE_SHARED_REFS = new RegExp(GIT_PREFIX + String.raw`(?:update-ref|symbolic-ref|worktree\s+(?:remove|prune)|branch\s+(?:-[dDmMfF]|--(?:delete|move|force)))\b`);
 
 export class BashMerkleGuard {
   constructor(
@@ -64,24 +54,12 @@ export class BashMerkleGuard {
     command: string;
     inIsolatedWorktree?: boolean;
   }): { safe: boolean; reason?: string } {
-    if (params.inIsolatedWorktree) {
-      return { safe: true };
-    }
-
-    const otherActiveAgents = this.fencing
-      .listAgents(true)
-      .filter((a) => a.id !== params.agentId && !a.worktree_path);
-
-    if (otherActiveAgents.length > 0) {
-      for (const rule of DESTRUCTIVE_SHARED_TREE_PATTERNS) {
-        if (rule.regex.test(params.command)) {
-          this.coordDb.logEvent(params.agentId, 'bash_destructive_command_blocked', {
-            command: params.command,
-            reason: rule.reason,
-          });
-          return { safe: false, reason: rule.reason };
-        }
-      }
+    this.fencing.assertSession(params.agentId);
+    const root = physicalPath(this.fencing.getAgent(params.agentId)?.worktree_path ?? this.coordDb.repoRoot);
+    const peers = this.fencing.listAgents(true).filter(a => a.id !== params.agentId);
+    const sharesCheckout = peers.some(a => physicalPath(a.worktree_path ?? this.coordDb.repoRoot) === root);
+    if (peers.length && DESTRUCTIVE_SHARED_REFS.test(params.command) || sharesCheckout && DESTRUCTIVE_SHARED_TREE.test(params.command)) {
+      return { safe: false, reason: 'Git operation can replace shared work or refs while peer agents are active. Coordinate the operation before retrying.' };
     }
 
     return { safe: true };

@@ -1,0 +1,35 @@
+{
+  "client": "claude",
+  "version": "2.1.301 (Claude Code)",
+  "platform": "darwin",
+  "node": "v22.23.3",
+  "scenarios": [
+    {
+      "scenario": "isolated",
+      "passed": true,
+      "tools": [
+        "kith_begin_work",
+        "kith_begin_work",
+        "kith_record_file_edit",
+        "kith_run_with_mutex",
+        "kith_complete_work",
+        "kith_get_status",
+        "kith_complete_work",
+        "kith_get_status"
+      ],
+      "hookDenialVerified": true,
+      "checks": [
+        "protected bytes unchanged",
+        "native edit",
+        "contract recorded",
+        "renewable MCP mutex command",
+        "failed verification and successful retry",
+        "verified integration",
+        "task completed",
+        "locks released",
+        "inherited owner preserved"
+      ]
+    }
+  ],
+  "passed": true
+}

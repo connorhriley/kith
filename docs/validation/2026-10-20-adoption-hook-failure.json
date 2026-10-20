@@ -1,0 +1,18 @@
+{
+  "client": "claude",
+  "version": "2.1.301 (Claude Code)",
+  "platform": "darwin",
+  "node": "v22.23.3",
+  "scenarios": [
+    {
+      "scenario": "hook-failure",
+      "passed": true,
+      "checks": [
+        "native Write attempted once",
+        "tool denied",
+        "marker absent"
+      ]
+    }
+  ],
+  "passed": true
+}

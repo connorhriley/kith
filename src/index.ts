@@ -11,3 +11,6 @@ export * from './core/merge-train.js';
 export * from './core/bash-guard.js';
 export * from './core/broker.js';
 export * from './core/repository.js';
+export * from './core/observation.js';
+export * from './core/workspace-observation.js';
+export * from './version.js';

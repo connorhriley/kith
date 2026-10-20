@@ -1,9 +1,12 @@
+import { KITH_PROTOCOL_VERSION } from '../version.js';
+import { applySetupPlan } from './setup-ledger.js';
 import { discoverRepository, isWithin, physicalPath } from '../core/repository.js';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { KithEngine } from '../core/engine.js';
+import { enforcementMode, type EnforcementMode } from './hook-handler.js';
 
 export const INTEGRATIONS = ['claude', 'codex', 'cursor', 'agents', 'git', 'shims'] as const;
 export type Integration = (typeof INTEGRATIONS)[number];
@@ -39,8 +42,10 @@ function shellQuote(value: string): string {
 export function initializeKithRepository(
   repoRoot = process.cwd(),
   cliBinaryCommand = 'kith',
-  options: { dryRun?: boolean; integrations?: Integration[]; mcpOnly?: boolean } = {}
+  options: { dryRun?: boolean; integrations?: Integration[]; mcpOnly?: boolean; enforcement?: EnforcementMode } = {}
 ): InitReport {
+  const mode = enforcementMode(options.enforcement);
+  const modeArg = mode === 'block' ? '' : ` --enforcement ${mode}`;
   const absRoot = discoverRepository(repoRoot).checkoutRoot;
   const mcpOnly = options.mcpOnly ?? options.integrations === undefined;
   const selected = new Set(options.integrations ?? ['claude', 'codex', 'cursor', 'agents'] as Integration[]);
@@ -79,15 +84,17 @@ export function initializeKithRepository(
     for (const [event, phase] of (mcpOnly ? [] : [['PreToolUse', 'pre'], ['PostToolUse', 'post']]) as Array<['PreToolUse' | 'PostToolUse', 'pre' | 'post']>) {
       const entries = hooks[event] ?? [];
       if (!Array.isArray(entries)) throw new Error(`Claude hooks.${event} must be an array.`);
-      const command = `${hookCommand} ${phase}`;
+      const baseCommand = `${hookCommand} ${phase}`;
+      const command = baseCommand + modeArg;
+      const owned = (value: unknown) => typeof value === 'string' && [baseCommand, ...['block', 'warn', 'off'].map(m => `${baseCommand} --enforcement ${m}`)].includes(value);
       const exists = entries.some((entry) => {
         if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return false;
-        return entry.hooks.some((hook: { command?: string } | null) => hook?.command === command);
+        return entry.hooks.some((hook: { command?: string } | null) => owned(hook?.command));
       });
       hooks[event] = exists ? entries.map((entry) => {
         if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return entry;
         return { ...entry, hooks: entry.hooks.map((hook: { command?: string } | null) =>
-          hook?.command === command && event === 'PreToolUse' ? { ...hook, onFailure: 'block' } : hook) };
+          owned(hook?.command) ? { ...hook, command, ...(event === 'PreToolUse' ? { onFailure: 'block' } : {}) } : hook) };
       }) : [...entries, {
         matcher: 'Edit|Write|MultiEdit|NotebookEdit|Bash',
         hooks: [{ type: 'command', command, ...(event === 'PreToolUse' ? { onFailure: 'block' } : {}) }],
@@ -125,6 +132,23 @@ export function initializeKithRepository(
     const mcp = readConfig(path.join(absRoot, '.cursor/mcp.json'));
     mcp.mcpServers = { ...object(mcp.mcpServers ?? {}, 'Cursor MCP servers'), kith: server };
     json('.cursor/mcp.json', mcp);
+    const existingCursorHooks = readConfig(path.join(absRoot, '.cursor/hooks.json'));
+    if(mcpOnly && ['preToolUse','postToolUse'].some(event=>Array.isArray((existingCursorHooks.hooks as Record<string,unknown>)?.[event])&&((existingCursorHooks.hooks as Record<string,unknown>)[event] as unknown[]).length)) warnings.push('Existing Cursor hooks preserved; review their inherited session requirements.');
+    if (!mcpOnly) {
+      const config = existingCursorHooks;
+      if (config.version !== undefined && config.version !== 1) throw new Error('Unsupported Cursor hooks version; no configuration was written.');
+      const hooks = object(config.hooks ?? {}, 'Cursor hooks');
+      for (const [event, phase] of [['preToolUse', 'pre'], ['postToolUse', 'post']] as const) {
+        const entries = hooks[event] ?? [];
+        if (!Array.isArray(entries)) throw new Error(`Cursor hooks.${event} must be an array.`);
+        const baseCommand = `${hookCommand} ${phase} --client cursor`;
+        const owned = (value: unknown) => typeof value === 'string' && [baseCommand, ...['block', 'warn', 'off'].map(m => `${baseCommand} --enforcement ${m}`)].includes(value);
+        const entry = { command: baseCommand + modeArg, matcher: 'Shell|Write|Delete', ...(phase === 'pre' ? { failClosed: true } : {}) };
+        const exists = entries.some(e => e && typeof e === 'object' && owned(e.command));
+        hooks[event] = exists ? entries.map(e => e && typeof e === 'object' && owned(e.command) ? { ...e, ...entry } : e) : [...entries, entry];
+      }
+      json('.cursor/hooks.json', { ...config, version: 1, hooks });
+    }
   }
   if (selected.has('agents')) {
     const file = path.join(absRoot, 'AGENTS.md');
@@ -132,17 +156,19 @@ export function initializeKithRepository(
     const block = `<!-- KITH:START -->
 ## Parallel Agent Coordination (kith)
 
+Instruction protocol: ${KITH_PROTOCOL_VERSION}.
+
 Use Kith MCP to claim work, isolate changes in worktrees, share local resources and verify integration. Keep one isolated worktree per parallel agent and keep the owning MCP connection open.
 
 1. Call \`kith_begin_work\` with a unique \`agentId\`, an explicit \`scopeGlobs\` array and \`isolateWorktree: true\`.
 2. Edit only the returned \`worktree.worktreePath\`. Report changed files through \`kith_record_file_edit\` on that connection.
 3. Run serialized commands with \`kith_run_with_mutex\`: pass a literal executable/argument array. Its cwd defaults to the registered worktree. Commands run with server permissions and require client approval.
-4. Renew idle sessions with \`kith_heartbeat\` before their lease expires. Inspect \`kith_get_status\`.
+4. Renew idle sessions with \`kith_heartbeat\` before their lease expires (every two minutes for the default five-minute lease; sooner for a shorter lease). Inspect \`kith_get_status\`.
 5. Complete with \`kith_complete_work\` and a project-specific \`verificationCmd\`. Failed verification keeps the integration target unchanged. Successful worktrees are retained for inspection.
 
 The MCP connection retains its capability; do not copy or log session tokens. A new connection needs a valid capability to resume an existing ID. Locks coordinate cooperating writers; hooks are not an OS security sandbox.
 
-If Claude edit hooks or CLI commands are also enabled, launch the client from a persistent shell after \`eval "$(kith session start --agent <id> --owner-pid "$$" --shell)"\`. CLI, hooks and MCP must inherit the same KITH_AGENT_ID/KITH_SESSION_TOKEN and use the same agent ID. Separate stateless shell calls do not preserve these exports or the owning shell. MCP-only setup skips new Claude edit hooks and preserves existing ones.
+If Claude/Cursor edit hooks or CLI commands are also enabled, launch the client from a persistent shell after \`eval "$(kith session start --agent <id> --owner-pid "$$" --shell)"\`. CLI, hooks and MCP must inherit the same KITH_AGENT_ID/KITH_SESSION_TOKEN and use the same agent ID. Separate stateless shell calls do not preserve these exports or the owning shell. MCP-only setup skips new native edit hooks and preserves existing ones.
 <!-- KITH:END -->`;
     if (content.includes('<!-- KITH:START -->') !== content.includes('<!-- KITH:END -->')) {
       throw new Error('AGENTS.md has an incomplete Kith block. Repair it before running init.');
@@ -151,7 +177,7 @@ If Claude edit hooks or CLI commands are also enabled, launch the client from a 
       ? content.replace(/<!-- KITH:START -->[\s\S]*?<!-- KITH:END -->/, () => block)
       : content.trimEnd() + '\n\n' + block + '\n';
     add('AGENTS.md', content);
-    add('.agent/skills/kith/SKILL.md', '---\nname: kith\ndescription: Coordinate parallel coding work through Kith MCP and isolated worktrees.\n---\n\nPrefer the Kith MCP tools on one persistent connection. Begin with kith_begin_work using a unique agentId, explicit scopeGlobs and isolateWorktree:true. Edit the returned worktreePath, report files with kith_record_file_edit, run literal command arrays with kith_run_with_mutex, heartbeat before expiry and finish with kith_complete_work plus a project verificationCmd. Inspect kith_get_status. Keep capabilities private. If CLI or Claude hooks are enabled, first launch the client from a persistent shell with the same KITH_AGENT_ID/KITH_SESSION_TOKEN and --owner-pid "$$". Stateless shell calls cannot retain that setup. Locks require cooperating clients.\n');
+    add('.agent/skills/kith/SKILL.md', '---\nname: kith\ndescription: Coordinate parallel coding work through Kith MCP and isolated worktrees.\n---\n\nPrefer the Kith MCP tools on one persistent connection. Begin with kith_begin_work using a unique agentId, explicit scopeGlobs and isolateWorktree:true. Edit the returned worktreePath, report files with kith_record_file_edit, run literal command arrays with kith_run_with_mutex, heartbeat before expiry and finish with kith_complete_work plus a project verificationCmd. Inspect kith_get_status. Keep capabilities private. If CLI or native hooks are enabled, first launch the client from a persistent shell with the same KITH_AGENT_ID/KITH_SESSION_TOKEN and --owner-pid "$$". Stateless shell calls cannot retain that setup. Locks require cooperating clients.\n');
   }
   if (selected.has('git')) {
     try {
@@ -163,10 +189,12 @@ If Claude edit hooks or CLI commands are also enabled, launch the client from a 
       const relativeHooks = path.relative(fs.realpathSync(absRoot), physicalHooks);
       if (relativeHooks === '..' || relativeHooks.startsWith('..' + path.sep) || path.isAbsolute(relativeHooks)) {
         warnings.push('Git hook skipped: hooks directory is outside this repository. Integrate the guard manually.');
-      } else if (fs.existsSync(hook)) {
-        warnings.push('Existing pre-commit hook preserved; add `kith hook pre-commit` to your hook manager if needed.');
       } else {
-        add(hook, `#!/usr/bin/env sh\n# Kith coordination guard\nexec ${hookCommand} pre-commit\n`, 0o755);
+        const script = (arg: string) => `#!/usr/bin/env sh\n# Kith coordination guard\nexec ${hookCommand} pre-commit${arg}\n`;
+        const existing = fs.existsSync(hook) ? fs.readFileSync(hook, 'utf8') : null;
+        if (existing === null || ['', ...['block', 'warn', 'off'].map(m => ` --enforcement ${m}`)].some(arg => existing === script(arg))) {
+          add(hook, script(modeArg), 0o755);
+        } else warnings.push('Existing pre-commit hook preserved; add `kith hook pre-commit` to your hook manager if needed.');
       }
     } catch {
       warnings.push('Git hook skipped: this directory is not a Git worktree.');
@@ -204,11 +232,7 @@ esac
   if (report.dryRun) return report;
   const engine = new KithEngine(absRoot);
   try {
-    for (const [name, { content, mode }] of plan) {
-      const target = path.isAbsolute(name) ? name : path.join(absRoot, name);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, content, { encoding: 'utf8', mode });
-    }
+    if(plan.size) applySetupPlan(absRoot, engine.coordDb.coordDir, plan, warnings);
     report.indexedFiles = engine.depGraph.indexRepositoryFiles(absRoot);
   } finally {
     engine.close();
