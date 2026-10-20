@@ -6,6 +6,7 @@
 
 - Remove `top`/`ui` and their dashboard modules. Use existing CLI/MCP status; normal engine startup may migrate or reap state, so preserve stopped recovery data first.
 - Remove fuzzy intent blocking, synonym/duplicate scoring, full-text search maintenance and their public APIs/result fields (`semanticOverlaps`, `duplicates`, `autoMergeableFiles`). Scope ownership remains authoritative; similar task titles no longer block disjoint scopes. The semantic-overlap `force` option is removed.
+- Retain a small non-blocking reuse hint for exact, case-sensitive symbol names of the same kind in other files, queried from canonical contracts and returned through existing edit warnings. No scoring, synonym rules, new API, search index or schema change.
 - Refuse unresolved Git conflicts instead of rewriting source/JSON. Remove `checkAdditiveMergeability` and `autoResolvedFiles`; retain worktrees/checkpoints for explicit repair and verification retries. TypeScript is a development dependency only.
 - Share CLI/MCP begin/complete orchestration. Default init configures MCP clients/instructions; hooks and shims require explicit selection. Existing guards and state are preserved. No schema changes; legacy derived search tables are left unused. Stop older clients before upgrading; mixed versions/downgrades are not supported by this change.
 

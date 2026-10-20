@@ -161,7 +161,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
 
   server.tool(
     'kith_record_file_edit',
-    'Analyze a modified file to extract AST contracts, check transitive import blast radius, and run a live dirty-tree git merge-tree conflict check.',
+    'Analyze a modified file to extract AST contracts, flag exact name/kind matches in other files as non-blocking reuse hints, check transitive import blast radius, and run a live dirty-tree git merge-tree conflict check.',
     {
       agentId: z.string(),
       sessionToken: z.string().optional(),

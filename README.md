@@ -15,7 +15,7 @@
 
 One agent changes an interface while another builds against it. Two agents edit the same file. Separate worktrees still compete for a dev-server port or a package install.
 
-Kith gives cooperating agents shared local state: who owns a task, which files are claimed, and which commands need to wait. Agents use its MCP server; CLI commands and an optional read-only terminal view support local inspection and maintenance. Coordination lives in SQLite on your machine; Kith itself needs no hosted service or model API key.
+Kith gives cooperating agents shared local state: who owns a task, which files are claimed, and which commands need to wait. Agents use its MCP server; CLI commands support local inspection and maintenance. Coordination lives in SQLite on your machine; Kith itself needs no hosted service or model API key.
 
 ## What Kith does
 
@@ -29,7 +29,7 @@ Kith gives cooperating agents shared local state: who owns a task, which files a
 
 Kith fits workflows where you already launch multiple coding agents and want them to coordinate. It does not choose models, write prompts, or launch a fleet for you. Worktrees separate files; Kith adds shared ownership and resource coordination.
 
-**Experimental.** Kith relies on cooperating clients. Hooks are not an OS security boundary, and contract analysis is advisory. Scope matching follows a [documented grammar](docs/path-and-scope-rules.md). Start in a disposable repository. Read the [reliability contract](docs/reliability.md) before using it on important work.
+**Experimental.** Kith relies on cooperating clients. Hooks are not an OS security boundary, and contract analysis is advisory. Edit reports flag exact, case-sensitive symbol names of the same kind recorded in other files as possible reuse candidates; a matching name does not establish equivalent behavior or block work. Scope matching follows a [documented grammar](docs/path-and-scope-rules.md). Start in a disposable repository. Read the [reliability contract](docs/reliability.md) before using it on important work.
 
 ## Quick start
 

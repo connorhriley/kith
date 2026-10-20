@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KithEngine } from '../src/index.js';
 
-describe('Advisory import-graph contract reports', () => {
+describe('Advisory contract reports', () => {
   let tmpDir: string;
   let engine: KithEngine;
 
@@ -77,6 +77,38 @@ describe('Advisory import-graph contract reports', () => {
     expect(delta.activeConflicts.some((c) => c.severity === 'transitive_contract_break')).toBe(
       true
     );
+  });
+
+  it('warns about an exact name in another file without blocking ownership or retaining stale matches', () => {
+    engine.fencing.registerAgent({ id: 'worker' });
+    const begun = engine.beginWork({ agentId: 'worker', title: 'Add helper', scopeGlobs: ['src/helpers/**'] });
+    expect(begun.ok).toBe(true);
+    const content = 'export function verifyToken(value: number): number { return value; }\n';
+    const report = engine.processPostFileEdit({ agentId: 'worker', filePath: 'src/helpers/token.ts', content });
+    expect(report.warnings.filter(w => w.includes('[EXISTING SYMBOL]'))).toEqual([
+      "[EXISTING SYMBOL] 'verifyToken' (function) is also recorded in 'src/lib/auth.ts'. Consider reuse if it serves the same purpose.",
+    ]);
+    expect(report.contractReport.upsertedContracts[0].symbol_name).toBe('verifyToken');
+    expect(engine.intents.getTask(begun.task!.id)?.status).toBe('active');
+    expect(engine.locks.listLocks()[0].owner_agent_id).toBe('worker');
+    engine.fencing.registerAgent({ id: 'peer' });
+    engine.processPostFileEdit({ agentId: 'peer', filePath: 'src/lib/auth.ts', content: 'export function authenticate(): boolean { return true; }' });
+    const retried = engine.processPostFileEdit({ agentId: 'worker', filePath: 'src/helpers/token.ts', content });
+    expect(retried.warnings.filter(w => w.includes('[EXISTING SYMBOL]'))).toEqual([]);
+  });
+
+  it('ignores self matches, case variants, synonyms and different symbol kinds', () => {
+    engine.fencing.registerAgent({ id: 'worker' });
+    for (const [filePath, content] of [
+      ['src/lib/auth.ts', fs.readFileSync(path.join(tmpDir, 'src/lib/auth.ts'), 'utf8')],
+      ['src/helpers/token.ts', 'export function VerifyToken(token: string): boolean { return true; }'],
+      ['src/helpers/token.ts', 'export function validateToken(token: string): boolean { return true; }'],
+      ['src/helpers/token.ts', 'export const verifyToken = true;'],
+      ['src/helpers/token.ts', ''],
+    ]) {
+      const report = engine.processPostFileEdit({ agentId: 'worker', filePath, content });
+      expect(report.warnings.filter(w => w.includes('[EXISTING SYMBOL]'))).toEqual([]);
+    }
   });
 
 });

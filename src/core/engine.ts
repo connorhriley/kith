@@ -92,6 +92,17 @@ export class KithEngine {
     );
 
     const warnings: string[] = [];
+    // Advisory only: matching names do not establish equivalent behavior.
+    const existingSymbols = this.coordDb.db.prepare(`
+      SELECT peer.symbol_name, peer.kind, peer.file_path
+      FROM contracts AS edited JOIN contracts AS peer
+        ON peer.symbol_name = edited.symbol_name COLLATE BINARY AND peer.kind = edited.kind
+      WHERE edited.file_path = ? AND peer.file_path != edited.file_path
+      ORDER BY peer.symbol_name, peer.file_path
+    `).all(file) as Array<{ symbol_name: string; kind: string; file_path: string }>;
+    for (const symbol of existingSymbols) {
+      warnings.push(`[EXISTING SYMBOL] '${symbol.symbol_name}' (${symbol.kind}) is also recorded in '${symbol.file_path}'. Consider reuse if it serves the same purpose.`);
+    }
 
     for (const brk of contractReport.breakingChanges) {
       const targetWho = brk.affectedAgentId

@@ -388,3 +388,27 @@ it('recovers a killed MCP owner from a stopped WAL backup and resumes its preser
   expect(fs.existsSync(work.worktree.worktreePath)).toBe(true);
   expect(data(await tool(two.client, 'kith_get_status', {})).locks).toEqual([]);
 });
+
+
+it('delivers exact-name reuse hints over MCP without blocking separate worktrees or verified completion', async () => {
+  seed();
+  const one = await connect(); const two = await connect();
+  const work = [];
+  for (const [client, agentId] of [[one.client, 'one'], [two.client, 'two']] as const) {
+    const begun = data(await tool(client, 'kith_begin_work', { agentId, title: 'Add helper', scopeGlobs: [`src/${agentId}.mjs`], isolateWorktree: true }));
+    const content = `export function sharedHelper() { return '${agentId}'; }\n`;
+    fs.writeFileSync(path.join(begun.worktree.worktreePath, `src/${agentId}.mjs`), content);
+    const report = data(await tool(client, 'kith_record_file_edit', { agentId, filePath: `src/${agentId}.mjs` }));
+    const hints = report.warnings.filter((w: string) => w.includes('[EXISTING SYMBOL]'));
+    if (agentId === 'one') expect(hints).toEqual([]);
+    else { expect(hints).toHaveLength(1); expect(hints[0]).toContain('src/one.mjs'); }
+    work.push({ client, agentId, content });
+  }
+  for (const { client, agentId, content } of work) {
+    expect(data(await tool(client, 'kith_complete_work', { agentId, verificationCmd: `node --check src/${agentId}.mjs` })).ok).toBe(true);
+    expect(fs.readFileSync(path.join(root, `src/${agentId}.mjs`), 'utf8')).toBe(content);
+  }
+  const status = data(await tool(two.client, 'kith_get_status', {}));
+  expect(status.tasks.every((task: any) => task.status === 'done')).toBe(true);
+  expect(status.locks).toEqual([]);
+});
