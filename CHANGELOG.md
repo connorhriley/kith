@@ -1,9 +1,10 @@
 # Changelog
 
-## 0.1.2 — 2026-10-20
+## 0.1.2 — Unreleased
 
 - Add the official MCP Registry ownership marker and server manifest, with pinned npm launch and a required repository path.
 - Clarify npm-first client onboarding and expose the public package version in the README. No coordination/runtime behavior, dependencies or schema changes.
+- Synchronize the MCP mutex test with command readiness and release, and assert lease renewal directly, avoiding fixed-duration races on busy CI runners. Installation examples remain pinned to the latest published package until this release is available.
 
 ## 0.1.1 — 2026-10-20
 

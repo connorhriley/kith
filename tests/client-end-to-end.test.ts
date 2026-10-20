@@ -190,13 +190,25 @@ it('runs literal commands through MCP with renewable mutex leases and owned work
   const one = await connect(); const two = await connect();
   data(await tool(one.client, 'kith_begin_work', { agentId: 'command-owner', title: 'Command verification', scopeGlobs: ['src/native.mjs'], isolateWorktree: true }));
   expect((await tool(two.client, 'kith_run_with_mutex', { agentId: 'command-owner', mutexName: 'native', command: [process.execPath, '-v'] })).isError).toBe(true);
-  const command = [process.execPath, '-e', 'setTimeout(()=>process.stdout.write(JSON.stringify({cwd:process.cwd(),arg:process.argv[1]})),900)', 'literal $value; words'];
-  const pending = tool(one.client, 'kith_run_with_mutex', { agentId: 'command-owner', mutexName: 'native', command, leaseDurationMs: 250 });
-  await new Promise((resolve) => setTimeout(resolve, 450));
+  const readyFile = path.join(root, 'mutex-ready');
+  const releaseFile = path.join(root, 'mutex-release');
+  // Keep the command alive until the peer has checked the mutex. A fixed-duration
+  // command can finish while a busy CI runner is still preparing the assertion.
+  const script = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(readyFile)},'ready');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseFile)})){clearInterval(timer);process.stdout.write(JSON.stringify({cwd:process.cwd(),arg:process.argv[1]}));}},20);`;
+  const command = [process.execPath, '-e', script, 'literal $value; words'];
   const engine = new KithEngine(root);
+  const pending = tool(one.client, 'kith_run_with_mutex', { agentId: 'command-owner', mutexName: 'native', command, leaseDurationMs: 250, commandTimeoutMs: 10000 });
   try {
+    const deadline = Date.now() + 8000;
+    while (!fs.existsSync(readyFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fs.existsSync(readyFile), 'supervised command became ready').toBe(true);
+    const lease = () => engine.coordDb.db.prepare("SELECT expires_at FROM resources WHERE type='mutex' AND name='native'").get() as { expires_at: number };
+    const initialExpiry = lease().expires_at;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(lease().expires_at).toBeGreaterThan(initialExpiry);
     engine.fencing.registerAgent({ id: 'peer' });
     expect(engine.broker.tryAcquireMutex({ agentId: 'peer', mutexName: 'native' }).acquired).toBe(false);
+    fs.writeFileSync(releaseFile, 'release');
     const result = data(await pending);
     const output = JSON.parse(result.stdout);
     expect(fs.realpathSync(output.cwd)).toBe(fs.realpathSync(engine.fencing.getAgent('command-owner')!.worktree_path!));
@@ -204,7 +216,10 @@ it('runs literal commands through MCP with renewable mutex leases and owned work
     const grant = engine.broker.tryAcquireMutex({ agentId: 'peer', mutexName: 'native' });
     expect(grant.acquired).toBe(true);
     engine.broker.releaseMutex({ agentId: 'peer', mutexName: 'native', fencingToken: grant.fencingToken });
-  } finally { engine.close(); }
+  } finally {
+    fs.writeFileSync(releaseFile, 'release');
+    try { await pending; } finally { engine.close(); }
+  }
   const failed = await tool(one.client, 'kith_run_with_mutex', { agentId: 'command-owner', mutexName: 'native', command: [process.execPath, '-e', 'process.exit(7)'] });
   expect(failed.isError).toBe(true);
   expect((failed.structuredContent as any).exitCode).toBe(7);
