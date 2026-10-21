@@ -176,7 +176,7 @@ Use Kith MCP to claim work, isolate changes in worktrees, share local resources 
 4. Renew idle sessions with \`kith_heartbeat\` before their lease expires (every two minutes for the default five-minute lease; sooner for a shorter lease). Inspect \`kith_get_status\`.
 5. Complete with \`kith_complete_work\` and a project-specific \`verificationCmd\`. Failed verification keeps the integration target unchanged. Successful worktrees are retained for inspection.
 
-The MCP connection retains its capability; do not copy or log session tokens. A new connection needs a valid capability to resume an existing ID. Locks coordinate cooperating writers; hooks are not an OS security sandbox.
+The MCP connection retains its capability; omit \`sessionToken\` on subsequent calls on that connection. Initial grant/resume replies contain the token, so keep client transcripts private. Do not copy tokens into shell commands or public reports. A new connection needs a valid capability to resume an existing ID. Locks coordinate cooperating writers; hooks are not an OS security sandbox.
 
 If Claude/Cursor edit hooks or CLI commands are also enabled, launch the client from a persistent shell after \`eval "$(kith session start --agent <id> --owner-pid "$$" --shell)"\`. CLI, hooks and MCP must inherit the same KITH_AGENT_ID/KITH_SESSION_TOKEN and use the same agent ID. Separate stateless shell calls do not preserve these exports or the owning shell. MCP-only setup skips new native edit hooks and preserves existing ones.
 <!-- KITH:END -->`;

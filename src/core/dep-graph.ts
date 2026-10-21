@@ -162,6 +162,11 @@ export class DependencyAndContractEngine {
       // Upsert current exports
       for (const exp of analysis.exports) {
         const prev = existingBySymbol.get(exp.symbolName);
+        // A body-only edit does not republish every unchanged interface in the file.
+        // Import edges above still reflect the newly analyzed source.
+        if (prev && prev.kind === exp.kind && prev.signature === exp.signature
+          && prev.ast_hash === exp.astHash && prev.params_fingerprint === exp.paramsFingerprint
+          && prev.doc_comment === exp.docComment) continue;
         const isBreaking = prev !== undefined && prev.ast_hash !== exp.astHash;
         if (isBreaking && prev) {
           changedSymbols.push({

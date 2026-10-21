@@ -53,7 +53,9 @@ try {
       assert((await client.listTools()).tools.some(tool => tool.name === 'kith_preview_integrate'));
       const status = await client.callTool({ name: 'kith_get_status', arguments: {} });
       assert.equal(status.isError, false);
-      assert.equal(status.structuredContent.protocolVersion, '1.0.0');
+      assert.equal(status.structuredContent.protocolVersion, '1.1.0');
+      assert.equal(status.structuredContent.contractsIncluded, false);
+      assert.equal(typeof status.structuredContent.contractCount, 'number');
     } finally { await client.close(); }
   `], install);
   console.log(`Package smoke passed: ${packed.filename}, ${files.length} files; clean consumer install, CLI, supervised worker, library API, and actual MCP discovery/status.`);

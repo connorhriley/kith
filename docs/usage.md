@@ -2,7 +2,7 @@
 
 ## Recommended: MCP and isolated worktrees
 
-Connect through the [MCP-only client setup](integrations.md). Each parallel agent uses its own MCP connection and worktree. No shell exports are needed when using only MCP. The connection retains its granted capability; another connection needs that capability to resume the same ID.
+Connect through the [MCP-only client setup](integrations.md). Each parallel agent uses its own MCP connection and worktree. No shell exports are needed when using only MCP. Omit `sessionToken` on subsequent calls on the same connection; the initial grant reply still contains it, so keep client transcripts private. The connection retains its granted capability; another connection needs that capability to resume the same ID.
 
 Call these tools on the same connection:
 
@@ -16,6 +16,14 @@ kith_complete_work   {"agentId":"auth-worker","verificationCmd":"pnpm typecheck"
 ```
 
 Use a different ID and nonoverlapping scope for another agent. An overlapping exclusive scope returns a tool error. Commands run with the MCP server permissions and require client approval; their working directory defaults to the registered worktree. Keep the connection open and heartbeat before the default five-minute session expiry. See the runnable [two-client example](../examples/two-agents.mjs).
+
+## Keep existing PR branches and checks
+
+For independent PRs, create each task's Git worktree from the intended PR base first, connect Kith to that worktree and use a fresh agent ID with `isolateWorktree:false`. Keep the existing PR/review/merge process. Kith-created worktrees branch from the selected integration checkout's current HEAD; they inherit its setup and earlier integrated commits.
+
+Successful completion ends the session and retains its worktree. Run owned commands before completing, or start a fresh session for later maintenance. A refused claim can leave an active session without locks; it can retry on the same connection or expire normally. Status `conflicts` describes current detected file conflicts, not a history of refused scope claims.
+
+Integration refuses a target with uncommitted or untracked work to preserve it. Commit or preserve those files explicitly, use a clean integration checkout, or keep the existing PR workflow above. Do not blanket-ignore unknown files to silence the guard. The supervised command runner uses the server's permissions, including network access; it is not a sandbox. `verificationCmd` is an explicit shell string; mutex commands use literal argv.
 
 ## CLI fallback: keep the owning shell alive
 

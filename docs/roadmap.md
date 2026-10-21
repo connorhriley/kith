@@ -28,7 +28,7 @@ Cursor native hook payload/command fixtures, enforcement modes, private setup ba
 
 ## 5. Public project and release operations
 
-The canonical upstream is established. The package identity is `kith-coord` (CLI `kith`); release checks include an actual installed-package MCP consumer. Input schemas and claim/status semantics are recorded under protocol 1.0 with a CI drift check. Maintain registry ownership, maintainer access, security/moderation contacts and the decision process. Private vulnerability reporting is enabled on the canonical upstream. Run the CI matrix on real pull requests. Publish a prerelease only after a packed-package clean-install check, dependency review, documented support matrix, changelog, rollback procedure, and end-to-end demo. Add provenance and automated publishing after ownership and credentials are established.
+The canonical upstream is established. The package identity is `kith-coord` (CLI `kith`); release checks include an actual installed-package MCP consumer. Input schemas and claim/status semantics are recorded under protocol 1.1 with a CI drift check. Maintain registry ownership, maintainer access, security/moderation contacts and the decision process. Private vulnerability reporting is enabled on the canonical upstream. Run the CI matrix on real pull requests. Publish a prerelease only after a packed-package clean-install check, dependency review, documented support matrix, changelog, rollback procedure, and end-to-end demo. Add provenance and automated publishing after ownership and credentials are established.
 
 ## 6. Adaptability after the core is sound
 

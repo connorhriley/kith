@@ -95,6 +95,8 @@ it('runs generated client hooks, worktree edit reports, verification and complet
   const client = new Client({ name: 'generated-config-client', version: '1.0.0' }); clients.push(client);
   await client.connect(transport);
   const work = data(await tool(client, 'kith_begin_work', { agentId: 'worker', title: 'Add feature module', scopeGlobs: ['src/**'], isolateWorktree: true }));
+  expect(work.agent.worktree_path).toBe(work.worktree.worktreePath);
+  expect(work.agent.branch).toBe(work.worktree.branch);
   const session = { id: 'worker', token: work.sessionToken };
   const hookEnv = { ...env, KITH_AGENT_ID: session.id, KITH_SESSION_TOKEN: session.token };
   const file = path.join(work.worktree.worktreePath, 'src/feature.mjs');
@@ -106,7 +108,7 @@ it('runs generated client hooks, worktree edit reports, verification and complet
   fs.writeFileSync(file, 'export const feature = 42;\n');
   const post = spawnSync('sh', ['-c', hooks.PostToolUse[0].hooks[0].command], { cwd: nested, env: hookEnv, input, encoding: 'utf8' });
   expect(post.status, post.stderr).toBe(0);
-  const status = data(await tool(client, 'kith_get_status', { agentId: 'worker' }));
+  const status = data(await tool(client, 'kith_get_status', { agentId: 'worker', includeContracts: true }));
   expect(status.contracts.some((c: any) => c.file_path === 'src/feature.mjs' && c.symbol_name === 'feature')).toBe(true);
   expect(fs.existsSync(path.join(root, 'src/feature.mjs'))).toBe(false);
   const completed = data(await tool(client, 'kith_complete_work', { agentId: 'worker', verificationCmd: 'node --check src/feature.mjs' }));
@@ -298,7 +300,7 @@ it('shares real MCP clients across linked checkout/subdirectory discovery and gu
   const post = spawnSync(process.execPath, [cli, 'hook', 'post'], { cwd: path.join(linked, 'src'), env: tokenEnv, encoding: 'utf8',
     input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: file } }) });
   expect(post.status, post.stderr).toBe(0);
-  const status = data(await tool(one.client, 'kith_get_status', {}));
+  const status = data(await tool(one.client, 'kith_get_status', { includeContracts: true }));
   expect(status.repository.root).toBe(fs.realpathSync(root));
   expect(status.repository.coordDir).toBe(path.join(fs.realpathSync(root), '.coord'));
   expect(status.agents.find((a: any) => a.id === 'peer').worktree_path).toBe(fs.realpathSync(linked));
@@ -439,7 +441,7 @@ it('exposes workspace observations and committed conflict previews through actua
   fs.writeFileSync(path.join(aPath,'src/base.mjs'),'export const base = 2;\n');
   fs.writeFileSync(path.join(bPath,'src/base.mjs'),'export const base = 3;\n');
   const state=data(await tool(one,'kith_get_status',{}));
-  expect(state.protocolVersion).toBe('1.0.0');
+  expect(state.protocolVersion).toBe('1.1.0');
   expect(state.workspaces.find((w:any)=>w.agentId==='preview-a').overlaps).toContainEqual({path:'src/base.mjs',agentIds:['preview-b']});
   expect((await tool(one,'kith_preview_integrate',{agentId:'preview-a'})).isError).toBe(true);
   expect((await tool(two,'kith_preview_integrate',{agentId:'preview-a'})).isError).toBe(true);
@@ -453,4 +455,37 @@ it('exposes workspace observations and committed conflict previews through actua
   const conflict=data(await tool(two,'kith_preview_integrate',{agentId:'preview-b'}));
   expect(conflict.clean).toBe(false);expect(conflict.conflicts).toEqual(['src/base.mjs']);expect(conflict.verified).toBe(false);
   expect(git('rev-parse','HEAD')).toBe(head);expect(fs.readFileSync(path.join(bPath,'src/base.mjs'))).toEqual(before);
+});
+
+
+it('keeps MCP status and body-only edit replies compact with a large indexed registry', async () => {
+  seed();
+  const source = Array.from({ length: 135 }, (_, i) =>
+    `export function helper${i}(value: string): string { return value; }`).join('\n') + '\n';
+  fs.writeFileSync(path.join(root, 'src/helpers.ts'), source);
+  git('add', '.'); git('commit', '-m', 'Index real-sized registry');
+  const engine = new KithEngine(root);
+  try { engine.depGraph.indexRepositoryFiles(); } finally { engine.close(); }
+  const { client } = await connect();
+  const initial = data(await tool(client, 'kith_get_status', {}));
+  expect(initial.contractCount).toBeGreaterThanOrEqual(135);
+  expect(initial.contracts).toEqual([]);
+  expect(initial.contractsIncluded).toBe(false);
+  expect(JSON.stringify(initial).length).toBeLessThan(5000);
+  const full = data(await tool(client, 'kith_get_status', { includeContracts: true }));
+  expect(full.contracts).toHaveLength(initial.contractCount);
+  expect(full.contractsIncluded).toBe(true);
+  expect(JSON.stringify(full).length).toBeGreaterThan(40000);
+  const begun = data(await tool(client, 'kith_begin_work', {
+    agentId: 'editor', title: 'Body-only fix', scopeGlobs: ['src/helpers.ts'],
+  }));
+  // The same owning connection needs no token argument to report or finish work.
+  const content = source.replace('return value;', 'return value.trim();');
+  fs.writeFileSync(path.join(root, 'src/helpers.ts'), content);
+  const result = await tool(client, 'kith_record_file_edit', { agentId: 'editor', filePath: 'src/helpers.ts' });
+  const report = data(result);
+  expect(report.contractReport.upsertedContracts).toEqual([]);
+  expect(JSON.stringify(result).length).toBeLessThan(5000);
+  expect(JSON.stringify(result)).not.toContain(begun.sessionToken);
+  data(await tool(client, 'kith_complete_work', { agentId: 'editor' }));
 });

@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.0.0",
+  "protocolVersion": "1.1.0",
   "tools": [
     {
       "name": "kith_start_session",
@@ -361,6 +361,10 @@
           },
           "sessionToken": {
             "type": "string"
+          },
+          "includeContracts": {
+            "type": "boolean",
+            "description": "Include the full contract registry. Default false keeps frequent status polls compact; contractCount always reports its size."
           }
         },
         "additionalProperties": false,
@@ -407,7 +411,7 @@
           },
           "mergeBranch": {
             "type": "string",
-            "description": "If work was done on a worktree/branch, run Speculative Merge Train to integrate it"
+            "description": "Source branch to integrate, not the destination. Defaults to the registered agent branch; destination is the selected repository checkout current branch. Omit for claims-only work without a registered branch."
           },
           "verificationCmd": {
             "type": "string",

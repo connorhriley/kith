@@ -112,3 +112,26 @@ describe('Advisory contract reports', () => {
   });
 
 });
+
+
+it('reports only actual contract changes while retaining unchanged signatures', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kith-contract-delta-'));
+  const engine = new KithEngine(root);
+  try {
+    engine.fencing.registerAgent({ id: 'editor' });
+    const file = 'helpers.ts';
+    const source = 'export function keep(value: string): string { return value; }\n'
+      + 'export function change(value: string): string { return value; }\n';
+    const first = engine.processPostFileEdit({ agentId: 'editor', filePath: file, content: source });
+    expect(first.contractReport.upsertedContracts).toHaveLength(2);
+    const changed = engine.processPostFileEdit({ agentId: 'editor', filePath: file,
+      content: source.replace('change(value: string)', 'change(value: number)') });
+    expect(changed.contractReport.upsertedContracts.map(c => c.symbol_name)).toEqual(['change']);
+    expect(engine.depGraph.listContracts()).toHaveLength(2);
+    const removed = engine.processPostFileEdit({ agentId: 'editor', filePath: file,
+      content: 'export function keep(value: string): string { return value.trim(); }\n' });
+    expect(removed.contractReport.upsertedContracts).toEqual([]);
+    expect(removed.contractReport.removedSymbols).toEqual(['change']);
+    expect(engine.depGraph.listContracts().map(c => c.symbol_name)).toEqual(['keep']);
+  } finally { engine.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
