@@ -4,7 +4,7 @@ Kith is a local ledger for cooperating coding agents. Clients share one reposito
 
 ## Versioning and schemas
 
-Protocol 1.1 is part of unreleased package 0.1.2. Published `kith-coord@0.1.1` reports protocol 1.0 and includes full contracts in MCP status; the compact default and `includeContracts` input below require 0.1.2.
+Protocol 1.1 ships with package 0.1.2. Earlier `kith-coord@0.1.1` reports protocol 1.0 and includes full contracts in MCP status; the compact default and `includeContracts` input below require 0.1.2.
 
 `KITH_PROTOCOL_VERSION` and status responses advertise `1.1.0`. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema (2) have independent versions. The [tool snapshot](protocol/tools.v1.json) contains all 13 tool names, descriptions and JSON input schemas, exported from an actual MCP `tools/list` response. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
 

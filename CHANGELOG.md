@@ -1,13 +1,13 @@
 # Changelog
 
-## 0.1.2 — Unreleased
+## 0.1.2 — 2026-10-21
 
 - Address AgentScrum’s first external Claude Code/OpenCode task trial: compact default MCP status (protocol 1.1; full contracts remain opt-in), omit unchanged contracts from edit reports, and return the current worktree-bearing agent record immediately.
 - Clarify same-connection token omission and transcript limits, independent PR worktrees, retained worktrees/session completion, and integration target preservation. Record the maintainer-reported completed workflow and merged PRs without treating it as broad client certification.
 
 - Add the official MCP Registry ownership marker and server manifest, with pinned npm launch and a required repository path.
-- Clarify npm-first client onboarding and expose the public package version in the README. No coordination/runtime behavior, dependencies or schema changes.
-- Synchronize the MCP mutex test with command readiness and release, and assert lease renewal directly, avoiding fixed-duration races on busy CI runners. Installation examples remain pinned to the latest published package until this release is available.
+- Clarify npm-first client onboarding and expose the public package version in the README. No new runtime dependencies or storage schema changes.
+- Synchronize the MCP mutex test with command readiness and release, and assert lease renewal directly, avoiding fixed-duration races on busy CI runners. Installation examples pin this release.
 
 ## 0.1.1 — 2026-10-20
 
