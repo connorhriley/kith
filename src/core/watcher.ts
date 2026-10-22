@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { discoverRepository } from './repository.js';
@@ -15,6 +16,35 @@ export interface CollisionAlert {
   timestamp: number;
 }
 export interface ScanIssue { repository: string; message: string }
+
+// Compare current bytes, not dirty filenames or Git status codes. Unknown/large
+// objects remain advisory overlaps; never follow a symlink outside the checkout.
+function contentIdentity(repo: string, file: string): string | null {
+  const target = path.join(repo, file);
+  let stat: fs.Stats;
+  try { stat = fs.lstatSync(target); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'absent'; throw error; }
+  const parent = fs.realpathSync(path.dirname(target));
+  const relative = path.relative(repo, parent);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error(`Path redirected outside checkout: ${file}`);
+  if (stat.isSymbolicLink()) return `link:${fs.readlinkSync(target)}`;
+  if (!stat.isFile() || stat.size > 8 * 1024 * 1024) return null;
+  const fd = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  try {
+    const before = fs.fstatSync(fd);
+    if (before.ino !== stat.ino || before.dev !== stat.dev || before.size !== stat.size || before.mtimeMs !== stat.mtimeMs) throw new Error(`File changed during comparison: ${file}`);
+    const hash = createHash('sha256');
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    for (let offset = 0; offset < before.size;) {
+      const count = fs.readSync(fd, buffer, 0, Math.min(buffer.length, before.size - offset), offset);
+      if (!count) throw new Error(`File changed during comparison: ${file}`);
+      hash.update(buffer.subarray(0, count)); offset += count;
+    }
+    const after = fs.fstatSync(fd);
+    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new Error(`File changed during comparison: ${file}`);
+    return `file:${before.mode & 0o111}:${hash.digest('hex')}`;
+  } finally { fs.closeSync(fd); }
+}
 
 /** Read-only overlap observations. This cannot identify writers or establish semantic conflicts. */
 export class PassiveConflictWatcher {
@@ -129,9 +159,17 @@ export class PassiveConflictWatcher {
     if (!this.errors.length) for (const key of this.recentEdits.keys()) if (!seen.has(key)) this.recentEdits.delete(key);
     const current = new Map<string, CollisionAlert>();
     for (const [id, overlap] of overlaps) if (overlap.repos.length > 1) {
+      let identical = false;
+      try {
+        const identities = overlap.repos.map(repo => contentIdentity(repo, overlap.file));
+        identical = identities.every(value => value !== null && value === identities[0]);
+      } catch (error) {
+        this.errors.push({ repository: overlap.repos.join(', '), message: `Cannot compare ${overlap.file}: ${error instanceof Error ? error.message : String(error)}` });
+      }
+      if (identical) continue;
       const previous = this.activeCollisions.get(id);
       const alert: CollisionAlert = { id, filePath: overlap.file, repos: overlap.repos, severity: 'collision', timestamp: previous?.timestamp ?? now,
-        message: `Overlapping uncommitted changes to '${overlap.file}' in linked worktrees: ${overlap.repos.join(', ')}` };
+        message: `Shared dirty path '${overlap.file}' has different or unverified contents in linked worktrees: ${overlap.repos.join(', ')}. This is not a proven merge conflict.` };
       current.set(id, alert);
       if (!previous) {
         this.options.onCollision?.(alert);

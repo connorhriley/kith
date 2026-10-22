@@ -100,7 +100,7 @@ it('binds a real MCP connection launched at filesystem root to the explicit proj
 
 it('discovers hidden linked worktrees and detects hotspots without unrelated-repo false positives', async () => {
   const repo = repository(), peer = linked(repo), unrelated = repository('unrelated');
-  for (const dir of [repo, peer, unrelated]) fs.writeFileSync(path.join(dir, 'src/page.tsx'), 'changed\n');
+  for (const dir of [repo, peer, unrelated]) fs.writeFileSync(path.join(dir, 'src/page.tsx'), `${path.basename(dir)} changed\n`);
   const watcher = new PassiveConflictWatcher(repo);
   expect(watcher.discoverGitRepos().sort()).toEqual([repo, peer].sort());
   const alerts = await watcher.scanOnce();
@@ -113,19 +113,19 @@ it('compares full relative paths and NUL-delimited filenames rather than basenam
   const repo = repository(), peer = linked(repo);
   fs.writeFileSync(path.join(repo, 'src/auth/index.ts'), 'left\n'); fs.writeFileSync(path.join(peer, 'src/billing/index.ts'), 'right\n');
   const watcher = new PassiveConflictWatcher(repo); expect(await watcher.scanOnce()).toEqual([]);
-  for (const dir of [repo, peer]) fs.writeFileSync(path.join(dir, 'src/a b\n"x".ts'), 'edited\n');
+  for (const dir of [repo, peer]) fs.writeFileSync(path.join(dir, 'src/a b\n"x".ts'), `${path.basename(dir)} edited\n`);
   expect((await watcher.scanOnce()).map(a => a.filePath)).toEqual(['src/a b\n"x".ts']);
 });
 
 it('clears resolved alerts, emits a new onset after recurrence, and does not refresh unchanged edit ages', async () => {
   const repo = repository(), peer = linked(repo); let notifications = 0;
   const watcher = new PassiveConflictWatcher(repo, { onCollision: () => { notifications++; } });
-  for (const dir of [repo, peer]) { const file = path.join(dir, 'src/page.tsx'); fs.writeFileSync(file, 'changed\n'); fs.utimesSync(file, new Date(0), new Date(0)); }
+  for (const dir of [repo, peer]) { const file = path.join(dir, 'src/page.tsx'); fs.writeFileSync(file, `${path.basename(dir)} changed\n`); fs.utimesSync(file, new Date(0), new Date(0)); }
   expect(await watcher.scanOnce()).toHaveLength(1); expect(watcher.getRecentEdits()).toEqual([]);
   expect(await watcher.scanOnce()).toHaveLength(1); expect(notifications).toBe(1);
   for (const dir of [repo, peer]) fs.writeFileSync(path.join(dir, 'src/page.tsx'), 'base\n');
   expect(await watcher.scanOnce()).toEqual([]); expect(watcher.getActiveCollisions()).toEqual([]);
-  for (const dir of [repo, peer]) fs.writeFileSync(path.join(dir, 'src/page.tsx'), 'changed again\n');
+  for (const dir of [repo, peer]) fs.writeFileSync(path.join(dir, 'src/page.tsx'), `${path.basename(dir)} changed again\n`);
   expect(await watcher.scanOnce()).toHaveLength(1); expect(notifications).toBe(2);
 });
 
@@ -146,4 +146,18 @@ it('refuses damaged coordination state before writing any client configuration',
   expect(fs.existsSync(path.join(h, '.claude.json'))).toBe(false);
   expect(fs.existsSync(path.join(repo, '.cursor'))).toBe(false);
   expect(fs.readFileSync(path.join(repo, '.coord/state.db'), 'utf8')).toBe('damaged state');
+});
+
+it('suppresses identical dirty copies and deletions, but retains unverified large files', async () => {
+  const repo = repository(), peer = linked(repo);
+  const watcher = new PassiveConflictWatcher(repo);
+  for (const dir of [repo, peer]) fs.writeFileSync(path.join(dir, 'src/page.tsx'), 'same edit\n');
+  expect(await watcher.scanOnce()).toEqual([]);
+  fs.writeFileSync(path.join(peer, 'src/page.tsx'), 'different edit\n');
+  expect(await watcher.scanOnce()).toHaveLength(1);
+  for (const dir of [repo, peer]) fs.unlinkSync(path.join(dir, 'src/page.tsx'));
+  expect(await watcher.scanOnce()).toEqual([]);
+  for (const dir of [repo, peer]) fs.writeFileSync(path.join(dir, 'src/page.tsx'), Buffer.alloc(8 * 1024 * 1024 + 1));
+  expect(await watcher.scanOnce()).toHaveLength(1);
+  expect(watcher.getScanState().complete).toBe(true);
 });

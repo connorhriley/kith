@@ -73,7 +73,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         titleItem.isEnabled = false
         menu.addItem(titleItem)
 
-        let dirItem = NSMenuItem(title: "Workspace: \(URL(fileURLWithPath: watchDir).lastPathComponent) (\(repos.count) repos)", action: nil, keyEquivalent: "")
+        let dirItem = NSMenuItem(title: "Workspace: \(URL(fileURLWithPath: watchDir).lastPathComponent) (\(repos.count) checkouts)", action: nil, keyEquivalent: "")
         dirItem.isEnabled = false
         menu.addItem(dirItem)
         menu.addItem(NSMenuItem.separator())
@@ -84,30 +84,40 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
             unavailable.isEnabled = false
             menu.addItem(unavailable)
         } else if !collisions.isEmpty {
-            let colHeader = NSMenuItem(title: "⚠️ Collisions & Alerts (\(collisions.count)):", action: nil, keyEquivalent: "")
+            let colHeader = NSMenuItem(title: "⚠️ Worktree overlaps (\(collisions.count)):", action: nil, keyEquivalent: "")
             colHeader.attributedTitle = NSAttributedString(
-                string: "⚠️ Active Collisions (\(collisions.count)):",
-                attributes: [.foregroundColor: NSColor.systemRed, .font: NSFont.boldSystemFont(ofSize: 13)]
+                string: "⚠️ Worktree overlaps (\(collisions.count)):",
+                attributes: [.foregroundColor: NSColor.systemOrange, .font: NSFont.boldSystemFont(ofSize: 13)]
             )
             colHeader.isEnabled = false
             menu.addItem(colHeader)
 
-            for col in collisions {
-                let msg = col["message"] as? String ?? "Conflict detected"
-                let item = NSMenuItem(title: "  🚨 " + msg, action: nil, keyEquivalent: "")
+            for col in collisions.prefix(8) {
+                let file = col["filePath"] as? String ?? "Unverified path"
+                let label = String(file.prefix(100)).replacingOccurrences(of: "\n", with: "↵")
+                let item = NSMenuItem(title: "  ⚠️ " + label, action: nil, keyEquivalent: "")
+                item.toolTip = col["message"] as? String
                 item.isEnabled = false
                 menu.addItem(item)
             }
+            if collisions.count > 8 {
+                let more = NSMenuItem(title: "  … and \(collisions.count - 8) more (kith watch --once)", action: nil, keyEquivalent: "")
+                more.isEnabled = false
+                menu.addItem(more)
+            }
+            let advisory = NSMenuItem(title: "Different or unverified contents; not proven conflicts", action: nil, keyEquivalent: "")
+            advisory.isEnabled = false
+            menu.addItem(advisory)
             menu.addItem(NSMenuItem.separator())
         } else {
-            let okItem = NSMenuItem(title: "No observed worktree overlaps", action: nil, keyEquivalent: "")
+            let okItem = NSMenuItem(title: "No differing shared dirty paths observed", action: nil, keyEquivalent: "")
             okItem.isEnabled = false
             menu.addItem(okItem)
             menu.addItem(NSMenuItem.separator())
         }
 
         // Recent Edits section
-        let editsHeader = NSMenuItem(title: "Recent Parallel Edits (\(recentEdits.count)):", action: nil, keyEquivalent: "")
+        let editsHeader = NSMenuItem(title: "Recently modified files (\(recentEdits.count)):", action: nil, keyEquivalent: "")
         editsHeader.isEnabled = false
         menu.addItem(editsHeader)
 
@@ -120,7 +130,9 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
             for edit in topEdits {
                 let key = edit["key"] as? String ?? ""
                 let age = edit["ageSec"] as? Int ?? 0
-                let item = NSMenuItem(title: "  📝 \(key) (\(age)s ago)", action: nil, keyEquivalent: "")
+                let label = String(key.suffix(100)).replacingOccurrences(of: "\n", with: "↵")
+                let item = NSMenuItem(title: "  📝 \(label) (\(age)s ago)", action: nil, keyEquivalent: "")
+                item.toolTip = key
                 item.isEnabled = false
                 menu.addItem(item)
             }

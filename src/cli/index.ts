@@ -131,7 +131,7 @@ async function main(): Promise<void> {
       },
       onCollision: (alert) => {
         if (!isRaw) {
-          console.log(`\n🚨 [COLLISION ALERT] ${alert.message}`);
+          console.log(`\n⚠️ [WORKTREE OVERLAP] ${alert.message}`);
         }
       },
       onFileChange: (e) => {
@@ -160,12 +160,11 @@ async function main(): Promise<void> {
       if (!state.complete) {
         console.error(`Scan unavailable:\n${state.errors.map(error => error.message).join('\n')}`);
       } else if (alerts.length === 0) {
-        console.log('\nNo overlapping uncommitted paths observed across the inspected linked worktrees.\n');
+        console.log('\nNo differing or unverified shared dirty paths observed. Identical copies are excluded; compatibility is not verified.\n');
       } else {
-        console.log(`\n  ⚠️  Active Collisions & Alerts (${alerts.length}):`);
+        console.log(`\n  ⚠️  Observed worktree overlaps (${alerts.length}):`);
         for (const a of alerts) {
-          const icon = a.severity === 'collision' ? '🚨' : '⚡️';
-          console.log(`   ${icon} [${a.severity.toUpperCase()}] ${a.message}`);
+          console.log(`   ⚠️ ${a.message}`);
           console.log(`      Files: ${a.filePath}`);
         }
         console.log('');
