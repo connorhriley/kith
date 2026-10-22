@@ -1,6 +1,6 @@
 # Client integrations
 
-Install Kith persistently or build and link the checkout first. On macOS/Linux, generated configurations use the `kith` executable already on PATH; they do not download an unverified package at hook execution time.
+For CLI-generated configuration, install Kith persistently or build and link the checkout first. On macOS/Linux, generated configurations use the `kith` executable already on PATH; they do not download an unverified package at hook execution time.
 
 | Selection | Files and behavior |
 | --- | --- |
