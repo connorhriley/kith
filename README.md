@@ -47,6 +47,8 @@ kith init --dry-run
 kith init
 ```
 
+For detected global clients, run `kith setup --dry-run`, then `kith setup`. You configure the connection once. A coding client started in a Git checkout can use its project context; a desktop agent supplies the absolute `repository` path on each call. Claims, ownership and integration stay scoped to that repository. Global setup from HOME creates configuration backups, not a project database. See [client setup](docs/integrations.md#configure-detected-local-clients).
+
 For source installation and the disposable demo, use the pinned **pnpm 10.20.0**:
 
 ```sh

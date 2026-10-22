@@ -42,9 +42,9 @@
         {
           "type": "named",
           "name": "--repo",
-          "description": "Absolute path to the Git checkout to coordinate. Git 2.38+ and Node 22.13+ (22.x) or 24+ required.",
+          "description": "Optional fixed Git checkout. Omit for a global connection and supply repository on each tool call. Git 2.38+ and Node 22.13+ (22.x) or 24+ required.",
           "format": "filepath",
-          "isRequired": true
+          "isRequired": false
         }
       ]
     }

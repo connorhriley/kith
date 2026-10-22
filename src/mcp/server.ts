@@ -1,77 +1,100 @@
 import { KITH_VERSION } from '../version.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type ToolCallback } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { KithEngine } from '../core/engine.js';
+import { discoverRepository } from '../core/repository.js';
 
-export function createKithMcpServer(repoRoot = process.cwd()): {
-  server: McpServer;
-  engine: KithEngine;
-} {
-  const engine = new KithEngine(repoRoot);
+function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
+  const pinnedRoot = pinned ? discoverRepository(repoRoot!).checkoutRoot : undefined;
   const server = new McpServer({
     name: 'kith-coordinator',
     version: KITH_VERSION,
-  }, { instructions: 'Kith coordinates work claims, isolated worktrees, local resources and verified integration for cooperating coding agents. State stays local; no hosted service or model API key is required. Recommended workflow: one isolated worktree per parallel agent. Call kith_begin_work with isolateWorktree:true and explicit scopeGlobs; edit only the returned worktreePath, call kith_record_file_edit, run literal argv with kith_run_with_mutex, and finish with kith_complete_work plus a project verificationCmd. Heartbeat before the session expires. ' + (process.env.KITH_AGENT_ID
+  }, { instructions: 'Kith coordinates work claims, isolated worktrees, local resources and verified integration for cooperating coding agents. State stays local; no hosted service or model API key is required. The optional repository argument selects an absolute Git checkout for each call on a global connection. Keep passing the original checkout, even while editing its returned worktree. If no project context is available, ask for a repository path; never substitute HOME or a filesystem root. Each call is routed independently; there is no shared current project. Recommended workflow: one isolated worktree per parallel agent. Call kith_begin_work with isolateWorktree:true and explicit scopeGlobs; edit only the returned worktreePath, call kith_record_file_edit, run literal argv with kith_run_with_mutex, and finish with kith_complete_work plus a project verificationCmd. Heartbeat before the session expires. ' + (repoRoot && process.env.KITH_AGENT_ID
     ? `This server shares a session with CLI/hooks. Use agentId '${process.env.KITH_AGENT_ID}'. Its inherited capability is handled internally; do not request or log it.`
     : 'Start with kith_begin_work or kith_start_session and a unique agentId. This connection retains its granted capability. Omit sessionToken on subsequent calls on this connection; only another connection needs it to resume that ID. Initial grant/resume replies contain the token and client transcripts may record it. Keep transcripts private.'
   ) });
 
-  const tokenFor = (args: { agentId: string; sessionToken?: string }) => args.sessionToken ??
-    (process.env.KITH_AGENT_ID === args.agentId ? process.env.KITH_SESSION_TOKEN : undefined);
-  const owned = new Set<string>();
-  const register = (args: { agentId: string; client?: string; sessionToken?: string; leaseDurationMs?: number }) => {
-    const result = engine.fencing.registerAgent({ id: args.agentId, client: args.client ?? 'mcp',
-      sessionToken: tokenFor(args), leaseDurationMs: args.leaseDurationMs });
-    if (result.agent.pid === process.pid) owned.add(args.agentId);
-    return result;
-  };
-  const authorize = (args: { agentId: string; sessionToken?: string }) => {
-    const token = tokenFor(args);
-    if (token) engine.fencing.resumeSession(args.agentId, token);
-    engine.fencing.heartbeat(args.agentId);
-  };
   const disconnected = new AbortController();
   const commands = new Set<Promise<unknown>>();
-  const cleanup = () => {
-    for (const id of owned) {
-      try { engine.fencing.abandonAgentSession(id); } catch { /* Expired or already completed. */ }
+  const createContext = (root: string, inheritCapability: boolean) => {
+    const engine = new KithEngine(root);
+    const owned = new Set<string>();
+    const tokenFor = (args: { agentId: string; sessionToken?: string }) => args.sessionToken ??
+      (inheritCapability && process.env.KITH_AGENT_ID === args.agentId ? process.env.KITH_SESSION_TOKEN : undefined);
+    const register = (args: { agentId: string; client?: string; sessionToken?: string; leaseDurationMs?: number }) => {
+      const result = engine.fencing.registerAgent({ id: args.agentId, client: args.client ?? 'mcp',
+        sessionToken: tokenFor(args), leaseDurationMs: args.leaseDurationMs });
+      if (result.agent.pid === process.pid) owned.add(args.agentId);
+      return result;
+    };
+    const authorize = (args: { agentId: string; sessionToken?: string }) => {
+      const token = tokenFor(args);
+      if (token) engine.fencing.resumeSession(args.agentId, token);
+      engine.fencing.heartbeat(args.agentId);
+    };
+    const formatReply = (agentId: string | undefined, payload: unknown) => {
+      const delta = agentId ? engine.consumeAgentDelta(agentId).formattedFooter : '';
+      const data = payload as Record<string, unknown>;
+      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) },
+        ...(delta ? [{ type: 'text' as const, text: delta }] : [])], structuredContent: data, isError: data.ok === false };
+    };
+    const close = () => {
+      for (const id of owned) {
+        try { engine.fencing.abandonAgentSession(id); } catch { /* Expired or already completed. */ }
+      }
+      engine.close();
+    };
+    return { engine, register, authorize, formatReply, close };
+  };
+  type Context = ReturnType<typeof createContext>;
+  const contexts = new Map<string, Context>();
+  const contextFor = (repository?: string): Context => {
+    if (repository !== undefined && !path.isAbsolute(repository)) throw new Error('repository must be an absolute Git checkout path.');
+    const target = repository ?? repoRoot;
+    if (!target) throw new Error('No project selected. Pass repository with the absolute Git checkout path for this task.');
+    const layout = discoverRepository(target);
+    if (pinnedRoot && layout.checkoutRoot !== pinnedRoot) throw new Error('This connection is pinned with --repo. Use a global connection to select another repository.');
+    if (!pinned && !layout.commonGitDir) throw new Error('Global connections require a Git checkout; do not use HOME or a parent directory as a project.');
+    let context = contexts.get(layout.checkoutRoot);
+    if (!context) {
+      context = createContext(layout.checkoutRoot, layout.checkoutRoot === (pinnedRoot ?? repoRoot));
+      contexts.set(layout.checkoutRoot, context);
     }
-    engine.close();
+    return context;
+  };
+  const engine = pinned ? contextFor().engine : undefined;
+  const tool = <T extends z.ZodRawShape>(name: string, description: string, schema: T,
+    handler: (args: z.infer<z.ZodObject<T>>, extra: Parameters<ToolCallback<z.ZodRawShape>>[1], context: Context) => Promise<CallToolResult>) => {
+    const inputSchema: z.ZodRawShape = { ...schema, repository: z.string().optional().describe('Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task.') };
+    server.tool(name, description, inputSchema,
+      async (args, extra): Promise<CallToolResult> => {
+        const { repository, ...input } = args as { repository?: string } & Record<string, unknown>;
+        return handler(input as z.infer<z.ZodObject<T>>, extra, contextFor(repository));
+      });
   };
   let closing = false;
   server.server.onclose = () => {
     if (closing) return;
     closing = true;
     disconnected.abort();
-    // A command must stop before its process-group guard and database are closed.
+    const cleanup = () => { for (const context of contexts.values()) context.close(); contexts.clear(); };
+    // Commands across all selected projects must stop before their guards/databases close.
     if (commands.size) void Promise.allSettled([...commands]).then(cleanup);
     else cleanup();
   };
 
-  const formatReply = (agentId: string | undefined, payload: unknown) => {
-    const delta = agentId ? engine.consumeAgentDelta(agentId).formattedFooter : '';
-    const data = payload as Record<string, unknown>;
-    return {
-      content: [
-        { type: 'text' as const, text: JSON.stringify(data, null, 2) },
-        ...(delta ? [{ type: 'text' as const, text: delta }] : []),
-      ],
-      structuredContent: data,
-      isError: data.ok === false,
-    };
-  };
-
-  server.tool('kith_start_session', 'Create a capability-owned session or resume one with its token.', {
+  tool('kith_start_session', 'Create a capability-owned session or resume one with its token.', {
     agentId: z.string(), sessionToken: z.string().optional(), leaseDurationMs: z.number().optional(),
-  }, async (args) => formatReply(undefined, { ok: true, ...register(args) }));
-  server.tool('kith_heartbeat', 'Renew an active, owned session. Expired sessions cannot be revived.', {
+  }, async (args, extra, { engine, register, authorize, formatReply }) => formatReply(undefined, { ok: true, ...register(args) }));
+  tool('kith_heartbeat', 'Renew an active, owned session. Expired sessions cannot be revived.', {
     agentId: z.string(), sessionToken: z.string().optional(),
-  }, async (args) => { authorize(args); return formatReply(args.agentId, { ok: true, agent: engine.fencing.getAgent(args.agentId) }); });
+  }, async (args, extra, { engine, register, authorize, formatReply }) => { authorize(args); return formatReply(args.agentId, { ok: true, agent: engine.fencing.getAgent(args.agentId) }); });
 
-  server.tool(
+  tool(
     'kith_begin_work',
     'Register an agent session, verify no scope lock conflicts exist with sibling agents, acquire monotonic fencing-token locks, and optionally create an isolated Git worktree.',
     {
@@ -83,7 +106,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       scopeGlobs: z.array(z.string()).describe('File paths or glob patterns this agent will edit (e.g. ["src/auth/**"])'),
       isolateWorktree: z.boolean().optional().describe('Recommended: true, giving each parallel agent a separate Git worktree'),
     },
-    async (args) => {
+    async (args, extra, { engine, register, authorize, formatReply }) => {
       const reg = register(args);
 
       const intentRes = engine.beginWork({
@@ -111,7 +134,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     }
   );
 
-  server.tool(
+  tool(
     'kith_claim_next_task',
     'Atomically claim the highest-priority unblocked task from the DAG task queue and lock its declared file scope.',
     {
@@ -119,14 +142,14 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       sessionToken: z.string().optional(),
       client: z.string().optional(),
     },
-    async (args) => {
+    async (args, extra, { engine, register, authorize, formatReply }) => {
       const session = register(args);
       const res = engine.intents.claimNextTask(args.agentId);
       return formatReply(args.agentId, { ...res, sessionToken: session.sessionToken });
     }
   );
 
-  server.tool(
+  tool(
     'kith_add_task',
     'Add a task to the orchestrated DAG queue with optional task dependencies and file scope globs.',
     {
@@ -137,13 +160,13 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       dependsOn: z.array(z.string()).optional(),
       scopeGlobs: z.array(z.string()).optional(),
     },
-    async (args) => {
+    async (args, extra, { engine, register, authorize, formatReply }) => {
       const task = engine.intents.addTask(args);
       return formatReply(undefined, { ok: true, task });
     }
   );
 
-  server.tool(
+  tool(
     'kith_check_and_lock_files',
     'Acquire exclusive or shared fencing-token locks on file paths, globs, or symbols.',
     {
@@ -153,14 +176,14 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       mode: z.enum(['exclusive', 'shared']).optional(),
       reason: z.string().optional(),
     },
-    async (args) => {
+    async (args, extra, { engine, register, authorize, formatReply }) => {
       authorize(args);
       const res = engine.locks.acquireLocks(args);
       return formatReply(args.agentId, res);
     }
   );
 
-  server.tool(
+  tool(
     'kith_record_file_edit',
     'Analyze a modified file for supported contract signatures, flag exact name/kind matches in other files as non-blocking reuse hints, check transitive import blast radius, and run a live dirty-tree git merge-tree conflict check.',
     {
@@ -169,7 +192,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       filePath: z.string(),
       content: z.string().optional(),
     },
-    async (args) => {
+    async (args, extra, { engine, register, authorize, formatReply }) => {
       authorize(args);
       const res = engine.processPostFileEdit({
         agentId: args.agentId,
@@ -180,7 +203,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     }
   );
 
-  server.tool(
+  tool(
     'kith_publish_contract',
     'Explicitly publish a shared interface, function signature, API route, or schema to the Contract Blackboard.',
     {
@@ -192,14 +215,14 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       signature: z.string(),
       docComment: z.string().optional(),
     },
-    async (args) => {
+    async (args, extra, { engine, register, authorize, formatReply }) => {
       authorize(args);
       const contract = engine.depGraph.publishExplicitContract(args);
       return formatReply(args.agentId, { ok: true, contract });
     }
   );
 
-  server.tool(
+  tool(
     'kith_acquire_port',
     'Reserve a local TCP port among cooperating Kith clients; start the service promptly and handle unrelated bind races.',
     {
@@ -208,14 +231,14 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       serviceName: z.string(),
       basePort: z.number().optional(),
     },
-    async (args) => {
+    async (args, extra, { engine, register, authorize, formatReply }) => {
       authorize(args);
       const portRes = await engine.broker.acquirePort(args);
       return formatReply(args.agentId, portRes);
     }
   );
 
-  server.tool(
+  tool(
     'kith_run_with_mutex',
     'Run an argv command under a renewable named mutex, using the MCP server process permissions. Useful when a sandboxed client shell cannot inspect process identities. Requires an owned session. Cancellation or connection loss stops the supervised command before release. This is command execution, not a filesystem sandbox.',
     {
@@ -228,7 +251,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       commandTimeoutMs: z.number().int().min(1).max(600000).optional(),
       maxOutputBytes: z.number().int().min(1).max(1048576).optional(),
     },
-    async (args, extra) => {
+    async (args, extra, { engine, register, authorize, formatReply }) => {
       authorize(args);
       const root = fs.realpathSync(engine.fencing.getAgent(args.agentId)?.worktree_path ?? engine.coordDb.repoRoot);
       const cwd = fs.realpathSync(path.resolve(root, args.cwd ?? '.'));
@@ -250,7 +273,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     }
   );
 
-  server.tool(
+  tool(
     'kith_get_status',
     'Retrieve coordination state, FIFO waiters and guarded commands, plus worktree paths, actual branches, dirty-file overlaps, commit age and ahead/behind against the current integration target HEAD. Normal engine startup may reap expired ownership.',
     {
@@ -258,7 +281,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       sessionToken: z.string().optional(),
       includeContracts: z.boolean().optional().describe('Include the full contract registry. Default false keeps frequent status polls compact; contractCount always reports its size.'),
     },
-    async (args) => {
+    async (args, extra, { engine, register, authorize, formatReply }) => {
       if (args.agentId) authorize({ ...args, agentId: args.agentId });
       const state = engine.getStatus();
       return formatReply(args.agentId, { ...state, contracts: args.includeContracts ? state.contracts : [],
@@ -266,14 +289,14 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
     }
   );
 
-  server.tool(
+  tool(
     'kith_preview_integrate',
     'Preview exact Git conflict paths for a committed registered worktree against the current integration target. Refuses dirty inputs; never checkpoints or changes source/target files. A clean preview does not run project verification.',
     { agentId: z.string(), sessionToken: z.string().optional() },
-    async args => { authorize(args); return formatReply(args.agentId, engine.previewIntegration(args.agentId)); }
+    async (args, extra, { engine, register, authorize, formatReply }) => { authorize(args); return formatReply(args.agentId, engine.previewIntegration(args.agentId)); }
   );
 
-  server.tool(
+  tool(
     'kith_complete_work',
     'Complete an agent task, optionally run the Speculative Merge Train to verify and merge its worktree branch, and release all locks and resources.',
     {
@@ -284,7 +307,7 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
       mergeBranch: z.string().optional().describe('Source branch to integrate, not the destination. Defaults to the registered agent branch; destination is the selected repository checkout current branch. Omit for claims-only work without a registered branch.'),
       verificationCmd: z.string().optional().describe('Command to run in speculative merge tree (e.g. "npm run typecheck")'),
     },
-    async (args) => {
+    async (args, extra, { engine, register, authorize, formatReply }) => {
       authorize(args);
       const result = engine.completeWork(args);
       return formatReply(result.ok ? undefined : args.agentId, result);
@@ -294,8 +317,20 @@ export function createKithMcpServer(repoRoot = process.cwd()): {
   return { server, engine };
 }
 
-export async function runKithMcpStdioServer(repoRoot = process.cwd()): Promise<void> {
-  const { server } = createKithMcpServer(repoRoot);
+export function createKithMcpServer(repoRoot = process.cwd()) {
+  const { server, engine } = buildKithMcpServer(repoRoot, true);
+  return { server, engine: engine! };
+}
+
+export async function runKithMcpStdioServer(repoRoot = process.cwd(), pinned = true): Promise<void> {
+  let defaultRoot: string | undefined = repoRoot;
+  if (!pinned) {
+    // Desktop clients often start at / or HOME. Connect without creating state
+    // there, and let each tool call select a project explicitly instead.
+    try { const layout = discoverRepository(repoRoot); defaultRoot = layout.commonGitDir ? layout.checkoutRoot : undefined; }
+    catch { defaultRoot = undefined; }
+  }
+  const { server } = buildKithMcpServer(defaultRoot, pinned);
   const transport = new StdioServerTransport();
   let closing = false;
   const close = () => {

@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.1.0",
+  "protocolVersion": "1.2.0",
   "tools": [
     {
       "name": "kith_start_session",
@@ -15,6 +15,10 @@
           },
           "leaseDurationMs": {
             "type": "number"
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -35,6 +39,10 @@
           },
           "sessionToken": {
             "type": "string"
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -79,6 +87,10 @@
           "isolateWorktree": {
             "type": "boolean",
             "description": "Recommended: true, giving each parallel agent a separate Git worktree"
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -105,6 +117,10 @@
           },
           "client": {
             "type": "string"
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -143,6 +159,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -179,6 +199,10 @@
           },
           "reason": {
             "type": "string"
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -206,6 +230,10 @@
           },
           "content": {
             "type": "string"
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -251,6 +279,10 @@
           },
           "docComment": {
             "type": "string"
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -281,6 +313,10 @@
           },
           "basePort": {
             "type": "number"
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -339,6 +375,10 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 1048576
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -365,6 +405,10 @@
           "includeContracts": {
             "type": "boolean",
             "description": "Include the full contract registry. Default false keeps frequent status polls compact; contractCount always reports its size."
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "additionalProperties": false,
@@ -382,6 +426,10 @@
           },
           "sessionToken": {
             "type": "string"
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [
@@ -416,6 +464,10 @@
           "verificationCmd": {
             "type": "string",
             "description": "Command to run in speculative merge tree (e.g. \"npm run typecheck\")"
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
           }
         },
         "required": [

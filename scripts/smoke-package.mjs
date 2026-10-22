@@ -37,10 +37,13 @@ try {
   assert.equal(run(path.join(install, 'node_modules/.bin/kith'), ['--version'], install).trim(), manifest.version);
   assert(run(process.execPath, [cli, 'help'], install).includes('Usage:'));
   assert(fs.existsSync(path.join(install, 'node_modules', manifest.name, 'bin/kith-menubar')));
+  run('git', ['init', '-q'], install);
   const setupHome = path.join(temp, 'synthetic home');
   fs.mkdirSync(path.join(setupHome, '.claude'), {recursive: true});
   const setupEnv = { ...env, HOME: setupHome };
   execFileSync(process.execPath, [cli, 'setup', install], {cwd: install, env: setupEnv, timeout: 15000});
+  const globalConfig = JSON.parse(fs.readFileSync(path.join(setupHome, '.claude.json'), 'utf8')).mcpServers.kith;
+  assert.deepEqual(globalConfig.args, [fs.realpathSync(cli), 'mcp']);
   const configured = JSON.parse(fs.readFileSync(path.join(install, '.cursor/mcp.json'), 'utf8')).mcpServers.kith;
   assert.equal(configured.command, process.execPath);
   assert.equal(configured.args[0], fs.realpathSync(cli));
@@ -66,7 +69,7 @@ try {
       assert((await client.listTools()).tools.some(tool => tool.name === 'kith_preview_integrate'));
       const status = await client.callTool({ name: 'kith_get_status', arguments: {} });
       assert.equal(status.isError, false);
-      assert.equal(status.structuredContent.protocolVersion, '1.1.0');
+      assert.equal(status.structuredContent.protocolVersion, '1.2.0');
       assert.equal(status.structuredContent.contractsIncluded, false);
       assert.equal(typeof status.structuredContent.contractCount, 'number');
     } finally { await client.close(); }

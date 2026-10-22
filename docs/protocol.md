@@ -6,11 +6,13 @@ Kith is a local ledger for cooperating coding agents. Clients share one reposito
 
 Protocol 1.1 ships with package 0.1.2. Earlier `kith-coord@0.1.1` reports protocol 1.0 and includes full contracts in MCP status; the compact default and `includeContracts` input below require 0.1.2.
 
-`KITH_PROTOCOL_VERSION` and status responses advertise `1.1.0`. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema (2) have independent versions. The [tool snapshot](protocol/tools.v1.json) contains all 13 tool names, descriptions and JSON input schemas, exported from an actual MCP `tools/list` response. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
+`KITH_PROTOCOL_VERSION` and status responses advertise `1.2.0`. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema (2) have independent versions. The [tool snapshot](protocol/tools.v1.json) contains all 13 tool names, descriptions and JSON input schemas, exported from an actual MCP `tools/list` response. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
 
 For protocol 1.x, existing tool names, required input fields and the ownership/claim semantics below remain compatible. New optional fields/tools and additive result fields use a minor version; compatible repairs use a patch version. Removing tools, adding required inputs or changing ownership semantics requires a major version. Clients should ignore unknown result fields. The snapshot describes inputs; it is not a machine-validated schema for every result or a guarantee of source-level library compatibility.
 
 Successful tool replies place the same JSON object in `structuredContent` and the first text block. Additional text may contain an advisory event delta. Inspect `isError` and the operation's fields: a computed preview with `clean:false` is a successful observation of a conflict, not permission to integrate. Exceptions are MCP tool errors. Never infer successful work from the client process exit code alone.
+
+Protocol 1.2 adds optional `repository` to every tool. A global `kith mcp` connection can route calls independently to absolute Git checkout paths; it creates no project database until a project is selected. A Git checkout in the process/project context supplies a default. Without one, calls must include `repository` and otherwise return a tool error while the connection remains available. Never substitute HOME or a filesystem root. Always keep the original checkout path for a task, even when editing its isolated worktree. Capabilities and commands remain attached to their repository context, and disconnect cleanup covers every opened context. An explicit `mcp --repo` connection retains its pinned checkout and refuses a different repository argument.
 
 ## Sessions and claims
 

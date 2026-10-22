@@ -75,7 +75,7 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'mcp') {
-    await runKithMcpStdioServer(repoRoot);
+    await runKithMcpStdioServer(repoRoot, typeof flags.repo === 'string');
     return;
   }
 

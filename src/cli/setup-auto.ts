@@ -35,17 +35,19 @@ function ownedLauncher(value: Record<string, any>): boolean {
 
 /** Preflight all clients first. Reuse private setup ledgers; never change hooks or permissions. */
 export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = os.homedir(), options: { dryRun?: boolean } = {}): ClientDetectionResult[] {
-  const layout = discoverRepository(targetWorkspace);
-  const workspace = layout.checkoutRoot;
+  const target = physicalPath(targetWorkspace);
+  const layout = target === path.parse(target).root ? undefined : discoverRepository(target);
+  const workspace = layout?.checkoutRoot ?? target;
   home = physicalPath(home);
-  const server = { command: process.execPath, args: [installedCliPath(), 'mcp', '--repo', workspace] };
+  const server = { command: process.execPath, args: [installedCliPath(), 'mcp'] };
+  const projectServer = { ...server, args: [...server.args, '--repo', workspace] };
   const results: ClientDetectionResult[] = [];
   const groups = new Map<string, { coordDir: string; plan: Map<string, { content: string; mode?: number }> }>();
   const warnings: string[] = [];
   const queue = (root: string, file: string, content: string) => {
     if (!isWithin(root, file)) throw new Error(`Configuration is outside its setup root: ${file}`);
     if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === content) return;
-    const group = groups.get(root) ?? { coordDir: root === workspace ? layout.coordDir : path.join(root, '.coord'), plan: new Map() };
+    const group = groups.get(root) ?? { coordDir: root === workspace && layout ? layout.coordDir : path.join(root, '.coord'), plan: new Map() };
     if (physicalPath(group.coordDir) !== group.coordDir) throw new Error('Setup backup directory must not be redirected.');
     group.plan.set(path.relative(root, file), { content, mode: 0o600 });
     groups.set(root, group);
@@ -53,19 +55,20 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
   const safePath = (file: string) => {
     if (physicalPath(file) !== file) throw new Error(`Configuration path is redirected: ${file}; no configuration was written.`);
   };
-  const jsonClient = (clientName: string, file: string, root: string, found: boolean) => {
+  const jsonClient = (clientName: string, file: string, root: string, found: boolean, projectScoped = false) => {
+    const selectedServer = projectScoped ? projectServer : server;
     if (!found) { results.push({ clientName, configPath: file, found: false, configured: false, notes: 'No existing client configuration found' }); return; }
     safePath(file);
     const cfg = fs.existsSync(file) ? object(JSON.parse(fs.readFileSync(file, 'utf8')), file) : {};
     const servers = object(cfg.mcpServers ?? {}, `${file} mcpServers`);
     const previous = servers.kith === undefined ? undefined : object(servers.kith, `${file} kith`);
-    const exact = previous?.command === server.command && JSON.stringify(previous.args) === JSON.stringify(server.args);
+    const exact = previous?.command === selectedServer.command && JSON.stringify(previous.args) === JSON.stringify(selectedServer.args);
     if (previous && !exact && !ownedLauncher(previous)) {
       results.push({ clientName, configPath: file, found: true, configured: false, notes: 'Custom Kith server preserved; review its repository and launcher manually' }); return;
     }
-    cfg.mcpServers = { ...servers, kith: { ...previous, ...server } };
+    cfg.mcpServers = { ...servers, kith: { ...previous, ...selectedServer } };
     queue(root, file, JSON.stringify(cfg, null, 2) + '\n');
-    results.push({ clientName, configPath: file, found: true, configured: true, notes: `${options.dryRun ? 'Would bind' : 'Bound'} Kith to ${workspace}; existing settings preserved` });
+    results.push({ clientName, configPath: file, found: true, configured: true, notes: `${options.dryRun ? 'Would configure' : 'Configured'} Kith ${projectScoped ? `for ${workspace}` : 'for per-task repository selection'}; existing settings preserved` });
   };
 
   const desktop = process.platform === 'win32'
@@ -101,9 +104,9 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
     parseToml(content);
     if (configured) queue(home, codex, content);
     results.push({ clientName: 'Codex', found: true, configPath: codex, configured,
-      notes: configured ? `${options.dryRun ? 'Would bind' : 'Bound'} Kith to ${workspace}; other TOML preserved` : 'Custom Kith server preserved; review its repository and launcher manually' });
+      notes: configured ? `${options.dryRun ? 'Would configure' : 'Configured'} Kith for per-task repository selection; other TOML preserved` : 'Custom Kith server preserved; review its repository and launcher manually' });
   }
-  jsonClient('Cursor', path.join(workspace, '.cursor/mcp.json'), workspace, true);
+  jsonClient('Cursor', path.join(workspace, '.cursor/mcp.json'), workspace, Boolean(layout?.commonGitDir), true);
   const antigravity = path.join(home, '.gemini/config/mcp_config.json');
   jsonClient('Antigravity', antigravity, home, fs.existsSync(path.dirname(antigravity)));
 
@@ -120,13 +123,13 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
   // Every parse and path check above completes before any client writes. Backups precede
   // writes under each root's setup lock. An interrupted setup retains exact original bytes.
   if (!options.dryRun && groups.size) {
-    const engine = new KithEngine(workspace); // Refuse damaged state before touching any client.
+    const engine = layout?.commonGitDir ? new KithEngine(workspace) : undefined; // Refuse damaged state before touching any client.
     try {
       for (const [root, group] of groups) {
         fs.mkdirSync(group.coordDir, { recursive: true, mode: 0o700 });
         applySetupPlan(root, group.coordDir, group.plan, warnings);
       }
-    } finally { engine.close(); }
+    } finally { engine?.close(); }
   }
   for (const warning of warnings) results.push({ clientName: 'Setup backup', found: true, configured: false, configPath: '', notes: warning });
   return results;

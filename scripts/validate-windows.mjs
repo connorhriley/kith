@@ -130,11 +130,28 @@ try {
  const autoConfig=JSON.parse(fs.readFileSync(cursorFile,'utf8'));
  assert.equal(autoConfig.custom,true);assert.equal(autoConfig.mcpServers.peer.command,'peer');
  assert.equal(autoConfig.mcpServers.kith.command,process.execPath);assert.equal(fs.realpathSync.native(autoConfig.mcpServers.kith.args.at(-1)),fs.realpathSync.native(root));
- assert.equal(fs.realpathSync.native(JSON.parse(fs.readFileSync(path.join(setupHome,'.claude.json'),'utf8')).mcpServers.kith.args.at(-1)),fs.realpathSync.native(root));
+ const globalConfig=JSON.parse(fs.readFileSync(path.join(setupHome,'.claude.json'),'utf8')).mcpServers.kith;
+ assert.equal(globalConfig.args.length,2);assert.equal(globalConfig.args[1],'mcp');
  const autoClient=new Client({name:'auto-generated-native-launcher',version:'1'});clients.push(autoClient);
  await autoClient.connect(new StdioClientTransport({...autoConfig.mcpServers.kith,cwd:path.parse(root).root,env:setupEnv,stderr:'ignore'}));
  const autoStatus=body(await autoClient.callTool({name:'kith_get_status',arguments:{}}));assert.equal(fs.realpathSync.native(autoStatus.repository.root),fs.realpathSync.native(root));
  await autoClient.close();
+ const globalClient=new Client({name:'global-native-launcher',version:'1'});clients.push(globalClient);
+ await globalClient.connect(new StdioClientTransport({...globalConfig,cwd:path.parse(root).root,env:setupEnv,stderr:'ignore'}));
+ assert.equal((await globalClient.callTool({name:'kith_get_status',arguments:{}})).isError,true);
+ const other=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'kith other project ')));cleanup.push(other);
+ git(other,'init','-q');git(other,'-c','user.name=Fixture','-c','user.email=fixture@example.test','commit','--allow-empty','-qm','Other project');
+ const tokens=[];
+ for(const repository of [root,other]) tokens.push(await call(globalClient,'kith_begin_work',{repository,agentId:'global-owner',title:'Selected project',scopeGlobs:['src/global.mjs']}));
+ assert.notEqual(tokens[0].sessionToken,tokens[1].sessionToken);
+ assert.equal((await globalClient.callTool({name:'kith_heartbeat',arguments:{repository:root,agentId:'global-owner',sessionToken:tokens[1].sessionToken}})).isError,true);
+ for(const repository of [root,other]) {
+  const selected=await call(globalClient,'kith_get_status',{repository});assert.equal(fs.realpathSync.native(selected.repository.root),fs.realpathSync.native(repository));
+  await call(globalClient,'kith_heartbeat',{repository,agentId:'global-owner'});
+  await call(globalClient,'kith_complete_work',{repository,agentId:'global-owner'});
+ }
+ await globalClient.close();
+ report.checks.push('global client connects at filesystem root, routes two projects independently and refuses cross-project capability reuse');
  assert.equal(JSON.parse(command('uninstall')).ok,true);assert.equal(fs.readFileSync(cursorFile,'utf8'),originalCursor);
  fs.unlinkSync(cursorFile); // Only this disposable test's restored peer configuration.
  execFileSync(process.execPath,[cli,'uninstall','--repo',setupHome],{cwd:setupHome,env:setupEnv});

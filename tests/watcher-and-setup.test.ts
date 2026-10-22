@@ -42,6 +42,7 @@ it('preserves existing servers, settings, hooks and capabilities while binding p
   expect(cfg.mcpServers.kith.args).toEqual([fs.realpathSync(cli), 'mcp', '--repo', repo]);
   expect(fs.readFileSync(hooks)).toEqual(beforeHooks);
   const user = JSON.parse(fs.readFileSync(path.join(h, '.claude.json'), 'utf8'));
+  expect(user.mcpServers.kith.args).toEqual([fs.realpathSync(cli), 'mcp']);
   expect(user.projects.retained).toBe(true); expect(user.mcpServers.peer.command).toBe('peer');
   expect(results.find(r => r.clientName === 'Claude Code CLI')?.configured).toBe(true);
   expect(uninstallKith(repo).ok).toBe(true); expect(JSON.parse(fs.readFileSync(cursor, 'utf8'))).toEqual(original);
@@ -71,7 +72,7 @@ it('preserves custom Kith transports and updates only recognized generated TOML 
   expect(results.find(r => r.clientName === 'Cursor')?.configured).toBe(false);
   expect(fs.readFileSync(custom)).toEqual(bytes);
   const updated = fs.readFileSync(toml, 'utf8');
-  expect(updated).toContain('# keep comment'); expect(updated).toContain('CUSTOM = "retained"'); expect(updated).toContain('--repo');
+  expect(updated).toContain('# keep comment'); expect(updated).toContain('CUSTOM = "retained"'); expect(updated).not.toContain('--repo');
   expect(updated).toContain('"KITH_SESSION_TOKEN"');
   expect(uninstallKith(h).ok).toBe(true); expect(fs.readFileSync(toml, 'utf8')).toBe(original);
 });
@@ -160,4 +161,16 @@ it('suppresses identical dirty copies and deletions, but retains unverified larg
   for (const dir of [repo, peer]) fs.writeFileSync(path.join(dir, 'src/page.tsx'), Buffer.alloc(8 * 1024 * 1024 + 1));
   expect(await watcher.scanOnce()).toHaveLength(1);
   expect(watcher.getScanState().complete).toBe(true);
+});
+
+it('sets up global clients from home or filesystem root without creating a project database', () => {
+  const h = home();
+  for (const cwd of [h, path.parse(h).root]) {
+    const results = autoConfigureAllClients(cwd, h);
+    expect(results.find(r => r.clientName === 'Cursor')?.configured).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(h, '.claude.json'), 'utf8')).mcpServers.kith.args).toEqual([fs.realpathSync(cli), 'mcp']);
+    expect(fs.existsSync(path.join(h, '.coord/state.db'))).toBe(false);
+    expect(fs.existsSync(path.join(h, '.cursor'))).toBe(false);
+  }
+  expect(uninstallKith(h).ok).toBe(true);
 });
