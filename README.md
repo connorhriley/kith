@@ -4,12 +4,13 @@
 
 <p align="center">
   <a href="https://github.com/connorhriley/kith/actions/workflows/ci.yml"><img src="https://github.com/connorhriley/kith/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/connorhriley/kith/actions/workflows/windows.yml"><img src="https://github.com/connorhriley/kith/actions/workflows/windows.yml/badge.svg" alt="Windows validation"></a>
   <a href="https://www.npmjs.com/package/kith-coord"><img src="https://img.shields.io/npm/v/kith-coord" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22C55E" alt="MIT license"></a>
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick start</a> · <a href="#see-it-work">Demo</a> · <a href="docs/integrations.md">Integrations</a> · <a href="docs/usage.md">CLI &amp; API</a> · <a href="CONTRIBUTING.md">Contribute</a>
+  <a href="#quick-start">Quick start</a> · <a href="https://marketplace.visualstudio.com/items?itemName=kith-coord.kith">VS Code</a> · <a href="https://open-vsx.org/extension/kith-coord/kith">Cursor / Open VSX</a> · <a href="#see-it-work">Demo</a> · <a href="docs/integrations.md">Integrations</a> · <a href="docs/usage.md">CLI &amp; API</a> · <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
 **Local coordination for cooperating coding agents.**
@@ -28,7 +29,7 @@ Kith gives cooperating agents shared local state: who owns a task, which files a
 | Give agents separate working files | Git worktrees with an explicit integration step |
 | Check work before integration | Your project's verification command |
 | Share local tools | Port reservations and supervised command mutexes |
-| See what is happening | Session/task state through `kith status` and MCP |
+| See what is happening | Session/task state through CLI/MCP; optional read-only editor and worktree views |
 
 Kith fits workflows where you already launch multiple coding agents and want them to coordinate. It does not choose models, write prompts, or launch a fleet for you. Worktrees separate files; Kith adds shared ownership and resource coordination.
 
@@ -36,9 +37,27 @@ The [reliability contract](docs/reliability.md) defines ownership, verification,
 
 ## Quick start
 
-Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workflows target macOS and Linux. Version 0.1.1 also validates native Windows MCP claims, worktrees, ports, integration and recovery; supervised mutex commands and shell hooks require macOS/Linux or WSL. See the [support evidence](docs/client-validation.md#native-windows).
+Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workflows target macOS and Linux. Native Windows MCP checks cover claims, worktrees, ports, integration and recovery; supervised mutex commands and shell hooks require macOS/Linux or WSL. See the [support evidence](docs/client-validation.md#native-windows).
 
 Git recording and integration require a commit identity configured for the repository (`user.name` and `user.email`). Kith does not change your global Git identity.
+
+### VS Code or Cursor
+
+Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith). You can also search for `kith-coord.kith` in the editor's Extensions view.
+
+Open a trusted local Git checkout and approve Kith's MCP server through the editor. The extension bundles the coordination server, detects Node, and preserves existing MCP entries, hooks and tool permissions. **No global npm install is needed.** Each agent still needs to use Kith's tools; installing the extension does not enforce claims on other writers.
+
+Start with a scoped task:
+
+```text
+Use Kith to begin an isolated task in this repository with a unique agent ID.
+Claim only the files this task needs, edit the returned worktree, and report edits.
+Run the project checks and complete through Kith with that verification command.
+```
+
+The [extension guide](extensions/editor/README.md) covers settings and existing configurations; [recorded editor checks](docs/client-validation.md#editor-marketplaces-and-signed-in-chats) distinguish installation, native MCP registration and signed-in task results.
+
+### CLI and other MCP clients
 
 Install the release:
 
@@ -98,14 +117,15 @@ Default setup installs MCP configuration for Claude, Codex and Cursor plus agent
 
 | Client | Setup and validation |
 | --- | --- |
+| VS Code | Marketplace extension; signed-in Copilot parallel task completed on VS Code 1.143.0 |
+| Cursor | Marketplace extension and native MCP registration checked on 3.24.18; signed-in task's final retry pending after client usage limit; native CLI workflow separately validated |
 | Claude Code | MCP; optional edit hooks need shared session setup; recorded native CLI runs |
 | Codex | Project MCP configuration; recorded native CLI runs with configuration overrides |
-| Cursor | Native CLI workflow and fail-closed edit hooks validated; GUI discovery/trust unvalidated |
 | Other MCP clients | stdio server via `kith mcp`; client-specific validation required |
 
-For VS Code and Cursor, the [editor extension](extensions/editor) offers a bundled MCP server and a small read-only status indicator. Install its VSIX through **Extensions → Install from VSIX**. It preserves existing MCP entries and leaves server approval and tool permissions to the editor. No global npm installation is needed; compatible Node.js is still required.
+The [editor extension](extensions/editor/README.md) offers a bundled MCP server and a small read-only status indicator. Existing custom Kith entries take precedence, so review their launcher if a connection fails. The editor retains control of server approval and tool permissions.
 
-Native checks are version-specific. GUI discovery and persisted project trust need separate checks. See [integration setup](docs/integrations.md), [recorded validation](docs/client-validation.md), and [session ownership](docs/sessions-and-mutexes.md) before mixing hooks, CLI commands, and MCP clients.
+Native checks are version-specific; the recorded GUI task used published extension 0.1.4. Later client or extension releases need their own checks. See [integration setup](docs/integrations.md), [recorded validation](docs/client-validation.md), and [session ownership](docs/sessions-and-mutexes.md) before mixing hooks, CLI commands, and MCP clients.
 
 The npm package is **`kith-coord`**, with the command name **`kith`**. For a pinned npx MCP launcher, see [registry setup](docs/integrations.md#registry-installation). The unrelated npm package `kith` is not this project.
 
@@ -120,6 +140,17 @@ kith lock acquire --agent worker-1 --scope package.json --wait --wait-ms 30000
 ```
 
 See [dev-server launch and waiting claims](docs/usage.md#launch-a-dev-server-on-its-allocated-port) for framework flags, session setup, cancellation, and MCP usage.
+
+## Optional read-only monitoring
+
+```sh
+kith watch /path/to/workspace --once --json
+kith menubar /path/to/workspace  # macOS 12+, Intel or Apple Silicon
+```
+
+The watcher compares uncommitted paths across linked worktrees of each repository; a workspace directory can contain several repositories. The editor and macOS menu show paths to review, checkout details and recorded active versus retained sessions. Retained work may still be unfinished: keep it until reviewed.
+
+These are observations, not proof of a merge conflict or the identity of a process writing a file. Unavailable scans stay unavailable. Claims, resource coordination and verified integration remain the MCP/CLI workflow. See [observation limits](docs/usage.md#optional-read-only-worktree-observations).
 
 ## How a task moves through Kith
 

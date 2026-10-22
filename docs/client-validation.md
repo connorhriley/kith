@@ -20,7 +20,7 @@ Reports contain client/version, platform, scenario outcomes and tool names. Raw 
 
 ## Hosted checks
 
-The `CI` workflow runs independently on Linux/macOS with Node 22.13.0, current 22 and 24. Each job checks types, process/lifecycle and MCP tests, an installed package consumer, and the two-client worktree demo. JUnit reports are retained even when a test fails. It also supports manual dispatch. Hosted CI does not run paid models or require agent credentials. Run native clients separately after adapter changes and record their exact versions and outcomes here or in the pull request.
+The `CI` workflow runs independently on Linux/macOS with Node 22.13.0, current 22 and 24. Each job checks types, process/lifecycle and MCP tests, an installed package consumer, and the two-client worktree demo. JUnit reports are retained even when a test fails. It also supports manual dispatch. The separate Windows workflow adds two installed-package jobs on Node 22.13.0 and 24, making eight hosted jobs in total. Hosted CI does not run paid models or require agent credentials. Run native clients separately after adapter changes and record their exact versions and outcomes here or in the pull request.
 
 ## Recorded native runs
 
@@ -44,7 +44,7 @@ The 2026-10-20 subtraction pass reran the isolated native workflows on macOS / N
 
 ## Cursor adapter coverage
 
-Generated Cursor hooks use the documented native `preToolUse`/`postToolUse` protocol and `failClosed:true`. Subprocess fixtures exercise allow/deny JSON, block/warn/off mode changes, preservation of unrelated hooks, and missing/forged ownership refusal. Native Cursor CLI evidence is recorded below. Cursor GUI discovery/trust and other client versions remain unvalidated; CLI and payload fixtures do not establish those outcomes. The shared Git/worktree and MCP boundaries have separate automated coverage.
+Generated Cursor hooks use the documented native `preToolUse`/`postToolUse` protocol and `failClosed:true`. Subprocess fixtures exercise allow/deny JSON, block/warn/off mode changes, preservation of unrelated hooks, and missing/forged ownership refusal. Native Cursor CLI evidence is recorded below. Editor marketplace discovery and native MCP registration have separate versioned checks below. CLI hook runs do not establish GUI hook behavior or support for other client versions. The shared Git/worktree and MCP boundaries have separate automated coverage.
 
 
 The 2026-10-20 adoption pass reran the isolated workflows on macOS / Node 22.23.3: [Codex CLI 0.163.0-alpha.10.2](validation/2026-10-20-adoption-codex.json) and [Claude Code 2.1.301](validation/2026-10-20-adoption-claude.json) passed native editing, renewable mutex execution, failed verification/retry, integration and ownership release. Claude also passed the separate [unavailable-guard denial](validation/2026-10-20-adoption-hook-failure.json).
@@ -71,3 +71,17 @@ This is an attributed external workflow report for those versions, not a control
 ## 2026-10-22 reliability pass
 
 Fresh synthetic isolated-worktree checks passed with Claude Code 2.1.301 and Codex CLI 0.163.0-alpha.11.1 on macOS / Node 22.23.3, using existing subscription sign-ins. Both exercised conflicting claim refusal, native edits, a renewable command mutex, failed verification with preserved target, successful repair/retry and released ownership. Claude also verified native hook denial. These are version-specific native checks, separate from the actual Kith project integration and from external adoption. Reports: [Claude](validation/2026-10-22-product-claude.json), [Codex](validation/2026-10-22-product-codex.json).
+
+
+## Editor marketplaces and signed-in chats
+
+On 2026-10-22, published extension **0.1.4** was installed from each editor's own marketplace in **VS Code 1.143.0** and **Cursor 3.24.18** on macOS. Search, download and installation succeeded without sideloading or a gallery override. Installed payloads matched the released VSIX. Native checks passed activation, MCP registration, Node autodetection with a minimal PATH, read-only observation without database initialization, and byte-for-byte preservation of existing custom/disabled Kith entries and peer configurations. SDK-driven workflows against each installed bundled server separately covered ownership, scope/path refusal, worktrees, resources, verified integration and recovery. [Marketplace report](validation/2026-10-22-editor-marketplaces.json).
+
+Separate **signed-in GUI chats** used a disposable invoice task with one discount agent and one tax agent. Both editors refused a tax agent's overlapping discount claim and gave the agents separate worktrees. Each chat implemented its scoped module, reported the edit, ran tests through `kith_run_with_mutex`, and committed. Full verification correctly failed before the other module was integrated; independent Git checks confirmed the target stayed unchanged and the committed worktree was retained.
+
+| Editor | Signed-in task result |
+| --- | --- |
+| VS Code 1.143.0 / Copilot | Discount integrated with scoped checks; tax retried through Kith with the full suite. All five tests passed; both sessions completed and no locks remained. An independent `npm test` and scoped Git diff confirmed the result. |
+| Cursor 3.24.18 | Both implementations committed and scoped tests passed. Discount integrated; the account's Agent usage limit blocked the final tax retry. That retry remains pending, with the worktree and commits preserved. This is partial GUI workflow evidence. |
+
+[Signed-in chat report](validation/2026-10-22-editor-chats.json). Normal OS Keychain storage and native approval controls were used for these chats; the mock Keychain is only for unsigned disposable host tests. All 15 monitored live client configuration paths remained byte-for-byte unchanged. Only synthetic fixture code and task prompts were used for model-driven work; no API keys were added. Public reports omit credentials and raw capability-bearing transcripts. No production work was changed. These are internal synthetic checks, separate from external user adoption, Windows GUI coverage and later client/extension releases.

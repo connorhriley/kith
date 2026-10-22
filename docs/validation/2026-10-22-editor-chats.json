@@ -1,0 +1,88 @@
+{
+  "checkedAt": "2026-10-22T20:58:43.770422+00:00",
+  "type": "Signed-in native GUI agent chats on disposable synthetic invoice task; not external adoption or production validation",
+  "platform": "macOS",
+  "versions": {
+    "kithExtension": "0.1.4 from each editor own marketplace",
+    "vscode": "1.143.0",
+    "cursor": "3.24.18"
+  },
+  "task": {
+    "description": "Implement discount and tax calculations for a synthetic invoice in two independent signed-in chats.",
+    "scopes": [
+      "src/discount.js",
+      "src/tax.js"
+    ],
+    "scopedVerification": [
+      "node --test tests/discount.test.js",
+      "node --test tests/tax.test.js"
+    ],
+    "fullVerification": "npm test",
+    "tests": 5
+  },
+  "results": {
+    "vscode": {
+      "status": "passed",
+      "commits": {
+        "main": "f528332e1af5843dc051de486412aa0ea862b5cc",
+        "kith/vscode-discount": "5183d9db42c03be38eedd0a9b039e4ea19de4988",
+        "kith/vscode-tax": "1b4d2f5862e234653b689448bea54e2cd87171ca"
+      },
+      "targetClean": true,
+      "conflictingClaimRefused": true,
+      "isolatedWorktrees": true,
+      "scopedTestsViaMutexPassed": true,
+      "failedFullVerificationPreservedTargetAndWork": true,
+      "bothChangesIntegrated": true,
+      "fullSuitePassed": true,
+      "agents": [
+        {
+          "id": "vscode-discount",
+          "statusAtCheck": "completed"
+        },
+        {
+          "id": "vscode-tax",
+          "statusAtCheck": "completed"
+        }
+      ],
+      "failedVerificationTargetUnchanged": true
+    },
+    "cursor": {
+      "status": "pending_client_usage",
+      "commits": {
+        "main": "a47ce3ee9f2c8a9a5bc3c32e219ad9ec84870da3",
+        "kith/cursor-discount": "db8b4b2b312ed2d7a88f0823f1ec0a9af72f0016",
+        "kith/cursor-tax": "92ca13b7a30b0a5f74517797e8561f735705ad7e"
+      },
+      "targetClean": true,
+      "conflictingClaimRefused": true,
+      "isolatedWorktrees": true,
+      "scopedTestsViaMutexPassed": true,
+      "failedFullVerificationPreservedTargetAndWork": true,
+      "bothChangesIntegrated": false,
+      "fullSuitePassed": false,
+      "agents": [
+        {
+          "id": "cursor-discount",
+          "statusAtCheck": "completed"
+        },
+        {
+          "id": "cursor-tax",
+          "statusAtCheck": "active"
+        }
+      ],
+      "failedVerificationTargetUnchanged": true
+    }
+  },
+  "clientConfigs": {
+    "monitoredPaths": 15,
+    "byteIdentical": true
+  },
+  "sourceChanges": false,
+  "boundaries": [
+    "Normal OS Keychain and native tool approvals; no mock Keychain for signed-in chats.",
+    "No private source, credentials or capability-bearing transcripts published.",
+    "Cursor final retry remains pending by user choice after account usage exhaustion.",
+    "Internal synthetic validation, not external adoption or production coverage."
+  ]
+}
