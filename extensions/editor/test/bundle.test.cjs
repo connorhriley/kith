@@ -18,7 +18,8 @@ test('sealed server payload finishes two project tasks and refuses capability re
   // Windows system variables needed by the kernel process-identity probe.
   // The shipped launcher still removes inherited Kith capabilities/Git routing.
   await c.connect(new StdioClientTransport({command:process.execPath,args:[path.join(server,'launch.cjs'),'mcp'],cwd:path.parse(temp).root,env:process.env,stderr:'ignore'}));
-  assert.equal((await c.listTools()).tools.length,13);
+  const publishedProtocol=rootRequire('./docs/protocol/tools.v1.json');
+  assert.deepEqual((await c.listTools()).tools.map(tool=>tool.name).sort(),publishedProtocol.tools.map(tool=>tool.name).sort());
   assert.equal((await c.callTool({name:'kith_get_status',arguments:{}})).isError,true);
   const call=async(name,args)=>{const r=await c.callTool({name,arguments:args});const diagnostic=r.isError?String(r.content?.[0]?.text??'').replace(/[A-Za-z0-9_-]{43}/g,'[redacted]').slice(0,1500):'';assert.equal(r.isError,false,`Unexpected ${name} refusal: ${diagnostic}`);return r.structuredContent;};
   const tokens=[];
