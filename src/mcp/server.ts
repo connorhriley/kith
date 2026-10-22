@@ -105,17 +105,23 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
       intentSummary: z.string().optional().describe('Detailed description of what will be built or modified'),
       scopeGlobs: z.array(z.string()).describe('File paths or glob patterns this agent will edit (e.g. ["src/auth/**"])'),
       isolateWorktree: z.boolean().optional().describe('Recommended: true, giving each parallel agent a separate Git worktree'),
+      waitTimeoutMs: z.number().int().min(0).max(600000).optional().describe('Wait up to this many milliseconds for the whole scope; default fail-fast, not a FIFO file queue'),
     },
     async (args, extra, { engine, register, authorize, formatReply }) => {
       const reg = register(args);
 
-      const intentRes = engine.beginWork({
-        agentId: args.agentId,
-        title: args.title,
-        intentSummary: args.intentSummary,
-        scopeGlobs: args.scopeGlobs,
-        isolateWorktree: args.isolateWorktree,
-      });
+      const options = {
+        agentId: args.agentId, title: args.title, intentSummary: args.intentSummary,
+        scopeGlobs: args.scopeGlobs, isolateWorktree: args.isolateWorktree,
+      };
+      const execution = args.waitTimeoutMs === undefined ? undefined
+        : engine.beginWorkWhenAvailable({ ...options, waitTimeoutMs: args.waitTimeoutMs,
+          signal: AbortSignal.any([disconnected.signal, extra.signal]) });
+      if (execution) commands.add(execution);
+      let intentRes;
+      try { intentRes = execution ? await execution : engine.beginWork(options); }
+      finally { if (execution) commands.delete(execution); }
+
 
       const contracts = engine.depGraph.listContracts().slice(0, 30);
 
@@ -129,6 +135,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
         worktree: intentRes.worktree,
         lockConflicts: intentRes.lockConflicts,
         activeSiblingIntents: intentRes.activeSiblingIntents,
+        ...('waitedMs' in intentRes && 'waitTimedOut' in intentRes ? { waitedMs: intentRes.waitedMs, waitTimedOut: intentRes.waitTimedOut } : {}),
         publishedContracts: contracts,
       });
     }
@@ -175,11 +182,16 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
       patterns: z.array(z.string()),
       mode: z.enum(['exclusive', 'shared']).optional(),
       reason: z.string().optional(),
+      waitTimeoutMs: z.number().int().min(0).max(600000).optional(),
     },
     async (args, extra, { engine, register, authorize, formatReply }) => {
       authorize(args);
-      const res = engine.locks.acquireLocks(args);
-      return formatReply(args.agentId, res);
+      const execution = args.waitTimeoutMs === undefined ? undefined
+        : engine.acquireLocksWhenAvailable({ ...args, waitTimeoutMs: args.waitTimeoutMs,
+          signal: AbortSignal.any([disconnected.signal, extra.signal]) });
+      if (execution) commands.add(execution);
+      try { return formatReply(args.agentId, execution ? await execution : engine.locks.acquireLocks(args)); }
+      finally { if (execution) commands.delete(execution); }
     }
   );
 
@@ -270,6 +282,34 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
         const result = await execution;
         return formatReply(args.agentId, { ok: result.exitCode === 0, ...result });
       } finally { commands.delete(execution); }
+    }
+  );
+
+  tool(
+    'kith_run_dev_server',
+    'Run a literal argv command with an allocated port in PORT/KITH_PORT and substituted {port} arguments. Renews the lease while running; cancellation/disconnect stops the process group before release. Uses coordinator permissions. Requires macOS/Linux; no implicit shell or readiness guarantee.',
+    {
+      agentId: z.string(), sessionToken: z.string().optional(), serviceName: z.string().min(1).max(128),
+      command: z.array(z.string()).min(1), basePort: z.number().int().min(1).max(65535).optional(),
+      cwd: z.string().optional(), leaseDurationMs: z.number().int().min(100).max(86400000).optional(),
+      commandTimeoutMs: z.number().int().min(1).max(600000).optional(),
+      maxOutputBytes: z.number().int().min(1).max(1048576).optional(),
+    },
+    async (args, extra, { engine, authorize, formatReply }) => {
+      authorize(args);
+      const root = fs.realpathSync(engine.fencing.getAgent(args.agentId)?.worktree_path ?? engine.coordDb.repoRoot);
+      const cwd = fs.realpathSync(path.resolve(root, args.cwd ?? '.'));
+      const relative = path.relative(root, cwd);
+      if (relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) {
+        throw new Error('Command cwd must be inside the registered worktree or repository');
+      }
+      const execution = engine.broker.executeWithPort({ ...args, cwd, basePort: args.basePort ?? 3000,
+        commandTimeoutMs: args.commandTimeoutMs ?? 60000, maxOutputBytes: args.maxOutputBytes ?? 65536,
+        signal: AbortSignal.any([disconnected.signal, extra.signal]),
+      });
+      commands.add(execution);
+      try { const result = await execution; return formatReply(args.agentId, { ok: result.exitCode === 0, ...result }); }
+      finally { commands.delete(execution); }
     }
   );
 

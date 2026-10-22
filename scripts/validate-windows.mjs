@@ -112,7 +112,7 @@ try {
   assert.equal(config.command,process.execPath,'Native Windows config must not rely on spawning kith.cmd directly');
   const configured=new Client({name:'generated-Windows-launcher',version:'1.0.0'});clients.push(configured);
   await configured.connect(new StdioClientTransport({...config,cwd:root,env,stderr:'ignore'}));
-  assert.equal((await configured.listTools()).tools.length,13);await configured.close();
+  assert.equal((await configured.listTools()).tools.length,14);await configured.close();
   const unchanged=fingerprints(state);assert.throws(()=>command('init','--only','cursor'));
   assert.deepEqual(fingerprints(state),unchanged);assert.equal(fs.existsSync(path.join(root,'.cursor/hooks.json')),false);
  }

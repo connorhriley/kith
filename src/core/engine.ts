@@ -1,3 +1,4 @@
+import { waitForClaim } from './claim-wait.js';
 import { KITH_PROTOCOL_VERSION } from '../version.js';
 import { observeWorkspaces, previewIntegration } from './workspace-observation.js';
 import fs from 'node:fs';
@@ -32,6 +33,7 @@ export interface PostFileEditHookResult {
 }
 
 export class KithEngine {
+  private activeClaimWaits = 0;
   public readonly coordDb: CoordDatabase;
   public readonly fencing: FencingAndAgentManager;
   public readonly locks: LockEngine;
@@ -214,6 +216,27 @@ export class KithEngine {
     return { ...intent, worktree };
   }
 
+  public async beginWorkWhenAvailable(params: Parameters<KithEngine['beginWork']>[0] & {
+    waitTimeoutMs: number; signal?: AbortSignal;
+  }) {
+    return this.waitForOwnedClaim(params, () => this.beginWork(params));
+  }
+
+  public async acquireLocksWhenAvailable(params: Parameters<LockEngine['acquireLocks']>[0] & {
+    waitTimeoutMs: number; signal?: AbortSignal;
+  }) {
+    return this.waitForOwnedClaim(params, () => this.locks.acquireLocks(params));
+  }
+
+  private async waitForOwnedClaim<T extends { ok: boolean }>(params: {
+    agentId: string; waitTimeoutMs: number; signal?: AbortSignal;
+  }, attempt: () => T) {
+    this.activeClaimWaits++;
+    try {
+      return await waitForClaim({ ...params, attempt, heartbeat: () => { this.fencing.heartbeat(params.agentId); } });
+    } finally { this.activeClaimWaits--; }
+  }
+
   public completeWork(params: {
     agentId: string; taskId?: string; fencingToken?: number;
     mergeBranch?: string; verificationCmd?: string;
@@ -236,6 +259,7 @@ export class KithEngine {
   }
 
   public close(): void {
+    if (this.activeClaimWaits) throw new Error('Await or cancel active file claim waits before closing Kith');
     if (this.broker.hasActiveCommands()) throw new Error('Await or cancel active mutex commands before closing Kith');
     this.coordDb.close();
   }

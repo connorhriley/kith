@@ -99,6 +99,18 @@ Native checks are version-specific. GUI discovery and persisted project trust ne
 
 The npm package is **`kith-coord`**, with the command name **`kith`**. For a pinned npx MCP launcher, see [registry setup](docs/integrations.md#registry-installation). The unrelated npm package `kith` is not this project.
 
+## Dev servers and shared config
+
+On `main` (not yet in the published 0.1.3 package), `kith dev` runs a server with its allocated `PORT` and supports explicit `{port}` arguments. File claims also accept an optional bounded wait:
+
+```sh
+kith dev --agent web-a -- npm run dev -- --port '{port}'
+# Within an existing owned session:
+kith lock acquire --agent worker-1 --scope package.json --wait --wait-ms 30000
+```
+
+See [dev-server launch and waiting claims](docs/usage.md#launch-a-dev-server-on-its-allocated-port) for framework flags, session setup, cancellation, and MCP usage.
+
 ## How a task moves through Kith
 
 1. **Begin through MCP.** Call `kith_begin_work` with a unique `agentId`, explicit `scopeGlobs`, and `isolateWorktree: true`. The connection retains session ownership; no shell exports are needed for this MCP-only workflow.

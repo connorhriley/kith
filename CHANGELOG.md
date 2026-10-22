@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Launch dev servers with `kith dev`: allocate a port, set `PORT`/`KITH_PORT`, substitute literal `{port}` arguments, renew the reservation during supervision, and stop the process group before release. Add foreground `kith_run_dev_server` with the same permission/cancellation boundary as mutex commands. Native Windows supervision remains refused.
+- Add optional bounded waiting to `begin`, `lock acquire`, `kith_begin_work`, and `kith_check_and_lock_files`. Defaults remain fail-fast; timeout/cancellation leave no partial claim. Worktree creation follows successful ownership. File retry does not promise FIFO order; task dependencies provide explicit ordering.
+- Advance the additive MCP protocol to 1.3 and refresh its schema snapshot. No SQLite migration or npm release is included in this source change.
+
 ## 0.1.3 — 2026-10-22
 
 - Repair automatic client setup: merge existing settings, preserve custom transports, keep private original-byte backups and refuse malformed or redirected configuration before client writes. Register Claude Code in its user MCP configuration and use the installed Node/CLI paths. Global clients select repositories per task; project configurations retain their pinned checkout. Existing hooks, permissions and session ownership stay intact.
