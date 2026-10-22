@@ -1,7 +1,13 @@
-node_modules/
+node_modules
+
 dist/
 .coord/
 coverage/
 *.log
 .cursor/
 .DS_Store
+
+artifacts/
+extensions/editor/server/
+extensions/editor/THIRD_PARTY_NOTICES.md
+extensions/editor/.vscode-test/

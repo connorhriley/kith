@@ -66,8 +66,9 @@ export class FencingAndAgentManager {
         // Only our own identity is immutable for this process lifetime. Never cache other PIDs.
         if (pid === process.pid && this.ownWindowsStart) return this.ownWindowsStart;
         const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+        // Query the kernel-backed Process API directly, avoiding cold Get-Process module auto-loading.
         const ticks = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command',
-          `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString([System.Globalization.CultureInfo]::InvariantCulture)`],
+          `([System.Diagnostics.Process]::GetProcessById(${pid})).StartTime.ToUniversalTime().Ticks.ToString([System.Globalization.CultureInfo]::InvariantCulture)`],
           { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000, windowsHide: true }).trim();
         if (!/^\d+$/.test(ticks)) { this.inspectionFailure = 'invalid kernel creation-time response'; return null; }
         const identity = `windows:${ticks}`;

@@ -144,7 +144,7 @@ async function main(): Promise<void> {
       notify: !isRaw && notify,
       onScanError: (errors) => {
         const message = errors.map(error => `${error.repository}: ${error.message}`).join('\n');
-        if (!flags.once && message !== lastScanError) console.error(`Scan unavailable:\n${message}`);
+        if (!flags.once && message !== lastScanError) console.error(`Scan unavailable; retained overlaps may be stale:\n${message}`);
         lastScanError = message;
       },
       onCollision: (alert) => {
@@ -154,7 +154,7 @@ async function main(): Promise<void> {
       },
       onFileChange: (e) => {
         if (!flags.quiet && !isRaw) {
-          console.log(`📝 [EDIT] ${path.basename(e.repoPath)}/${e.filePath}`);
+          console.log(`📝 [FILE MTIME] ${path.basename(e.repoPath)}/${e.filePath}`);
         }
       }
     });

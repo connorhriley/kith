@@ -40,16 +40,24 @@ Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workf
 
 Git recording and integration require a commit identity configured for the repository (`user.name` and `user.email`). Kith does not change your global Git identity.
 
-Install the release, then configure your project:
+Install the release:
 
 ```sh
-npm install --global kith-coord@0.1.3
+npm install --global kith-coord@0.1.4
+```
+
+Choose the setup scope your client needs:
+
+- **Global desktop/CLI connection:** run `kith setup --dry-run`, then `kith setup`. Restart/reconnect the configured client. A desktop agent supplies the absolute Git `repository` on each tool call; no whole-Mac ownership database is created.
+- **Project configuration and agent instructions:** run the following inside the checkout. This is the default for project-scoped clients. Existing global connections need not be registered again; use `kith init --only agents` when only project guidance is needed.
+
+```sh
 cd /path/to/your/project
 kith init --dry-run
 kith init
 ```
 
-For detected global clients, run `kith setup --dry-run`, then `kith setup`. You configure the connection once. A coding client started in a Git checkout can use its project context; a desktop agent supplies the absolute `repository` path on each call. Claims, ownership and integration stay scoped to that repository. Global setup from HOME creates configuration backups, not a project database. See [client setup](docs/integrations.md#configure-detected-local-clients).
+Setup preserves peer configurations, hooks and permissions. A written configuration is not a confirmed connection: check Kith's server status in the client, then ask it to begin an isolated task. `kith doctor /absolute/checkout` checks global and project launcher files without starting clients or creating project state. See [client setup](docs/integrations.md#configure-detected-local-clients).
 
 For source installation and the disposable demo, use the pinned **pnpm 10.20.0**:
 
@@ -95,13 +103,15 @@ Default setup installs MCP configuration for Claude, Codex and Cursor plus agent
 | Cursor | Native CLI workflow and fail-closed edit hooks validated; GUI discovery/trust unvalidated |
 | Other MCP clients | stdio server via `kith mcp`; client-specific validation required |
 
+For VS Code and Cursor, the [editor extension](extensions/editor) offers a bundled MCP server and a small read-only status indicator. Install its VSIX through **Extensions → Install from VSIX**. It preserves existing MCP entries and leaves server approval and tool permissions to the editor. No global npm installation is needed; compatible Node.js is still required.
+
 Native checks are version-specific. GUI discovery and persisted project trust need separate checks. See [integration setup](docs/integrations.md), [recorded validation](docs/client-validation.md), and [session ownership](docs/sessions-and-mutexes.md) before mixing hooks, CLI commands, and MCP clients.
 
 The npm package is **`kith-coord`**, with the command name **`kith`**. For a pinned npx MCP launcher, see [registry setup](docs/integrations.md#registry-installation). The unrelated npm package `kith` is not this project.
 
 ## Dev servers and shared config
 
-On `main` (not yet in the published 0.1.3 package), `kith dev` runs a server with its allocated `PORT` and supports explicit `{port}` arguments. File claims also accept an optional bounded wait:
+In version 0.1.4, `kith dev` runs a server with its allocated `PORT` and supports explicit `{port}` arguments. File claims also accept an optional bounded wait:
 
 ```sh
 kith dev --agent web-a -- npm run dev -- --port '{port}'

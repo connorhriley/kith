@@ -78,3 +78,6 @@ Workspace status distinguishes recorded branch/lease from observed Git state. Di
 `kith_preview_integrate` uses committed source/target trees and reports Git's exact conflict paths. It refuses dirty inputs rather than silently checkpointing them. It can create unreachable Git objects but leaves files/indexes/refs untouched; normal session authorization can renew a heartbeat. Actual completion rechecks inputs and performs the requested project verification independently. A successful preview is not a verification result.
 
 Preview refuses repositories with configured custom merge drivers because Git can execute their commands during merge-tree. It does not silently substitute a different merge policy. Actual integration can run trusted project code and still needs an appropriate verification command.
+
+
+Passive CLI/menu observations use Git status and available file mtimes. They do not identify file writers or establish that a session is participating. Missing files and future timestamps cannot establish edit age and are omitted from timed recent-file lists. Incomplete scans retain unknown health; any retained findings may be stale. Use an explicit checkout and its owning session for integration, or offline inspection for recovery. Never clear warnings by deleting retained work.

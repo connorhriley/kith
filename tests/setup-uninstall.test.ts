@@ -55,3 +55,29 @@ it('diagnoses the configured MCP launcher instead of requiring a global kith bin
  config.mcpServers.kith.command=path.join(root,'missing-launcher');fs.writeFileSync(file,JSON.stringify(config));
  expect(doctorReport(root).checks.find(c=>c.name==='claude-mcp')?.ok).toBe(false);
 });
+
+
+it('recognizes global setup before first work without creating project state or modifying config',()=>{
+ const home=path.join(root,'home'),project=path.join(root,'project');
+ fs.mkdirSync(home);fs.mkdirSync(project);
+ const config=path.join(home,'.claude.json'),bytes=JSON.stringify({mcpServers:{kith:{command:process.execPath,args:[path.resolve('dist/cli/index.js'),'mcp']},peer:{command:'retained'}}});
+ fs.writeFileSync(config,bytes);
+ const report=doctorReport(project,home);
+ expect(report.checks.find(c=>c.name==='claude-global-mcp')?.ok).toBe(true);
+ expect(report.checks.find(c=>c.name==='mcp-configuration')?.ok).toBe(true);
+ expect(report.checks.find(c=>c.name==='coordination-state')?.ok).toBe(true);
+ expect(fs.existsSync(path.join(project,'.coord'))).toBe(false);
+ expect(fs.existsSync(path.join(home,'.coord'))).toBe(false);
+ expect(fs.readFileSync(config,'utf8')).toBe(bytes);
+});
+
+it('reports moved CLI entries and incorrectly pinned global launchers without rewriting them',()=>{
+ const home=path.join(root,'home'),project=path.join(root,'project');fs.mkdirSync(home);fs.mkdirSync(project);
+ const file=path.join(home,'.claude.json');
+ for(const args of [[path.join(root,'missing.js'),'mcp'],[path.resolve('dist/cli/index.js'),'mcp','--repo',home]]){
+  const bytes=JSON.stringify({mcpServers:{kith:{command:process.execPath,args}}});fs.writeFileSync(file,bytes);
+  expect(doctorReport(project,home).checks.find(c=>c.name==='claude-global-mcp')?.ok).toBe(false);
+  expect(fs.readFileSync(file,'utf8')).toBe(bytes);
+  expect(fs.existsSync(path.join(project,'.coord'))).toBe(false);
+ }
+});

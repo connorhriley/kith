@@ -123,7 +123,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
 
         let topEdits = recentEdits.prefix(6)
         if topEdits.isEmpty {
-            let noEdits = NSMenuItem(title: "  (No active edits in last 5m)", action: nil, keyEquivalent: "")
+            let noEdits = NSMenuItem(title: "  (No known file mtimes within 5m)", action: nil, keyEquivalent: "")
             noEdits.isEnabled = false
             menu.addItem(noEdits)
         } else {

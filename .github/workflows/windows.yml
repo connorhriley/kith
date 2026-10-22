@@ -49,6 +49,11 @@ jobs:
           "KITH_VALIDATION_CLI=$installedCli" >> $env:GITHUB_ENV
           "KITH_VALIDATION_SOURCE=$sourceKind" >> $env:GITHUB_ENV
       - run: node scripts/validate-windows.mjs artifacts/windows.json
+      - name: Validate the bundled editor server on Windows
+        if: matrix.node == '24'
+        run: |
+          npm --prefix extensions/editor ci --ignore-scripts --no-audit --no-fund
+          npm --prefix extensions/editor run check
       - name: Preserve native Windows evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
