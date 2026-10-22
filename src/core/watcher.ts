@@ -136,14 +136,16 @@ export class PassiveConflictWatcher {
           if (!file || file === '.coord' || file.startsWith('.coord/')) continue;
           const key = JSON.stringify([repo, file]);
           seen.add(key);
-          let modified = now, fingerprint = status;
+          let modified: number | undefined, fingerprint = status;
           try {
             const stat = fs.lstatSync(path.join(repo, file));
-            modified = Math.min(now, stat.mtimeMs);
+            // Missing files and future mtimes cannot establish when an edit happened.
+            if (Number.isFinite(stat.mtimeMs) && stat.mtimeMs <= now) modified = stat.mtimeMs;
             fingerprint += `:${stat.mtimeMs}:${stat.size}`;
           } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
           const previous = this.recentEdits.get(key);
-          if (!previous || previous.fingerprint !== fingerprint) {
+          if (modified === undefined) this.recentEdits.delete(key);
+          else if (!previous || previous.fingerprint !== fingerprint) {
             this.recentEdits.set(key, { repo, fingerprint, timestamp: modified });
             this.options.onFileChange?.({ repoPath: repo, filePath: file, timestamp: modified });
           }

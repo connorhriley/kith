@@ -170,7 +170,7 @@ Instruction protocol: ${KITH_PROTOCOL_VERSION}.
 
 Use Kith MCP to claim work, isolate changes in worktrees, share local resources and verify integration. Keep one isolated worktree per parallel agent and keep the owning MCP connection open.
 
-1. Call \`kith_begin_work\` with a unique \`agentId\`, an explicit \`scopeGlobs\` array and \`isolateWorktree: true\`.
+1. Select the absolute Git repository path for this task. Include \`repository\` on calls from a global desktop connection; a pinned connection must stay in its configured checkout. Call \`kith_begin_work\` with a unique \`agentId\`, an explicit \`scopeGlobs\` array and \`isolateWorktree: true\`.
 2. Edit only the returned \`worktree.worktreePath\`. Report changed files through \`kith_record_file_edit\` on that connection.
 3. Run serialized commands with \`kith_run_with_mutex\`: pass a literal executable/argument array. Its cwd defaults to the registered worktree. Commands run with server permissions and require client approval.
 4. Renew idle sessions with \`kith_heartbeat\` before their lease expires (every two minutes for the default five-minute lease; sooner for a shorter lease). Inspect \`kith_get_status\`.
@@ -187,7 +187,7 @@ If Claude/Cursor edit hooks or CLI commands are also enabled, launch the client 
       ? content.replace(/<!-- KITH:START -->[\s\S]*?<!-- KITH:END -->/, () => block)
       : content.trimEnd() + '\n\n' + block + '\n';
     add('AGENTS.md', content);
-    add('.agent/skills/kith/SKILL.md', '---\nname: kith\ndescription: Coordinate parallel coding work through Kith MCP and isolated worktrees.\n---\n\nPrefer the Kith MCP tools on one persistent connection. Begin with kith_begin_work using a unique agentId, explicit scopeGlobs and isolateWorktree:true. Edit the returned worktreePath, report files with kith_record_file_edit, run literal command arrays with kith_run_with_mutex, heartbeat before expiry and finish with kith_complete_work plus a project verificationCmd. Inspect kith_get_status. Keep capabilities private. If CLI or native hooks are enabled, first launch the client from a persistent shell with the same KITH_AGENT_ID/KITH_SESSION_TOKEN and --owner-pid "$$". Stateless shell calls cannot retain that setup. Locks require cooperating clients.\n');
+    add('.agent/skills/kith/SKILL.md', '---\nname: kith\ndescription: Coordinate parallel coding work through Kith MCP and isolated worktrees.\n---\n\nPrefer the Kith MCP tools on one persistent connection. Begin with kith_begin_work using a unique agentId, explicit scopeGlobs and isolateWorktree:true. Edit the returned worktreePath, report files with kith_record_file_edit, run literal command arrays with kith_run_with_mutex, heartbeat before expiry and finish with kith_complete_work plus a project verificationCmd. Inspect kith_get_status. Keep capabilities private. If CLI or native hooks are enabled, first launch the client from a persistent shell with the same KITH_AGENT_ID/KITH_SESSION_TOKEN and --owner-pid "$$". Stateless shell calls cannot retain that setup. For global desktop connections, include the absolute Git repository in each call; never guess from the server startup directory. Configured tools do not establish ownership until begin-work succeeds. Locks require cooperating clients.\n');
   }
   if (selected.has('git')) {
     try {

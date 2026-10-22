@@ -40,16 +40,24 @@ Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workf
 
 Git recording and integration require a commit identity configured for the repository (`user.name` and `user.email`). Kith does not change your global Git identity.
 
-Install the release, then configure your project:
+Install the release:
 
 ```sh
 npm install --global kith-coord@0.1.3
+```
+
+Choose the setup scope your client needs:
+
+- **Global desktop/CLI connection:** run `kith setup --dry-run`, then `kith setup`. Restart/reconnect the configured client. A desktop agent supplies the absolute Git `repository` on each tool call; no whole-Mac ownership database is created.
+- **Project configuration and agent instructions:** run the following inside the checkout. This is the default for project-scoped clients. Existing global connections need not be registered again; use `kith init --only agents` when only project guidance is needed.
+
+```sh
 cd /path/to/your/project
 kith init --dry-run
 kith init
 ```
 
-For detected global clients, run `kith setup --dry-run`, then `kith setup`. You configure the connection once. A coding client started in a Git checkout can use its project context; a desktop agent supplies the absolute `repository` path on each call. Claims, ownership and integration stay scoped to that repository. Global setup from HOME creates configuration backups, not a project database. See [client setup](docs/integrations.md#configure-detected-local-clients).
+Setup preserves peer configurations, hooks and permissions. A written configuration is not a confirmed connection: check Kith's server status in the client, then ask it to begin an isolated task. `kith doctor /absolute/checkout` checks global and project launcher files without starting clients or creating project state. See [client setup](docs/integrations.md#configure-detected-local-clients).
 
 For source installation and the disposable demo, use the pinned **pnpm 10.20.0**:
 

@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { parse as parseToml } from 'smol-toml';
 import { isWithin, physicalPath } from '../core/repository.js';
 import { readCoordinationState } from '../core/observation.js';
 
 /** Diagnostics read files and inspect a snapshot; they never initialize state, trust projects, install packages or run configured hooks. */
-export function doctorReport(directory=process.cwd()) {
+export function doctorReport(directory=process.cwd(), home=os.homedir()) {
   const state=readCoordinationState(directory), root=state.repository.root;
   const checks: Array<{name:string;ok:boolean;detail:string}>=[];
   const check=(name:string,ok:boolean,detail:string)=>checks.push({name,ok,detail});
@@ -26,20 +27,39 @@ export function doctorReport(directory=process.cwd()) {
       catch { return false; }
     });
   };
+  const desktop = process.platform === 'win32'
+    ? path.join(home === os.homedir() ? process.env.APPDATA ?? path.join(home, 'AppData/Roaming') : path.join(home, 'AppData/Roaming'), 'Claude/claude_desktop_config.json')
+    : process.platform === 'darwin' ? path.join(home, 'Library/Application Support/Claude/claude_desktop_config.json')
+    : path.join(home, '.config/Claude/claude_desktop_config.json');
+  const files = [
+    ['claude',path.join(root,'.mcp.json'),false,root], ['cursor',path.join(root,'.cursor/mcp.json'),false,root],
+    ['codex',path.join(root,'.codex/config.toml'),true,root], ['claude-global',path.join(home,'.claude.json'),false,home],
+    ['claude-desktop',desktop,false,path.dirname(desktop)], ['codex-global',path.join(home,'.codex/config.toml'),true,home],
+    ['antigravity',path.join(home,'.gemini/config/mcp_config.json'),false,home],
+  ] as const;
   let configured=0;
-  for(const [client,file] of [['claude','.mcp.json'],['cursor','.cursor/mcp.json'],['codex','.codex/config.toml']] as const) {
-    const target=path.join(root,file); if(!fs.existsSync(target)) continue;
+  const inspected = new Set<string>();
+  for(const [client,target,toml,base] of files) {
+    if(inspected.has(target) || !fs.existsSync(target)) continue;
+    inspected.add(target);
     try {
-      if(!isWithin(root,physicalPath(target)))throw new Error('Configuration is redirected outside the checkout');
+      if(!isWithin(physicalPath(base),physicalPath(target)))throw new Error('Configuration is redirected outside its setup root');
       const text=fs.readFileSync(target,'utf8');
-      const config=client==='codex'?parseToml(text):JSON.parse(text);
-      const server=client==='codex'?config.mcp_servers?.kith:config.mcpServers?.kith;
-      if(!server) continue;configured++;
-      check(`${client}-mcp`,typeof server.command==='string' && Array.isArray(server.args) && executable(server.command),'Kith stdio launcher must be executable by absolute path or PATH; native client trust and MCP discovery require client validation');
-    } catch {check(`${client}-mcp`,false,`Cannot parse ${file}; existing configuration was preserved`);}
+      const config=toml?parseToml(text):JSON.parse(text);
+      const server=toml?config.mcp_servers?.kith:config.mcpServers?.kith;
+      if(!server) continue; configured++;
+      if(typeof server.command!=='string' || !Array.isArray(server.args) || !server.args.every((a:unknown)=>typeof a==='string') || !executable(server.command))
+        throw new Error('Kith launcher is missing or not executable; rerun setup from the installed version');
+      if(/^node(?:\.exe)?$/i.test(path.basename(server.command)) && (!server.args[0] || !fs.existsSync(server.args[0]) || !fs.statSync(server.args[0]).isFile()))
+        throw new Error('Kith CLI entry is missing; rerun setup after moving or reinstalling Node/Kith');
+      const pin=server.args.indexOf('--repo');
+      if(pin>=0 && (typeof server.args[pin+1]!=='string' || !path.isAbsolute(server.args[pin+1]) || physicalPath(server.args[pin+1])!==root))
+        throw new Error('Kith launcher is pinned to a different checkout; use that checkout or review its setup');
+      check(`${client}-mcp`,true,'Launcher files are present; native connection, project trust and tool approval are not verified by doctor');
+    } catch(error) {check(`${client}-mcp`,false,`${target}: ${error instanceof Error ? error.message : String(error)}; configuration preserved`);}
   }
-  check('mcp-configuration',configured>0,'Configure the clients you use with kith init; diagnostics do not change client settings');
-  check('coordination-state',state.state==='ready',state.state==='ready'?'Schema and counters validated on a private snapshot':state.error??'No coordination state; run kith init before starting agents');
+  check('mcp-configuration',configured>0,'Use global kith setup or project kith init for your client; configuration alone does not establish a connection');
+  check('coordination-state',state.state!=='unavailable',state.state==='ready'?'Schema and counters validated on a private snapshot':state.error??'No project state yet; the first owned task initializes it. No state was created by doctor');
   let nativeGuards=false;
   for(const [file,event] of [['.claude/settings.json','PreToolUse'],['.cursor/hooks.json','preToolUse']] as const) {
     const target=path.join(root,file);if(!fs.existsSync(target))continue;

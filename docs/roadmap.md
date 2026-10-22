@@ -1,42 +1,21 @@
 # Roadmap
 
-Success means a new contributor can reproduce a two-agent workflow, understand its boundaries, preserve work through failure, and extend one client adapter without rewriting the engine.
+The product gate is a developer completing a real task with cooperating agents: connect, claim, edit separate worktrees, coordinate shared resources, verify/integrate, and recover without losing unfinished work.
 
-## 1. Reliability foundation — implemented
+## Keep the core small
 
-Implemented: non-destructive configuration merging and previews, safer worktree lifecycle, serialized Kith integration, atomic port reservations, Git conflict refusal, surfaced Git errors, preserved command arguments, event pagination, non-destructive Bash recovery defaults, actual process contention coverage, contributor docs, license text, and a CI definition.
+MCP is the default agent interface. Keep one shared ownership ledger per Git common directory, capability-owned sessions, renewable command exclusion, conservative Git integration and retained-work recovery. Global connections select a repository per task. CLI inspection, the optional menu and editor adapters expose the same core; they do not become fleet controllers. Preserve existing client configuration and review gates.
 
-The canonical upstream is [connorhriley/kith](https://github.com/connorhriley/kith). Hosted results are available in [Actions](https://github.com/connorhriley/kith/actions/workflows/ci.yml); workflow configuration alone is not evidence of a passing matrix.
+## Current delivery gates
 
-## 2. Session, command, and client validation — implemented
+1. **Truthful observations.** Missing/future file times must not appear as fresh activity. Differing dirty copies, recorded ownership, unavailable scans and verified merge results remain distinct. No writer attribution or compatibility guarantee from polling.
+2. **One onboarding journey.** Explain global setup versus project init once; diagnose both without writes. Configuration is not connection or ownership. Keep MCP-only use free of manual capability exports and preserve custom entries/hooks/permissions.
+3. **Actual workflow completion.** Use current Kith fixes as real project work through scoped claims, isolated edits, normal verification and integration. Record native client versions separately from MCP fixtures. Validate failure/repair/retry and preserved target bytes; internal checks are not external adoption.
+4. **Followable recovery.** Exercise disconnect, expiry, failed checks, partial setup, interrupted migration and damaged-state refusal. Preserve worktrees and matching stopped database/sidecars; no automatic repair, forced claim release or deletion of `.coord`.
+5. **Exact release evidence.** Require all six Linux/macOS and both Windows jobs on the candidate, including any editor checks, plus the exact packed-package consumer. Verify registry bytes and tag workflows after publication. Maintain versioned client evidence and honest platform limits.
 
-Capability-owned session generations now protect agent-scoped mutation boundaries; process anchors cannot be silently rebound and liveness uses actual kernel identities. Schema 2 invalidates legacy unowned sessions while preserving files. Commands renew leases asynchronously, preserve FIFO tickets, and retain a process-group execution guard across expiry, cancellation, suspension, or supervisor crashes. CLI signals and output are supervised. Actual MCP stdio clients and generated hook commands now cover worktree reports, Git hooks, verification, completion, and disconnect recovery. A two-client disposable example is available with `pnpm demo`.
+Published 0.1.3 / protocol 1.2 has recorded source/tag and clean-registry evidence. Current main adds protocol 1.3 dev-server supervision and bounded claim waits; these are not in published 0.1.3. The editor branch must pass its own native/bundled-server checks before integration and delivery. A green prior release does not certify a new branch.
 
-These gates are covered locally. Version-specific native Codex and Claude CLI runs are recorded in [client validation](client-validation.md). Other releases, GUI discovery, and persisted project trust need separate validation.
+## Deferred
 
-## 3. Path, scope and merge hardening — implemented; recovery next
-
-- Exact scope-language intersection for literals, `*`, `?` and whole-segment `**`, with generated witness checks, dotfile coverage, explicit literal-file scopes and conservative handling of legacy unsupported scopes.
-- Redesign shared-tree Bash attribution before considering automatic restoration as a default. Gate: sibling edits cannot be reverted by another agent's post-hook.
-- Shared common-Git-directory discovery from roots, subdirectories, linked worktrees, symlink aliases and separate Git directories; physical containment, external-link refusal, literal framework paths and invoking-index Git guards have regression coverage.
-- Git conflicts require explicit source-worktree repair and retry; no custom source/JSON rewriting remains. Actual Git regressions preserve symlink targets, unusual filenames and non-UTF-8 bytes.
-- Legacy migration rollback/retry (including a process killed before commit), damaged-state refusal and stopped WAL backup restoration have regressions, including killed MCP ownership and worktree continuation. Broader upgrade/downgrade combinations and corrupted-state repair remain unvalidated.
-
-## 4. Broaden integration validation
-
-Cursor native hook payload/command fixtures, enforcement modes, private setup backups and conservative uninstall are implemented. Add manual workflows against actual Claude/Cursor/Codex application releases. Extend the current stdio/hook lifecycle and cancellation tests to other supported payload shapes. Cover paths with spaces, nested workspaces, custom Git hooks, missing Git identity, and crashes. Measure latency and memory in reproducible small and large repository fixtures before publishing performance claims.
-
-## 5. Public project and release operations
-
-The canonical upstream is established. The package identity is `kith-coord` (CLI `kith`); release checks include an actual installed-package MCP consumer. Input schemas and claim/status semantics are recorded under protocol 1.1 with a CI drift check. Maintain registry ownership, maintainer access, security/moderation contacts and the decision process. Private vulnerability reporting is enabled on the canonical upstream. Run the CI matrix on real pull requests. Publish a prerelease only after a packed-package clean-install check, dependency review, documented support matrix, changelog, rollback procedure, and end-to-end demo. Add provenance and automated publishing after ownership and credentials are established.
-
-## 6. Adaptability after the core is sound
-
-Define parser and client adapter interfaces, add configuration for project-specific verification/hydration, and ship small runnable examples. Prioritize requests backed by concrete user workflows. Keep enforcement, advisory analysis, and presentation separate.
-
-
-## Requested priorities and remaining gates
-
-The current adoption pass adds optional Claude/Cursor block/warn/off hooks, richer status and committed-tree conflict previews, offline inspection/recovery reports, doctor, tracked setup/uninstall and a versioned input-schema snapshot. Atomic task claims/dependencies, port leases, supervised command mutexes, explicit contracts/symbol lock scopes and stopped WAL restore already exist; keep their canonical tool names rather than adding aliases.
-
-Next work needs concrete workflow validation: capability-filtered queue claims, named port/env/install bundles, broader Windows/process validation, and MCP registry publication. Optional notes, PR helpers, interoperable third-party ledgers and fleet spawning are proposals, not implemented behavior or release promises. No dashboard, model router or autonomous PR fixer is planned. Public adoption claims require actual user evidence.
+No new dashboard, fleet spawning, model router, automatic merges, semantic scoring, writer-PID attribution, whole-Mac crawler or new adapters are planned in this reliability pass. Prioritize concrete blocked workflows over feature requests. Actual external task completion remains a separate product-validation gate.

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { PassiveConflictWatcher } from '../src/core/watcher.js';
@@ -13,7 +13,7 @@ import { discoverRepository } from '../src/core/repository.js';
 let temp: string;
 const cli = path.resolve('dist/cli/index.js');
 beforeEach(() => { temp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kith-setup-watch-'))); });
-afterEach(() => { fs.rmSync(temp, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); fs.rmSync(temp, { recursive: true, force: true }); });
 function git(repo: string, ...args: string[]) { return execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); }
 function repository(name = 'repo') {
   const dir = path.join(temp, name); fs.mkdirSync(dir, { recursive: true }); git(dir, 'init', '--quiet');
@@ -173,4 +173,34 @@ it('sets up global clients from home or filesystem root without creating a proje
     expect(fs.existsSync(path.join(h, '.cursor'))).toBe(false);
   }
   expect(uninstallKith(h).ok).toBe(true);
+});
+
+
+it('never invents a recent edit time for deleted files across persistent or one-shot scans', async () => {
+  const repo = repository(), file = path.join(repo, 'src/page.tsx');
+  fs.writeFileSync(file, 'changed\n');
+  const watcher = new PassiveConflictWatcher(repo);
+  await watcher.scanOnce(); expect(watcher.getRecentEdits()).toHaveLength(1);
+  fs.unlinkSync(file);
+  await watcher.scanOnce(); expect(watcher.getRecentEdits()).toEqual([]);
+  for (let i = 0; i < 2; i++) {
+    let changes = 0;
+    const once = new PassiveConflictWatcher(repo, { onFileChange: () => { changes++; } });
+    await once.scanOnce();
+    expect(once.getScanState().complete).toBe(true);
+    expect(once.getRecentEdits()).toEqual([]); expect(changes).toBe(0);
+  }
+});
+
+it('omits future mtimes instead of reporting activity and ages known mtimes across fresh scans', async () => {
+  const repo = repository(), file = path.join(repo, 'src/page.tsx');
+  const now = Date.now(); vi.spyOn(Date, 'now').mockReturnValue(now);
+  fs.writeFileSync(file, 'changed\n'); fs.utimesSync(file, new Date(now + 60000), new Date(now + 60000));
+  const future = new PassiveConflictWatcher(repo); await future.scanOnce();
+  expect(future.getRecentEdits()).toEqual([]);
+  fs.utimesSync(file, new Date(now - 20000), new Date(now - 20000));
+  await future.scanOnce(); expect(future.getRecentEdits()[0].ageSec).toBe(20);
+  vi.mocked(Date.now).mockReturnValue(now + 40000);
+  const later = new PassiveConflictWatcher(repo); await later.scanOnce();
+  expect(later.getRecentEdits()[0].ageSec).toBe(60);
 });

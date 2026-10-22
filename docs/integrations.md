@@ -13,6 +13,8 @@ Install Kith persistently or build and link the checkout first. On macOS/Linux, 
 
 ## Start with MCP
 
+Choose global `kith setup` for an existing desktop/user-wide client connection, or project `kith init` for checkout-scoped configuration and instructions. You do not need to run both for the same client. An existing global connection can use `kith init --only agents` to add just project guidance. Configuration changes do not prove native connection or ownership.
+
 ```sh
 kith init --dry-run
 kith init
@@ -50,7 +52,7 @@ Cursor's native `preToolUse`/`postToolUse` adapter handles `Shell`, `Write` and 
 
 ## Diagnose and undo setup
 
-`kith doctor` checks Node/Git versions, supported platform, the CLI on PATH, parseable MCP configuration, recorded session environment, guard failure policy and worktree health. It does not execute configured hooks, establish project trust, authenticate clients or prove that a supplied token is valid. Native Windows is reported limited: MCP coordination is tested, while supervised mutex commands and shell hooks require macOS/Linux or WSL. A missing/broken check exits nonzero and leaves configuration/state untouched.
+`kith doctor /absolute/checkout` checks Node/Git versions, supported platform, project and global MCP launcher files, recorded session environment, guard failure policy and worktree health. It recognizes global setup before the first task creates project state; a missing database is distinct from damaged state. Missing launcher files and connections pinned to a different checkout require setup review. It does not execute configured hooks, establish project trust, authenticate clients or prove that a supplied token is valid. Native Windows is reported limited: MCP coordination is tested, while supervised mutex commands and shell hooks require macOS/Linux or WSL. A missing/broken check exits nonzero and leaves configuration/state untouched.
 
 Before writing selected client files, init persists private original-byte/mode backups in the shared coordination directory's `setup/` subdirectory. Each checkout has its own ledger. An exclusive `setup.lock` serializes cooperative setup/uninstall. A partial write can leave configuration requiring review; original backups remain available. Stop clients and inspect a stale lock before removing it manually. Never delete the ledger as routine cleanup.
 
