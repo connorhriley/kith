@@ -3,4 +3,5 @@ dist/
 .coord/
 coverage/
 *.log
+.cursor/
 .DS_Store

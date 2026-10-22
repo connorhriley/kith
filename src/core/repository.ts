@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export interface RepositoryLayout {
@@ -50,7 +51,10 @@ export function repositoryFile(root: string, file: string): string {
 
 /** Git's common directory identifies shared coordination; Git operations stay in this checkout. */
 export function discoverRepository(input: string): RepositoryLayout {
-  const directory = fs.realpathSync.native(input);
+  let directory = fs.realpathSync.native(input);
+  if (directory === path.parse(directory).root) {
+    directory = os.homedir();
+  }
   if (!fs.statSync(directory).isDirectory()) throw new Error(`Not a directory: ${input}`);
   const git = (...args: string[]) => execFileSync('git', ['rev-parse', ...args], {
     cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],

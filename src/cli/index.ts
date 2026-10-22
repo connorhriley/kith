@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import path from 'node:path';
 import { KITH_VERSION } from '../version.js';
 import { uninstallKith } from './setup-ledger.js';
 import { doctorReport } from './doctor.js';
@@ -8,6 +9,8 @@ import { KithEngine } from '../core/engine.js';
 import { runKithMcpStdioServer } from '../mcp/server.js';
 import { enforcementMode, HookHandler } from './hook-handler.js';
 import { INTEGRATIONS, Integration, initializeKithRepository } from './init.js';
+import { PassiveConflictWatcher } from '../core/watcher.js';
+import { autoConfigureAllClients } from './setup-auto.js';
 
 function parseFlags(argv: string[]): {
   positional: string[];
@@ -78,6 +81,72 @@ async function main(): Promise<void> {
   if (cmd === 'recover' || cmd === 'status' && flags.offline) {
     const state = cmd === 'recover' ? recoveryReport(repoRoot) : readCoordinationState(repoRoot);
     console.log(JSON.stringify(state,null,2)); process.exitCode = state.state === 'unavailable' ? 1 : 0; return;
+  }
+
+  if (cmd === 'setup' || cmd === 'auto-detect') {
+    const targetDir = positional[1] ? path.resolve(positional[1]) : (repoRoot === '/' ? '/Users/user/Briefed' : repoRoot);
+    const results = autoConfigureAllClients(targetDir);
+    console.log(`\n✨ Kith Auto-Detect & Setup for ${targetDir}\n`);
+    for (const r of results) {
+      const statusIcon = r.configured ? '✓' : r.found ? '!' : '✗';
+      console.log(`  ${statusIcon} ${r.clientName.padEnd(24)} -> ${r.notes}`);
+    }
+    console.log('\nAll installed AI tools are now wired to Kith. Zero manual JSON editing required.\n');
+    return;
+  }
+
+  if (cmd === 'watch' || cmd === 'monitor') {
+    const targetDir = positional[1] ? path.resolve(positional[1]) : repoRoot;
+    const notify = flags.notify !== false;
+    const intervalMs = typeof flags.interval === 'string' ? Number(flags.interval) : 2500;
+    const watcher = new PassiveConflictWatcher(targetDir, {
+      intervalMs,
+      notify,
+      onCollision: (alert) => {
+        console.log(`\n🚨 [COLLISION ALERT] ${alert.message}`);
+      },
+      onFileChange: (e) => {
+        if (!flags.quiet) {
+          console.log(`📝 [EDIT] ${path.basename(e.repoPath)}/${e.filePath}`);
+        }
+      }
+    });
+
+    if (flags.once) {
+      const alerts = await watcher.scanOnce();
+      const repos = watcher.discoverGitRepos();
+      const edits = watcher.getRecentEdits();
+
+      if (flags.raw || flags.json) {
+        console.log(JSON.stringify({ repos, recentEdits: edits, collisions: alerts }, null, 2));
+        return;
+      }
+
+      console.log(`\n📡 Kith Passive Radar: ${targetDir}`);
+      console.log(`   Repositories (${repos.length}): ${repos.map(r => path.basename(r)).join(', ')}`);
+      console.log(`   Recent Modified Files: ${edits.length}`);
+
+      if (alerts.length === 0) {
+        console.log(`\n  ✅ Zero collisions detected. All parallel agents/workspaces clear.\n`);
+      } else {
+        console.log(`\n  ⚠️  Active Collisions & Alerts (${alerts.length}):`);
+        for (const a of alerts) {
+          const icon = a.severity === 'collision' ? '🚨' : '⚡️';
+          console.log(`   ${icon} [${a.severity.toUpperCase()}] ${a.message}`);
+          console.log(`      Files: ${a.filePath}`);
+        }
+        console.log('');
+      }
+      return;
+    }
+
+    console.log(`\n👀 Kith Passive Conflict Radar watching: ${targetDir}`);
+    const repos = watcher.discoverGitRepos();
+    console.log(`   Found ${repos.length} active repositories: ${repos.map(r => path.basename(r)).join(', ')}`);
+    console.log(`   Passive conflict detection active (zero MCP calls needed). Press Ctrl+C to stop.\n`);
+    watcher.start();
+    await new Promise(() => {});
+    return;
   }
 
   const commands = ['session', 'status', 'begin', 'complete', 'heartbeat', 'task', 'lock', 'contract', 'worktree', 'port', 'mutex', 'hook'];
