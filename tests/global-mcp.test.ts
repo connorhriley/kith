@@ -15,14 +15,15 @@ afterEach(async () => { await Promise.allSettled(clients.splice(0).map(c => c.cl
 function repo(parent: string) {
   const root = path.join(temp, parent, 'app'); fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
-  git('init', '-q'); fs.writeFileSync(path.join(root, '.gitignore'), '.coord/\n');
+  git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid');
+  fs.writeFileSync(path.join(root, '.gitignore'), '.coord/\n');
   fs.writeFileSync(path.join(root, 'src/base.mjs'), 'export const base = true;\n');
-  git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'base');
+  git('add', '.'); git('commit', '-qm', 'base');
   return root;
 }
 async function connect(cwd: string, pinned = false) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k, v]) => v !== undefined && !k.startsWith('KITH_'))) as Record<string, string>;
-  env.HOME = temp;
+  env.HOME = temp; env.GIT_CONFIG_GLOBAL = path.join(temp, 'empty-gitconfig'); env.GIT_CONFIG_NOSYSTEM = '1';
   const c = new Client({ name: 'global-routing-fixture', version: '1' }); clients.push(c);
   await c.connect(new StdioClientTransport({ command: process.execPath, args: [cli, 'mcp', ...(pinned ? ['--repo', cwd] : [])], cwd, env, stderr: 'ignore' }));
   return c;

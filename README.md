@@ -38,6 +38,8 @@ The [reliability contract](docs/reliability.md) defines ownership, verification,
 
 Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workflows target macOS and Linux. Version 0.1.1 also validates native Windows MCP claims, worktrees, ports, integration and recovery; supervised mutex commands and shell hooks require macOS/Linux or WSL. See the [support evidence](docs/client-validation.md#native-windows).
 
+Git recording and integration require a commit identity configured for the repository (`user.name` and `user.email`). Kith does not change your global Git identity.
+
 Install the release, then configure your project:
 
 ```sh
