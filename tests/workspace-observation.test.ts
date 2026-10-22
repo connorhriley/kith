@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { beforeEach, afterEach, expect, it } from 'vitest';
 import { KithEngine, readCoordinationState, observeWorkspaces, recoveryReport } from '../src/index.js';
+import { PassiveConflictWatcher } from '../src/core/watcher.js';
 import { doctorReport } from '../src/cli/doctor.js';
 let root:string,engine:KithEngine;
 const git=(cwd:string,...args:string[])=>execFileSync('git',args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
@@ -13,7 +14,7 @@ const digest=(directory:string):Record<string,string> => Object.fromEntries(fs.r
  return [[p,entry.isSymbolicLink()?fs.readlinkSync(p):crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')]];
 }));
 beforeEach(()=>{
- root=fs.mkdtempSync(path.join(os.tmpdir(),"kith observe ' "));git(root,'init');git(root,'config','user.name','Test');git(root,'config','user.email','test@example.test');
+ root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"kith observe ' ")));git(root,'init');git(root,'config','user.name','Test');git(root,'config','user.email','test@example.test');
  fs.writeFileSync(path.join(root,'.gitignore'),'.coord/\n');fs.writeFileSync(path.join(root,'shared.ts'),'export const base = 1;\n');git(root,'add','.');git(root,'commit','-m','seed');
  engine=new KithEngine(root);engine.fencing.registerAgent({id:'a'});engine.fencing.registerAgent({id:'b'});
 });
@@ -77,4 +78,47 @@ it('refuses configured merge drivers before preview can execute project commands
  expect(()=>engine.previewIntegration('a')).toThrow('custom merge drivers');
  expect(fs.existsSync(path.join(root,'preview-side-effect'))).toBe(false);
  expect(fs.existsSync(path.join(a.worktreePath,'preview-side-effect'))).toBe(false);
+});
+
+
+it('radar distinguishes current leases, retained sessions and outside activity without touching ownership or indexes', async()=>{
+ const a=engine.worktrees.spawnWorktree({agentId:'a'}),b=engine.worktrees.spawnWorktree({agentId:'b'});
+ engine.fencing.registerAgent({id:'expired'});
+ const expired=engine.worktrees.spawnWorktree({agentId:'expired'});
+ engine.coordDb.db.prepare("UPDATE agents SET status='completed' WHERE id='b'").run();
+ engine.fencing.registerAgent({id:'primary'});
+ engine.coordDb.db.prepare("UPDATE agents SET lease_expires_at=0 WHERE id='expired'").run();
+ const outside=path.join(root,'..','outside-'+path.basename(root)),alias=path.join(root,'..','alias-'+path.basename(root));
+ git(root,'worktree','add','-qb','outside',outside);
+ try {
+  fs.writeFileSync(path.join(a.worktreePath,'shared.ts'),'active');fs.writeFileSync(path.join(b.worktreePath,'shared.ts'),'retained');
+  const roots=[root,a.worktreePath,b.worktreePath,expired.worktreePath,outside];
+  const indexes=roots.map(repo=>fs.readFileSync(git(repo,'rev-parse','--path-format=absolute','--git-path','index')));
+  const before=digest(engine.coordDb.coordDir);
+  fs.symlinkSync(a.worktreePath,alias,'dir');
+  const watcher=new PassiveConflictWatcher(alias);await watcher.scanOnce();
+  const state=watcher.getScanState();expect(state.complete,state.errors.map(e=>e.message).join()).toBe(true);expect(state.ownershipComplete).toBe(true);
+  const row=(p:string)=>state.worktrees.find(row=>row.path===p)!;
+  expect(row(a.worktreePath)).toMatchObject({activity:'active',agentIds:['a'],dirtyFiles:1,sharedDirtyPaths:1});
+  expect(row(b.worktreePath)).toMatchObject({activity:'retained',agentIds:['b'],dirtyFiles:1,sharedDirtyPaths:1});
+  expect(row(b.worktreePath).detail).toMatch(/completed.*preserve work/);
+  expect(row(expired.worktreePath)).toMatchObject({activity:'retained',agentIds:['expired'],dirtyFiles:0});
+  expect(row(expired.worktreePath).detail).toMatch(/expired lease/);
+  expect(row(root)).toMatchObject({activity:'active',agentIds:['primary']});
+  expect(row(outside)).toMatchObject({activity:'unregistered',agentIds:[],dirtyFiles:0});
+  expect(row(outside).detail).toMatch(/outside Kith are unknown/);
+  expect(watcher.getActiveCollisions()).toHaveLength(1);expect(digest(engine.coordDb.coordDir)).toEqual(before);
+  roots.forEach((repo,i)=>expect(fs.readFileSync(git(repo,'rev-parse','--path-format=absolute','--git-path','index'))).toEqual(indexes[i]));
+  expect(engine.coordDb.db.prepare("SELECT status FROM agents WHERE id='expired'").get()).toMatchObject({status:'active'});
+ } finally { if(fs.existsSync(alias))fs.unlinkSync(alias);git(root,'worktree','remove',outside); }
+});
+
+it('radar never treats unreadable ownership as a clean or inactive checkout',async()=>{
+ const a=engine.worktrees.spawnWorktree({agentId:'a'});
+ engine.coordDb.db.prepare("UPDATE meta SET value='999' WHERE key='schema_version'").run();
+ const before=digest(engine.coordDb.coordDir),watcher=new PassiveConflictWatcher(root);
+ await watcher.scanOnce();const state=watcher.getScanState();
+ expect(state.complete).toBe(true);expect(state.ownershipComplete).toBe(false);expect(state.worktrees).toHaveLength(2);
+ for(const row of state.worktrees){expect(row.activity).toBe('unknown');expect(row.agentIds).toEqual([]);expect(row.detail).toMatch(/Ownership unavailable.*Unsupported coordination schema/);}
+ expect(fs.existsSync(a.worktreePath)).toBe(true);expect(digest(engine.coordDb.coordDir)).toEqual(before);
 });

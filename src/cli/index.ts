@@ -148,12 +148,12 @@ async function main(): Promise<void> {
         lastScanError = message;
       },
       onCollision: (alert) => {
-        if (!isRaw) {
+        if (!isRaw && !flags.once) {
           console.log(`\n⚠️ [WORKTREE OVERLAP] ${alert.message}`);
         }
       },
       onFileChange: (e) => {
-        if (!flags.quiet && !isRaw) {
+        if (!flags.quiet && !isRaw && !flags.once) {
           console.log(`📝 [FILE MTIME] ${path.basename(e.repoPath)}/${e.filePath}`);
         }
       }
@@ -174,16 +174,20 @@ async function main(): Promise<void> {
       console.log(`\n📡 Kith Passive Radar: ${targetDir}`);
       console.log(`   Repositories (${repos.length}): ${repos.map(r => path.basename(r)).join(', ')}`);
       console.log(`   Recent Modified Files: ${edits.length}`);
+      for (const row of state.worktrees) {
+        const activity = { active: 'Active Kith lease', retained: 'Retained', unregistered: 'No Kith session', unknown: 'Ownership unavailable' }[row.activity];
+        console.log(`   ${row.label} — ${activity}; ${row.dirtyFiles ?? 'unknown'} Git changes; ${row.sharedDirtyPaths} shared dirty paths`);
+        console.log(`      ${row.path}${row.agentIds.length ? ` (${row.agentIds.join(', ')})` : ''}\n      ${row.detail}`);
+      }
 
       if (!state.complete) {
         console.error(`Scan unavailable:\n${state.errors.map(error => error.message).join('\n')}`);
       } else if (alerts.length === 0) {
         console.log('\nNo differing or unverified shared dirty paths observed. Identical copies are excluded; compatibility is not verified.\n');
       } else {
-        console.log(`\n  ⚠️  Observed worktree overlaps (${alerts.length}):`);
+        console.log(`\n  ⚠️  Review before integration: ${alerts.length} shared dirty paths:`);
         for (const a of alerts) {
           console.log(`   ⚠️ ${a.message}`);
-          console.log(`      Files: ${a.filePath}`);
         }
         console.log('');
       }

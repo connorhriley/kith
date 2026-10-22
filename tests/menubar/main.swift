@@ -6,9 +6,10 @@ if args.count > 1 {
     case "--emit":
         // Both pipes exceed their buffers; a wait-before-read poll hangs here.
         FileHandle.standardError.write(Data(repeating: 120, count: 1048576))
-        let object: [String: Any] = ["complete": true, "repos": [], "collisions": [], "recentEdits": [], "padding": String(repeating: "x", count: 1048576)]
+        let object: [String: Any] = ["complete": true, "ownershipComplete": true, "worktrees": [], "repos": [], "collisions": [], "recentEdits": [], "padding": String(repeating: "x", count: 1048576)]
         FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: object))
     case "--partial": print("{\"complete\":false,\"repos\":[],\"collisions\":[],\"recentEdits\":[]}")
+    case "--old-payload": print("{\"complete\":true,\"repos\":[],\"collisions\":[],\"recentEdits\":[]}")
     case "--invalid": print("not JSON")
     case "--failure": exit(1)
     case "--hang": Thread.sleep(forTimeInterval: 30)
@@ -19,10 +20,20 @@ if args.count > 1 {
 let executable = URL(fileURLWithPath: args[0]).standardized.path
 let good = try runRadar(executable: executable, arguments: ["--emit"])
 precondition(good["complete"] as? Bool == true)
-for mode in ["--partial", "--invalid", "--failure", "--hang"] {
+for mode in ["--partial", "--old-payload", "--invalid", "--failure", "--hang"] {
     var refused = false
     do { _ = try runRadar(executable: executable, arguments: [mode], timeout: 0.5) }
     catch { refused = true }
     precondition(refused, "must refuse \(mode)")
 }
 print("Native radar process checks passed: large stdout/stderr, invalid/partial output, nonzero exit and timeout.")
+
+precondition(radarTitle(paths: 58, ownershipAvailable: true) == "Kith (58 paths)")
+precondition(radarTitle(paths: 0, ownershipAvailable: false) == "Kith (?)")
+precondition(worktreeActivity("active") == "Active Kith lease")
+precondition(worktreeActivity("retained").contains("inspect before cleanup"))
+precondition(worktreeActivity("unregistered") == "No Kith session")
+precondition(worktreeActivity("unknown") == "Ownership unavailable")
+precondition(overlapExplanation.contains("merge not verified"))
+precondition(radarLabel("file\nname") == "file↵name")
+print("Native radar labels distinguish lease/retained/unknown and path counts from conflict verdicts.")

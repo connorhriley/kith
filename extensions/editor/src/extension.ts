@@ -65,18 +65,18 @@ export function activate(context:vscode.ExtensionContext) {
           for(const a of alerts.slice(0,100))lines.push(`  • ${a.filePath}\n    ${a.repos.join('\n    ')}`);
           if(alerts.length>100)lines.push(`  … ${alerts.length-100} more paths omitted.`);
           for(const error of result.errors??[])lines.push(`  Unavailable: ${error.message}`);
-          for(const repo of result.repos??[]){
-            if(inspected.has(repo))continue;inspected.add(repo);
-            const state=await runJson(executable,launcher,['status','--offline','--repo',repo],stopped.signal);
-            if(state.state==='unavailable')complete=false;
-            lines.push(`  ${repo}: ${state.state==='missing'?'No Kith state yet':state.state??'observed'}; ${(state.agents??[]).filter((a:{status:string})=>a.status==='active').length} recorded active sessions`);
-            if(state.error)lines.push(`    ${state.error}`);
+          if(result.ownershipComplete!==true)complete=false;
+          for(const row of result.worktrees??[]){
+            if(inspected.has(row.path))continue;inspected.add(row.path);
+            const activity=({active:'Active Kith lease',retained:'Retained',unregistered:'No Kith session',unknown:'Ownership unavailable'} as Record<string,string>)[row.activity]??'Ownership unavailable';
+            lines.push(`  ${row.label} — ${activity}; ${row.dirtyFiles??'unknown'} Git changes; ${row.sharedDirtyPaths} shared dirty paths`,
+              `    ${row.path}${row.agentIds?.length?` (${row.agentIds.join(', ')})`:''}`,`    ${row.detail}`);
           }
           lines.push('');
         }
         snapshot={complete,overlaps:overlaps.size,roots:roots.length,text:lines.join('\n')};
       }
-      bar.text=!snapshot.complete?'$(question) Kith':snapshot.overlaps?`$(warning) Kith: ${snapshot.overlaps} overlaps`:'$(organization) Kith';
+      bar.text=!snapshot.complete?'$(question) Kith':snapshot.overlaps?`Kith: ${snapshot.overlaps} paths`:'$(organization) Kith';
       bar.tooltip=`${snapshot.complete?'Read-only observations available':'Observation unavailable'} — click for details. No compatibility verdict.`;
       output.replace(snapshot.text+'\n');
     }catch(error){

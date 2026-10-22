@@ -54,6 +54,24 @@ func runRadar(executable: String, arguments: [String], timeout: TimeInterval = 1
     guard process.terminationStatus == 0 else { throw RadarError.failed }
     guard let json = try JSONSerialization.jsonObject(with: output.result()) as? [String: Any],
           json["complete"] as? Bool == true,
+          json["ownershipComplete"] is Bool, json["worktrees"] is [[String: Any]],
           json["repos"] is [String], json["collisions"] is [[String: Any]], json["recentEdits"] is [[String: Any]] else { throw RadarError.invalid }
     return json
 }
+
+// Shared with the native presentation checks; counts describe paths, never urgency.
+func radarTitle(paths: Int, ownershipAvailable: Bool) -> String {
+    return "Kith" + (paths > 0 ? " (\(paths) paths)" : "") + (ownershipAvailable ? "" : " (?)")
+}
+func worktreeActivity(_ activity: String) -> String {
+    switch activity {
+    case "active": return "Active Kith lease"
+    case "retained": return "Retained — inspect before cleanup"
+    case "unregistered": return "No Kith session"
+    default: return "Ownership unavailable"
+    }
+}
+func radarLabel(_ text: String) -> String {
+    return String(text.prefix(140)).replacingOccurrences(of: "\n", with: "↵").replacingOccurrences(of: "\r", with: "↵")
+}
+let overlapExplanation = "Different/unverified dirty copies; merge not verified."

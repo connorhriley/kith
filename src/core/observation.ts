@@ -11,7 +11,7 @@ import { observeWorkspaces } from './workspace-observation.js';
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: typeof Database };
 
 /** Copies a consistent stopped-state set before opening SQLite, so even SHM reconstruction cannot touch original recovery files. */
-export function readCoordinationState(directory = process.cwd()) {
+export function readCoordinationState(directory = process.cwd(), options: { ownersOnly?: boolean } = {}) {
   const layout = discoverRepository(directory), observedAt = Date.now();
   const empty = { protocolVersion: KITH_PROTOCOL_VERSION, observedAt, repository: { root: layout.checkoutRoot, commonGitDir: layout.commonGitDir, coordDir: layout.coordDir },
     runtime: { node: process.version }, state: 'missing' as 'ready'|'missing'|'unavailable', error: undefined as string|undefined,
@@ -49,6 +49,7 @@ export function readCoordinationState(directory = process.cwd()) {
     if (CoordDatabase.inspectSchema(db)!==2) throw new Error('Offline observation requires schema 2; preserve state and upgrade with clients stopped');
     const all = <T=Record<string,unknown>>(sql:string) => db!.prepare(sql).all() as unknown as T[];
     const agents=all<AgentRecord>('SELECT * FROM agents ORDER BY registered_at DESC');
+    if (options.ownersOnly) { db.exec('COMMIT'); return { ...empty, state: 'ready' as const, agents }; }
     const state = { ...empty, state:'ready' as const,
       fencingEpoch:Number((db.prepare("SELECT value FROM meta WHERE key='fencing_epoch'").get() as {value:string}).value), agents,
       tasks:all('SELECT * FROM tasks ORDER BY priority DESC,created_at').map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))})),
