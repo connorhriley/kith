@@ -44,10 +44,12 @@ it('discovers git repositories and reports active file modifications', async () 
 it('autoConfigureAllClients writes valid client configs without corruption', () => {
   const mockHome = path.join(tempRoot, 'home');
   const mockWorkspace = path.join(tempRoot, 'workspace');
-  fs.mkdirSync(mockHome, { recursive: true });
+  fs.mkdirSync(path.join(mockHome, 'Library/Application Support/Claude'), { recursive: true });
+  fs.mkdirSync(path.join(mockHome, '.claude'), { recursive: true });
+  fs.mkdirSync(path.join(mockHome, '.codex'), { recursive: true });
   fs.mkdirSync(mockWorkspace, { recursive: true });
 
-  const results = autoConfigureAllClients(mockWorkspace);
+  const results = autoConfigureAllClients(mockWorkspace, mockHome);
   expect(Array.isArray(results)).toBe(true);
   expect(results.length).toBeGreaterThanOrEqual(3);
 

@@ -10,8 +10,7 @@ export interface ClientDetectionResult {
   notes: string;
 }
 
-export function autoConfigureAllClients(targetWorkspace = process.cwd()): ClientDetectionResult[] {
-  const home = os.homedir();
+export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = os.homedir()): ClientDetectionResult[] {
   const nodeBinary = '/opt/homebrew/bin/node';
   const kithEntry = '/Users/user/Projects/kith/dist/cli/index.js';
   const results: ClientDetectionResult[] = [];
