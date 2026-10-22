@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const extension=fileURLToPath(new URL('..',import.meta.url)),root=path.resolve(extension,'../..');
+fs.mkdirSync(path.join(root,'artifacts'),{recursive:true});
 fs.rmSync(path.join(extension,'dist'),{recursive:true,force:true});
 fs.rmSync(path.join(extension,'server'),{recursive:true,force:true});
 const ui=await build({metafile:true,entryPoints:[path.join(extension,'src/extension.ts')],outfile:path.join(extension,'dist/extension.cjs'),bundle:true,platform:'node',format:'cjs',mainFields:['module','main'],target:'node20',external:['vscode'],sourcemap:true});
