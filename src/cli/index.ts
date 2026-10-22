@@ -1,12 +1,9 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { KITH_VERSION } from '../version.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 import { uninstallKith } from './setup-ledger.js';
 import { doctorReport } from './doctor.js';
 import { readCoordinationState, recoveryReport } from '../core/observation.js';
@@ -17,6 +14,7 @@ import { enforcementMode, HookHandler } from './hook-handler.js';
 import { INTEGRATIONS, Integration, initializeKithRepository } from './init.js';
 import { PassiveConflictWatcher } from '../core/watcher.js';
 import { autoConfigureAllClients } from './setup-auto.js';
+import { installedCliPath } from './runtime.js';
 
 function parseFlags(argv: string[]): {
   positional: string[];
@@ -39,7 +37,7 @@ function parseFlags(argv: string[]): {
       } else {
         const key = arg.slice(2);
         const next = mainArgs[i + 1];
-        if (!['worktree', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline'].includes(key) && next && !next.startsWith('--')) {
+        if (!['worktree', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify'].includes(key) && next && !next.startsWith('--')) {
           flags[key] = next;
           i++;
         } else {
@@ -59,7 +57,7 @@ async function main(): Promise<void> {
   const cmd = positional[0] ?? 'help';
   const subCmd = positional[1];
   const targetFromPositional = (['init', 'setup', 'watch', 'menubar', 'bar', 'tray', 'doctor', 'recover'].includes(cmd) && positional[1]) ? path.resolve(positional[1]) : undefined;
-  const repoRoot = typeof flags.repo === 'string' ? path.resolve(flags.repo) : (targetFromPositional ?? process.cwd());
+  const repoRoot = typeof flags.repo === 'string' ? path.resolve(flags.repo) : (targetFromPositional ?? (cmd === 'mcp' ? process.env.CLAUDE_PROJECT_DIR : undefined) ?? process.cwd());
 
   if (flags.version || cmd === 'version') { console.log(KITH_VERSION); return; }
   if (flags.help || cmd === 'help') { printHelp(); return; }
@@ -91,48 +89,46 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'setup' || cmd === 'auto-detect') {
-    const targetDir = positional[1] ? path.resolve(positional[1]) : (repoRoot === '/' ? '/Users/user/Briefed' : repoRoot);
-    const results = autoConfigureAllClients(targetDir);
+    const targetDir = positional[1] ? path.resolve(positional[1]) : repoRoot;
+    const results = autoConfigureAllClients(targetDir, undefined, { dryRun: Boolean(flags['dry-run']) });
     console.log(`\n✨ Kith Auto-Detect & Setup for ${targetDir}\n`);
     for (const r of results) {
       const statusIcon = r.configured ? '✓' : r.found ? '!' : '✗';
       console.log(`  ${statusIcon} ${r.clientName.padEnd(24)} -> ${r.notes}`);
     }
-    console.log('\nAll installed AI tools are now wired to Kith. Zero manual JSON editing required.\n');
+    if (results.some(r => r.found && !r.configured)) process.exitCode = 1;
+    console.log('\nExisting hooks and permissions are unchanged. Restart configured clients; review any skipped entries.\n');
     return;
   }
 
   if (cmd === 'menubar' || cmd === 'bar' || cmd === 'tray') {
-    const targetDir = positional[1] ? path.resolve(positional[1]) : (repoRoot === '/' ? '/Users/user/Briefed' : repoRoot);
-    const candidates = [
-      '/opt/homebrew/bin/kith-menubar',
-      path.resolve(__dirname, '../../bin/kith-menubar'),
-      path.resolve(__dirname, '../bin/kith-menubar')
-    ];
-    const menubarBin = candidates.find(c => fs.existsSync(c)) ?? '/opt/homebrew/bin/kith-menubar';
-    if (!fs.existsSync(menubarBin)) {
-      console.error(`Error: Menu bar binary not found at ${menubarBin}`);
-      process.exitCode = 1;
-      return;
-    }
-    const child = spawn(menubarBin, [targetDir], {
-      detached: true,
-      stdio: 'ignore'
+    const targetDir = positional[1] ? path.resolve(positional[1]) : repoRoot;
+    if (process.platform !== 'darwin') throw new Error('The menu-bar view requires macOS. Use kith watch on this platform.');
+    const menubarBin = path.resolve(path.dirname(installedCliPath()), '../../bin/kith-menubar');
+    if (!fs.existsSync(menubarBin)) throw new Error('Menu-bar binary is missing; reinstall the package or run pnpm build:menubar in the source checkout.');
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(menubarBin, [fs.realpathSync(targetDir), process.execPath, installedCliPath()], { detached: true, stdio: 'ignore' });
+      child.once('error', reject);
+      child.once('spawn', () => { child.unref(); resolve(); });
     });
-    child.unref();
-    console.log(`\n✨ Kith Menu Bar Radar launched for ${targetDir}!`);
-    console.log(`   Look at the top-right menu bar of your macOS screen for '🟢 Kith'.\n`);
+    console.log(`Kith menu-bar view launched for ${targetDir}.`);
     return;
   }
 
   if (cmd === 'watch' || cmd === 'monitor') {
     const targetDir = positional[1] ? path.resolve(positional[1]) : repoRoot;
-    const notify = flags.notify !== false;
+    const notify = flags.notify !== 'false' && !flags['no-notify'];
     const intervalMs = typeof flags.interval === 'string' ? Number(flags.interval) : 2500;
     const isRaw = Boolean(flags.raw || flags.json);
+    let lastScanError = '';
     const watcher = new PassiveConflictWatcher(targetDir, {
       intervalMs,
       notify: !isRaw && notify,
+      onScanError: (errors) => {
+        const message = errors.map(error => `${error.repository}: ${error.message}`).join('\n');
+        if (!flags.once && message !== lastScanError) console.error(`Scan unavailable:\n${message}`);
+        lastScanError = message;
+      },
       onCollision: (alert) => {
         if (!isRaw) {
           console.log(`\n🚨 [COLLISION ALERT] ${alert.message}`);
@@ -147,11 +143,13 @@ async function main(): Promise<void> {
 
     if (flags.once) {
       const alerts = await watcher.scanOnce();
-      const repos = watcher.discoverGitRepos();
+      const state = watcher.getScanState();
+      const repos = state.repos;
       const edits = watcher.getRecentEdits();
+      if (!state.complete) process.exitCode = 1;
 
       if (flags.raw || flags.json) {
-        console.log(JSON.stringify({ repos, recentEdits: edits, collisions: alerts }, null, 2));
+        console.log(JSON.stringify({ ...state, recentEdits: edits, collisions: alerts }, null, 2));
         return;
       }
 
@@ -159,8 +157,10 @@ async function main(): Promise<void> {
       console.log(`   Repositories (${repos.length}): ${repos.map(r => path.basename(r)).join(', ')}`);
       console.log(`   Recent Modified Files: ${edits.length}`);
 
-      if (alerts.length === 0) {
-        console.log(`\n  ✅ Zero collisions detected. All parallel agents/workspaces clear.\n`);
+      if (!state.complete) {
+        console.error(`Scan unavailable:\n${state.errors.map(error => error.message).join('\n')}`);
+      } else if (alerts.length === 0) {
+        console.log('\nNo overlapping uncommitted paths observed across the inspected linked worktrees.\n');
       } else {
         console.log(`\n  ⚠️  Active Collisions & Alerts (${alerts.length}):`);
         for (const a of alerts) {
@@ -174,9 +174,8 @@ async function main(): Promise<void> {
     }
 
     console.log(`\n👀 Kith Passive Conflict Radar watching: ${targetDir}`);
-    const repos = watcher.discoverGitRepos();
-    console.log(`   Found ${repos.length} active repositories: ${repos.map(r => path.basename(r)).join(', ')}`);
-    console.log(`   Passive conflict detection active (zero MCP calls needed). Press Ctrl+C to stop.\n`);
+
+    console.log(`   Read-only overlap observations; this does not identify agents or verify compatibility. Press Ctrl+C to stop.\n`);
     watcher.start();
     await new Promise(() => {});
     return;
@@ -504,7 +503,10 @@ Usage:
   kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure MCP clients (--dry-run, --only, --mcp-only)
   kith heartbeat --agent <id>                   Refresh the owned session lease
   kith status [--offline]                         Output JSON state and workspaces; offline never migrates or reaps\n  kith uninstall [--dry-run]                      Restore unchanged tracked setup files; retain work and recovery state\n  kith doctor                                     Check runtime, PATH, configuration, sessions and worktree health without writes\n  kith recover                                    Inspect retained work, expired claims and recovery records offline
-  kith mcp                                        Start stdio MCP server
+  kith setup [checkout] [--dry-run]                Configure detected clients; preserve hooks and custom settings
+  kith watch [checkout] [--once --json]            Observe linked-worktree path overlaps without enforcement
+  kith menubar [checkout]                         Optional read-only macOS view
+  kith mcp --repo <checkout>                      Start stdio MCP server bound to a project
   kith begin --agent <id> --title <t> --scope <g> Declare intent, check overlaps, lock scope
   kith complete --agent <id> [--merge <branch>]   Run Speculative Merge Train & release locks
   kith task add|claim|list                        Manage orchestrated DAG task queue

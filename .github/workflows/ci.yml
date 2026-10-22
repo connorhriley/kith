@@ -28,6 +28,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node --check scripts/validate-native-clients.mjs
+      - name: Build and test native macOS helper
+        if: runner.os == 'macOS'
+        run: pnpm build:menubar && pnpm test:menubar
       - run: pnpm typecheck
       - run: pnpm test --reporter=default --reporter=junit --outputFile=artifacts/tests.xml
       - run: pnpm protocol:check

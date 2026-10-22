@@ -24,6 +24,9 @@ try {
   assert.equal(listing.packages[0].version, manifest.version);
   assert(files.includes('dist/index.d.ts'));
   assert(files.includes('dist/command-worker.js'));
+  assert(files.includes('bin/kith-menubar'));
+  const helper = fs.readFileSync(path.join(root, 'bin/kith-menubar'));
+  assert.equal(helper.readUInt32BE(0), 0xcafebabe, 'Ship a universal macOS executable');
   assert(!files.some((file) => file.startsWith('.coord/') || file.startsWith('node_modules/')));
   const install = path.join(temp, 'consumer');
   fs.mkdirSync(install);
@@ -33,9 +36,19 @@ try {
   assert.equal(run(process.execPath, [cli, '--version'], install).trim(), manifest.version);
   assert.equal(run(path.join(install, 'node_modules/.bin/kith'), ['--version'], install).trim(), manifest.version);
   assert(run(process.execPath, [cli, 'help'], install).includes('Usage:'));
+  assert(fs.existsSync(path.join(install, 'node_modules', manifest.name, 'bin/kith-menubar')));
+  const setupHome = path.join(temp, 'synthetic home');
+  fs.mkdirSync(path.join(setupHome, '.claude'), {recursive: true});
+  const setupEnv = { ...env, HOME: setupHome };
+  execFileSync(process.execPath, [cli, 'setup', install], {cwd: install, env: setupEnv, timeout: 15000});
+  const configured = JSON.parse(fs.readFileSync(path.join(install, '.cursor/mcp.json'), 'utf8')).mcpServers.kith;
+  assert.equal(configured.command, process.execPath);
+  assert.equal(configured.args[0], fs.realpathSync(cli));
+  assert.equal(configured.args[configured.args.length - 1], fs.realpathSync(install));
   assert.equal(run(process.execPath, [cli, 'mutex', '--agent', 'packaged-command', '--', process.execPath, '-e', 'process.stdout.write(process.argv[1])', 'literal ; argument'], install), 'literal ; argument');
   run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
+    import path from 'node:path';
     import { KithEngine } from ${JSON.stringify(manifest.name)};
     import { createRequire } from 'node:module';
     import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -49,7 +62,7 @@ try {
     } finally { engine.close(); }
     const client = new Client({ name: 'clean-package-consumer', version: '1.0.0' });
     try {
-      await client.connect(new StdioClientTransport({ command: process.execPath, args: [${JSON.stringify(cli)}, 'mcp'], cwd: process.cwd(), stderr: 'ignore' }));
+      await client.connect(new StdioClientTransport({ command: process.execPath, args: [${JSON.stringify(cli)}, 'mcp', '--repo', process.cwd()], cwd: path.parse(process.cwd()).root, stderr: 'ignore' }));
       assert((await client.listTools()).tools.some(tool => tool.name === 'kith_preview_integrate'));
       const status = await client.callTool({ name: 'kith_get_status', arguments: {} });
       assert.equal(status.isError, false);

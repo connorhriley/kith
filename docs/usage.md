@@ -107,3 +107,10 @@ unset KITH_AGENT_ID KITH_SESSION_TOKEN
 ```
 
 Never include session tokens in issues, terminal recordings, or shared logs. See [session lifecycle](sessions-and-mutexes.md) for expiry and recovery.
+
+
+## Optional read-only worktree observations
+
+`kith watch /absolute/checkout --once --json` reports uncommitted path overlaps across linked worktrees sharing a Git common directory. A parent directory can contain several independent repositories; equal filenames in unrelated repositories do not establish a collision. The watcher does not identify agents, enforce ownership, or establish contract/semantic compatibility. Clean output means only that the completed scan observed no overlapping dirty paths. Failed discovery or Git reads produce `complete:false`, error details and a nonzero one-shot exit; inspect the failure before relying on the observation.
+
+Omit `--once` for continuous observation. `--notify=false` suppresses optional macOS notifications. On macOS 12 or newer, `kith menubar /absolute/checkout` opens the same limited read-only view. The package includes an Intel/Apple Silicon executable, launched with this installation's Node and CLI paths; unavailable/failed scans remain visibly unavailable. Other platforms use `kith watch`. Source contributors can rebuild with `pnpm build:menubar` using Apple's command-line tools, and run the pipe/timeout regressions with `pnpm test:menubar`.

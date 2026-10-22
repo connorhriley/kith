@@ -1,6 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
+import { discoverRepository, physicalPath, isWithin } from '../core/repository.js';
+import { KithEngine } from '../core/engine.js';
+import { applySetupPlan } from './setup-ledger.js';
+import { installedCliPath } from './runtime.js';
 
 export interface ClientDetectionResult {
   clientName: string;
@@ -10,162 +15,119 @@ export interface ClientDetectionResult {
   notes: string;
 }
 
-export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = os.homedir()): ClientDetectionResult[] {
-  const nodeBinary = '/opt/homebrew/bin/node';
-  const kithEntry = '/Users/user/Projects/kith/dist/cli/index.js';
-  const results: ClientDetectionResult[] = [];
+function object(value: unknown, label: string): Record<string, any> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object; no configuration was written.`);
+  return value as Record<string, any>;
+}
 
-  // 1. Claude Desktop App
-  const claudeDesktopConfig = path.join(home, 'Library/Application Support/Claude/claude_desktop_config.json');
-  if (fs.existsSync(claudeDesktopConfig)) {
-    try {
-      const cfg = JSON.parse(fs.readFileSync(claudeDesktopConfig, 'utf8'));
-      cfg.mcpServers = cfg.mcpServers || {};
-      cfg.mcpServers.kith = {
-        command: nodeBinary,
-        args: [kithEntry, 'mcp'],
-        env: {
-          PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
-        }
-      };
-      fs.writeFileSync(claudeDesktopConfig, JSON.stringify(cfg, null, 2), 'utf8');
-      results.push({
-        clientName: 'Claude Desktop App',
-        found: true,
-        configPath: claudeDesktopConfig,
-        configured: true,
-        notes: 'Configured globally (works across all repositories)'
-      });
-    } catch (e) {
-      results.push({
-        clientName: 'Claude Desktop App',
-        found: true,
-        configPath: claudeDesktopConfig,
-        configured: false,
-        notes: `Error: ${e instanceof Error ? e.message : String(e)}`
-      });
-    }
-  } else {
-    results.push({
-      clientName: 'Claude Desktop App',
-      found: false,
-      configPath: claudeDesktopConfig,
-      configured: false,
-      notes: 'Not installed or no config found'
-    });
-  }
-
-  // 2. Claude Code CLI
-  const claudeCliConfig = path.join(home, '.claude/settings.json');
-  if (fs.existsSync(path.dirname(claudeCliConfig))) {
-    try {
-      const cfg = fs.existsSync(claudeCliConfig) ? JSON.parse(fs.readFileSync(claudeCliConfig, 'utf8')) : {};
-      cfg.mcpServers = cfg.mcpServers || {};
-      cfg.mcpServers.kith = {
-        command: nodeBinary,
-        args: [kithEntry, 'mcp']
-      };
-      fs.writeFileSync(claudeCliConfig, JSON.stringify(cfg, null, 2), 'utf8');
-      results.push({
-        clientName: 'Claude Code CLI',
-        found: true,
-        configPath: claudeCliConfig,
-        configured: true,
-        notes: 'Added mcpServers.kith'
-      });
-    } catch (e) {
-      results.push({
-        clientName: 'Claude Code CLI',
-        found: true,
-        configPath: claudeCliConfig,
-        configured: false,
-        notes: `Error: ${e instanceof Error ? e.message : String(e)}`
-      });
-    }
-  }
-
-  // 3. Codex (ChatGPT App / Codex CLI)
-  const codexConfig = path.join(home, '.codex/config.toml');
-  if (fs.existsSync(path.dirname(codexConfig))) {
-    try {
-      let content = fs.existsSync(codexConfig) ? fs.readFileSync(codexConfig, 'utf8') : '';
-      if (!content.includes('[mcp_servers.kith]')) {
-        content = content.trimEnd() + '\n\n[mcp_servers.kith]\ncommand = "' + nodeBinary + '"\nargs = ["' + kithEntry + '", "mcp"]\n';
-        fs.writeFileSync(codexConfig, content, 'utf8');
-      }
-      results.push({
-        clientName: 'Codex (ChatGPT App)',
-        found: true,
-        configPath: codexConfig,
-        configured: true,
-        notes: 'Configured [mcp_servers.kith]'
-      });
-    } catch (e) {
-      results.push({
-        clientName: 'Codex (ChatGPT App)',
-        found: true,
-        configPath: codexConfig,
-        configured: false,
-        notes: `Error: ${e instanceof Error ? e.message : String(e)}`
-      });
-    }
-  }
-
-  // 4. Cursor
-  const cursorConfig = path.join(home, 'Library/Application Support/Cursor/User/globalStorage/cursor.mcp/mcp.json');
-  const cursorLocalConfig = path.join(targetWorkspace, '.cursor/mcp.json');
+/** Recognize only Kith's installed stdio launcher; leave custom transports and wrappers alone. */
+function ownedLauncher(value: Record<string, any>): boolean {
+  if (value.type !== undefined && value.type !== 'stdio') return false;
+  if (typeof value.command !== 'string' || !/^node(?:\.exe)?$/i.test(path.basename(value.command)) ||
+      !Array.isArray(value.args) || value.args[1] !== 'mcp' ||
+      ![2, 4].includes(value.args.length) || value.args.length === 4 && value.args[2] !== '--repo') return false;
   try {
-    fs.mkdirSync(path.join(targetWorkspace, '.cursor'), { recursive: true });
-    fs.writeFileSync(cursorLocalConfig, JSON.stringify({
-      mcpServers: {
-        kith: {
-          command: nodeBinary,
-          args: [kithEntry, 'mcp']
-        }
-      }
-    }, null, 2), 'utf8');
-    results.push({
-      clientName: 'Cursor',
-      found: true,
-      configPath: cursorLocalConfig,
-      configured: true,
-      notes: 'Configured workspace .cursor/mcp.json'
-    });
-  } catch {
-    // Ignore
-  }
+    const entry = fs.realpathSync(value.args[0]);
+    return path.basename(entry) === 'index.js' && path.basename(path.dirname(entry)) === 'cli' &&
+      JSON.parse(fs.readFileSync(path.resolve(entry, '../../../package.json'), 'utf8')).name === 'kith-coord';
+  } catch { return false; }
+}
 
-  // 5. Antigravity (Gemini)
-  const antigravityConfig = path.join(home, '.gemini/config/mcp_config.json');
-  if (fs.existsSync(path.dirname(antigravityConfig))) {
-    try {
-      const cfg = fs.existsSync(antigravityConfig) ? JSON.parse(fs.readFileSync(antigravityConfig, 'utf8')) : {};
-      cfg.mcpServers = cfg.mcpServers || {};
-      cfg.mcpServers.kith = {
-        command: nodeBinary,
-        args: [kithEntry, 'mcp'],
-        env: {
-          PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
-        }
-      };
-      fs.writeFileSync(antigravityConfig, JSON.stringify(cfg, null, 2), 'utf8');
-      results.push({
-        clientName: 'Antigravity (Gemini)',
-        found: true,
-        configPath: antigravityConfig,
-        configured: true,
-        notes: 'Configured in ~/.gemini/config/mcp_config.json'
-      });
-    } catch (e) {
-      results.push({
-        clientName: 'Antigravity (Gemini)',
-        found: true,
-        configPath: antigravityConfig,
-        configured: false,
-        notes: `Error: ${e instanceof Error ? e.message : String(e)}`
-      });
+/** Preflight all clients first. Reuse private setup ledgers; never change hooks or permissions. */
+export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = os.homedir(), options: { dryRun?: boolean } = {}): ClientDetectionResult[] {
+  const layout = discoverRepository(targetWorkspace);
+  const workspace = layout.checkoutRoot;
+  home = fs.realpathSync(home);
+  const server = { command: process.execPath, args: [installedCliPath(), 'mcp', '--repo', workspace] };
+  const results: ClientDetectionResult[] = [];
+  const groups = new Map<string, { coordDir: string; plan: Map<string, { content: string; mode?: number }> }>();
+  const warnings: string[] = [];
+  const queue = (root: string, file: string, content: string) => {
+    if (!isWithin(root, file)) throw new Error(`Configuration is outside its setup root: ${file}`);
+    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === content) return;
+    const group = groups.get(root) ?? { coordDir: root === workspace ? layout.coordDir : path.join(root, '.coord'), plan: new Map() };
+    if (physicalPath(group.coordDir) !== group.coordDir) throw new Error('Setup backup directory must not be redirected.');
+    group.plan.set(path.relative(root, file), { content, mode: 0o600 });
+    groups.set(root, group);
+  };
+  const safePath = (file: string) => {
+    if (physicalPath(file) !== file) throw new Error(`Configuration path is redirected: ${file}; no configuration was written.`);
+  };
+  const jsonClient = (clientName: string, file: string, root: string, found: boolean) => {
+    if (!found) { results.push({ clientName, configPath: file, found: false, configured: false, notes: 'No existing client configuration found' }); return; }
+    safePath(file);
+    const cfg = fs.existsSync(file) ? object(JSON.parse(fs.readFileSync(file, 'utf8')), file) : {};
+    const servers = object(cfg.mcpServers ?? {}, `${file} mcpServers`);
+    const previous = servers.kith === undefined ? undefined : object(servers.kith, `${file} kith`);
+    const exact = previous?.command === server.command && JSON.stringify(previous.args) === JSON.stringify(server.args);
+    if (previous && !exact && !ownedLauncher(previous)) {
+      results.push({ clientName, configPath: file, found: true, configured: false, notes: 'Custom Kith server preserved; review its repository and launcher manually' }); return;
+    }
+    cfg.mcpServers = { ...servers, kith: { ...previous, ...server } };
+    queue(root, file, JSON.stringify(cfg, null, 2) + '\n');
+    results.push({ clientName, configPath: file, found: true, configured: true, notes: `${options.dryRun ? 'Would bind' : 'Bound'} Kith to ${workspace}; existing settings preserved` });
+  };
+
+  const desktop = process.platform === 'win32'
+    ? path.join(process.env.APPDATA ?? path.join(home, 'AppData/Roaming'), 'Claude/claude_desktop_config.json')
+    : process.platform === 'darwin' ? path.join(home, 'Library/Application Support/Claude/claude_desktop_config.json')
+    : path.join(home, '.config/Claude/claude_desktop_config.json');
+  jsonClient('Claude Desktop App', desktop, home, fs.existsSync(desktop));
+  jsonClient('Claude Code CLI', path.join(home, '.claude.json'), home,
+    fs.existsSync(path.join(home, '.claude.json')) || fs.existsSync(path.join(home, '.claude')));
+
+  const codex = path.join(home, '.codex/config.toml');
+  if (fs.existsSync(path.dirname(codex))) {
+    safePath(codex);
+    const original = fs.existsSync(codex) ? fs.readFileSync(codex, 'utf8') : '';
+    const cfg = parseToml(original), servers = object(cfg.mcp_servers ?? {}, 'Codex MCP servers');
+    const previous = servers.kith === undefined ? undefined : object(servers.kith, 'Codex Kith server');
+    let content = original;
+    let configured = true;
+    const exact = previous?.command === server.command && JSON.stringify(previous.args) === JSON.stringify(server.args);
+    if (!previous) {
+      content += (content && !content.endsWith('\n') ? '\n' : '') + '\n' + stringifyToml({ mcp_servers: { kith: { ...server, env_vars: ['KITH_AGENT_ID', 'KITH_SESSION_TOKEN'] } } });
+    } else if (!exact) {
+      // Update only the simple block emitted by auto-setup. Preserve comments, nested tables,
+      // custom transports and multiline user configuration rather than reserializing the file.
+      const block = /(^\[mcp_servers\.kith\][^\S\r\n]*\r?\n)([\s\S]*?)(?=^\[|$(?![\s\S]))/m;
+      const match = original.match(block);
+      if (ownedLauncher(previous) && match && /^command\s*=\s*"(?:[^"\\\r\n]|\\.)*"\s*$/m.test(match[2]) && /^args\s*=\s*\[[^\r\n]*\]\s*$/m.test(match[2])) {
+        const fields = [`command = ${JSON.stringify(server.command)}`, `args = ${JSON.stringify(server.args)}`];
+        const updated = match[2].replace(/^command\s*=.*$/m, fields[0]).replace(/^args\s*=.*$/m, fields[1]);
+        content = original.replace(block, () => match[1] + updated);
+      } else configured = false;
+    }
+    parseToml(content);
+    if (configured) queue(home, codex, content);
+    results.push({ clientName: 'Codex', found: true, configPath: codex, configured,
+      notes: configured ? `${options.dryRun ? 'Would bind' : 'Bound'} Kith to ${workspace}; other TOML preserved` : 'Custom Kith server preserved; review its repository and launcher manually' });
+  }
+  jsonClient('Cursor', path.join(workspace, '.cursor/mcp.json'), workspace, true);
+  const antigravity = path.join(home, '.gemini/config/mcp_config.json');
+  jsonClient('Antigravity', antigravity, home, fs.existsSync(path.dirname(antigravity)));
+
+  // Keep private backup material out of Git, using the same retained ignore rule as init.
+  for (const [root] of groups) {
+    if (!fs.existsSync(path.join(root, '.git'))) continue;
+    const file = path.join(root, '.gitignore'); safePath(file);
+    const original = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    if (!original.split(/\r?\n/).some(line => ['.coord/', '/.coord/'].includes(line.trim()))) {
+      queue(root, file, original + (original && !original.endsWith('\n') ? '\n' : '') + '\n# Kith private setup backups\n.coord/\n');
     }
   }
 
+  // Every parse and path check above completes before any client writes. Backups precede
+  // writes under each root's setup lock. An interrupted setup retains exact original bytes.
+  if (!options.dryRun && groups.size) {
+    const engine = new KithEngine(workspace); // Refuse damaged state before touching any client.
+    try {
+      for (const [root, group] of groups) {
+        fs.mkdirSync(group.coordDir, { recursive: true, mode: 0o700 });
+        applySetupPlan(root, group.coordDir, group.plan, warnings);
+      }
+    } finally { engine.close(); }
+  }
+  for (const warning of warnings) results.push({ clientName: 'Setup backup', found: true, configured: false, configPath: '', notes: warning });
   return results;
 }

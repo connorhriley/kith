@@ -12,6 +12,7 @@ const cli=process.env.KITH_VALIDATION_CLI??fileURLToPath(new URL('../dist/cli/in
 const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),"kith platform ' spaces ")));
 const env=Object.fromEntries(Object.entries(process.env).filter(([key,value])=>value!==undefined&&!key.startsWith('KITH_')));
 const clients=[];
+const cleanup=[root];
 const report={platform:process.platform,node:process.version,passed:false,phase:'setup',checks:[]};
 const git=(cwd,...args)=>execFileSync('git',args,{cwd,env,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 const command=(...args)=>execFileSync(process.execPath,[cli,'--repo',root,...args],{cwd:root,env,encoding:'utf8',stdio:['ignore','pipe','pipe']});
@@ -118,6 +119,26 @@ try {
  assert.equal(JSON.parse(command('uninstall')).ok,true);assert.equal(fs.existsSync(path.join(root,'.cursor/mcp.json')),false);
  assert.equal(fs.readFileSync(path.join(root,'src/recovered.mjs'),'utf8').replaceAll('\r\n','\n'),'export const recovered = true;\n');
  report.checks.push('offline inspection preserves original state; tracked MCP setup/uninstall preserves integrated work');
+ report.phase='automatic setup preservation';
+ const setupHome=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'kith setup home ')));cleanup.push(setupHome);
+ fs.mkdirSync(path.join(setupHome,'.claude'));
+ const setupEnv={...env,HOME:setupHome,USERPROFILE:setupHome,APPDATA:path.join(setupHome,'AppData/Roaming')};
+ const cursorFile=path.join(root,'.cursor/mcp.json');
+ const originalCursor=JSON.stringify({mcpServers:{peer:{command:'peer',args:['retain']}},custom:true});
+ fs.writeFileSync(cursorFile,originalCursor);
+ execFileSync(process.execPath,[cli,'setup',root],{cwd:root,env:setupEnv,encoding:'utf8'});
+ const autoConfig=JSON.parse(fs.readFileSync(cursorFile,'utf8'));
+ assert.equal(autoConfig.custom,true);assert.equal(autoConfig.mcpServers.peer.command,'peer');
+ assert.equal(autoConfig.mcpServers.kith.command,process.execPath);assert.equal(autoConfig.mcpServers.kith.args.at(-1),root);
+ assert.equal(JSON.parse(fs.readFileSync(path.join(setupHome,'.claude.json'),'utf8')).mcpServers.kith.args.at(-1),root);
+ const autoClient=new Client({name:'auto-generated-native-launcher',version:'1'});clients.push(autoClient);
+ await autoClient.connect(new StdioClientTransport({...autoConfig.mcpServers.kith,cwd:path.parse(root).root,env:setupEnv,stderr:'ignore'}));
+ const autoStatus=body(await autoClient.callTool({name:'kith_get_status',arguments:{}}));assert.equal(autoStatus.repository.root,root);
+ await autoClient.close();
+ assert.equal(JSON.parse(command('uninstall')).ok,true);assert.equal(fs.readFileSync(cursorFile,'utf8'),originalCursor);
+ fs.unlinkSync(cursorFile); // Only this disposable test's restored peer configuration.
+ execFileSync(process.execPath,[cli,'uninstall','--repo',setupHome],{cwd:setupHome,env:setupEnv});
+ report.checks.push('automatic setup preserves peer configuration, binds native launcher from filesystem root and restores original bytes');
  report.phase='damaged state preservation';
  fs.writeFileSync(path.join(state,'state.db'),'deliberately damaged disposable database');
  const damaged=fingerprints(state);
@@ -137,5 +158,5 @@ try {
 } finally {
  await Promise.allSettled(clients.map(client=>client.close()));
  const output=process.argv[2];if(output){fs.mkdirSync(path.dirname(output),{recursive:true});fs.writeFileSync(output,JSON.stringify(report,null,2)+'\n');}
- console.log(JSON.stringify(report,null,2));fs.rmSync(root,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+ console.log(JSON.stringify(report,null,2));for(const dir of cleanup)fs.rmSync(dir,{recursive:true,force:true,maxRetries:10,retryDelay:100});
 }

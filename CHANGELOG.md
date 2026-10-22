@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 — 2026-10-22
+
+- Repair automatic client setup: merge existing settings, preserve custom transports, keep private original-byte backups and refuse malformed or redirected configuration before client writes. Register Claude Code in its user MCP configuration and bind every generated launcher to the selected checkout using the installed Node/CLI paths. Existing hooks, permissions and session ownership stay intact.
+- Refuse filesystem-root coordination instead of silently using the home directory. Accept Claude's project environment for unpinned MCP startup; an explicit `--repo` takes precedence.
+- Make the optional read-only watcher compare full paths across linked worktrees of the same Git repository, including common hotspot files. Discover retained/hidden linked worktrees, clear resolved alerts, retain unavailable scan health and handle NUL-delimited filenames. Remove speculative cross-repository contract and agent-attribution heuristics.
+- Bound menu-bar subprocess polling, drain stdout/stderr concurrently and show unavailable scans without a clean verdict. Include a universal Intel/Apple Silicon macOS helper in the package and exercise the process runner in macOS CI. The view observes uncommitted overlaps; it does not enforce claims or prove compatibility.
+
 ## 0.1.2 — 2026-10-21
 
 - Address AgentScrum’s first external Claude Code/OpenCode task trial: compact default MCP status (protocol 1.1; full contracts remain opt-in), omit unchanged contracts from edit reports, and return the current worktree-bearing agent record immediately.

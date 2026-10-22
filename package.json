@@ -1,6 +1,6 @@
 {
   "name": "kith-coord",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Local coordination for cooperating coding agents: work claims, isolated worktrees, shared resources, and verified integration without a hosted service.",
   "type": "module",
   "bin": {
@@ -25,7 +25,8 @@
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
     "CHANGELOG.md",
-    "assets/brand"
+    "assets/brand",
+    "bin/kith-menubar"
   ],
   "engines": {
     "node": "^22.13.0 || >=24.0.0"
@@ -37,12 +38,14 @@
     "test:watch": "tsup && vitest",
     "typecheck": "tsc --noEmit",
     "check": "pnpm typecheck && pnpm test",
-    "prepack": "tsup",
+    "prepack": "tsup && node scripts/build-menubar.mjs --if-supported",
     "test:package": "pnpm build && node scripts/smoke-package.mjs",
     "demo": "pnpm build && node examples/two-agents.mjs",
     "test:clients": "pnpm build && node scripts/validate-native-clients.mjs",
     "protocol:export": "pnpm build && node scripts/export-protocol.mjs",
-    "protocol:check": "node scripts/export-protocol.mjs --check"
+    "protocol:check": "node scripts/export-protocol.mjs --check",
+    "build:menubar": "node scripts/build-menubar.mjs",
+    "test:menubar": "node scripts/test-menubar.mjs"
   },
   "keywords": [
     "ai-agents",

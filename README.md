@@ -41,7 +41,7 @@ Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workf
 Install the release, then configure your project:
 
 ```sh
-npm install --global kith-coord@0.1.2
+npm install --global kith-coord@0.1.3
 cd /path/to/your/project
 kith init --dry-run
 kith init

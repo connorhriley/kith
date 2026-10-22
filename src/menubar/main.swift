@@ -4,19 +4,22 @@ import Foundation
 class KithMenuBarApp: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var timer: Timer?
-    var watchDir: String = "/Users/user/Briefed"
-    var kithCliPath: String = "/opt/homebrew/bin/node"
-    var kithScriptPath: String = "/Users/user/Projects/kith/dist/cli/index.js"
+    var watchDir = ""
+    var kithCliPath = ""
+    var kithScriptPath = ""
+    var pollInFlight = false
+    var scanAvailable = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
-        if args.count > 1 {
-            watchDir = args[1]
-        }
+        guard args.count == 4 else { NSApplication.shared.terminate(nil); return }
+        watchDir = args[1]
+        kithCliPath = args[2]
+        kithScriptPath = args[3]
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.title = "🟢 Kith"
+            button.title = "⚪ Kith"
         }
 
         buildMenu(collisions: [], recentEdits: [], repos: [])
@@ -29,45 +32,24 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
     }
 
     func pollRadar() {
+        guard !pollInFlight else { return }
+        pollInFlight = true
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self = self else { return }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: self.kithCliPath)
-            process.arguments = [self.kithScriptPath, "watch", self.watchDir, "--once", "--raw"]
-            
-            var env = ProcessInfo.processInfo.environment
-            env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-            process.environment = env
-
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = Pipe()
-
             do {
-                try process.run()
-                process.waitUntilExit()
-
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                guard let outputString = String(data: data, encoding: .utf8),
-                      let start = outputString.firstIndex(of: "{"),
-                      let end = outputString.lastIndex(of: "}"),
-                      start <= end else {
-                    return
-                }
-                let jsonSubstring = String(outputString[start...end])
-                guard let jsonData = jsonSubstring.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-                    return
-                }
-                let collisions = json["collisions"] as? [[String: Any]] ?? []
-                let recentEdits = json["recentEdits"] as? [[String: Any]] ?? []
-                let repos = json["repos"] as? [String] ?? []
-
+                let json = try runRadar(executable: self.kithCliPath, arguments: [self.kithScriptPath, "watch", self.watchDir, "--once", "--raw"])
                 DispatchQueue.main.async {
-                    self.updateUI(collisions: collisions, recentEdits: recentEdits, repos: repos)
+                    self.pollInFlight = false
+                    self.scanAvailable = true
+                    self.updateUI(collisions: json["collisions"] as? [[String: Any]] ?? [], recentEdits: json["recentEdits"] as? [[String: Any]] ?? [], repos: json["repos"] as? [String] ?? [])
                 }
             } catch {
-                // Ignore process launch errors
+                DispatchQueue.main.async {
+                    self.pollInFlight = false
+                    self.scanAvailable = false
+                    self.statusItem.button?.title = "⚪ Kith"
+                    self.buildMenu(collisions: [], recentEdits: [], repos: [])
+                }
             }
         }
     }
@@ -97,7 +79,11 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
 
         // Collisions section
-        if !collisions.isEmpty {
+        if !scanAvailable {
+            let unavailable = NSMenuItem(title: "Scan unavailable — no clean verdict", action: nil, keyEquivalent: "")
+            unavailable.isEnabled = false
+            menu.addItem(unavailable)
+        } else if !collisions.isEmpty {
             let colHeader = NSMenuItem(title: "⚠️ Collisions & Alerts (\(collisions.count)):", action: nil, keyEquivalent: "")
             colHeader.attributedTitle = NSAttributedString(
                 string: "⚠️ Active Collisions (\(collisions.count)):",
@@ -114,7 +100,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
             }
             menu.addItem(NSMenuItem.separator())
         } else {
-            let okItem = NSMenuItem(title: "✅ Zero Collisions (All Clear)", action: nil, keyEquivalent: "")
+            let okItem = NSMenuItem(title: "No observed worktree overlaps", action: nil, keyEquivalent: "")
             okItem.isEnabled = false
             menu.addItem(okItem)
             menu.addItem(NSMenuItem.separator())
@@ -147,10 +133,6 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         refreshItem.target = self
         menu.addItem(refreshItem)
 
-        let termItem = NSMenuItem(title: "Open Terminal Radar", action: #selector(openTerminalClicked), keyEquivalent: "t")
-        termItem.target = self
-        menu.addItem(termItem)
-
         menu.addItem(NSMenuItem.separator())
 
         let quitItem = NSMenuItem(title: "Quit Kith Radar", action: #selector(quitClicked), keyEquivalent: "q")
@@ -162,14 +144,6 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
 
     @objc func scanNowClicked() {
         pollRadar()
-    }
-
-    @objc func openTerminalClicked() {
-        let script = "tell application \"Terminal\" to do script \"kith watch '\(watchDir)'\""
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        try? process.run()
     }
 
     @objc func quitClicked() {

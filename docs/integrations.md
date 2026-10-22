@@ -64,12 +64,12 @@ Uninstall restores the exact original bytes/permissions or deletes files created
 
 ## Registry installation
 
-The package is `kith-coord`, and its binary remains `kith`. Install it persistently (`npm install --global kith-coord@0.1.2`) before `kith init`, because generated configurations launch `kith` on PATH. Invoking init through npx alone does not create that persistent executable.
+The package is `kith-coord`, and its binary remains `kith`. Install it persistently (`npm install --global kith-coord@0.1.3`) before `kith init`, because generated configurations launch `kith` on PATH. Invoking init through npx alone does not create that persistent executable.
 
 An MCP client can instead use a pinned registry launcher without a global install:
 
 ```json
-{"mcpServers":{"kith":{"command":"npx","args":["--yes","--package","kith-coord@0.1.2","kith","mcp","--repo","/absolute/checkout"]}}}
+{"mcpServers":{"kith":{"command":"npx","args":["--yes","--package","kith-coord@0.1.3","kith","mcp","--repo","/absolute/checkout"]}}}
 ```
 
 Use a version you have verified; the unrelated npm package named `kith` is not Kith's distribution. Hook commands still need their configured executable to remain available. The clean-package smoke check exercises the installed binary, library, supervised worker and actual MCP discovery/status in a separate consumer.
@@ -78,3 +78,12 @@ Use a version you have verified; the unrelated npm package named `kith` is not K
 ## Native Windows setup
 
 Version 0.1.1 generates MCP configuration using the current absolute Node executable and built CLI path, avoiding `.cmd` launcher/shell quoting. Use `kith init --mcp-only` and review the generated paths; rerun setup if the Node/Kith installation moves. Native Windows setup refuses shell hooks and shims before configuration writes. Supervised mutex commands are also refused. Use WSL for those full workflows. The `npx` example above is a POSIX launcher; do not assume a native Windows client can spawn `npx.cmd` directly. See [platform proof and limits](client-validation.md#native-windows).
+
+
+## Configure detected local clients
+
+`kith setup /absolute/checkout --dry-run` previews the existing-client setup; omit `--dry-run` to apply it. Use an actual project checkout, not a filesystem root or a parent folder as a substitute for separate repositories. Generated desktop entries bind to this selected checkout, even when the client starts in `/`. This is a fixed project binding, not automatic switching between open projects. Claude Code uses `~/.claude.json`; Cursor uses the checkout's `.cursor/mcp.json`. Existing hooks and approval settings are untouched. Custom Kith transports or wrappers that cannot be safely recognized are preserved and reported for manual review, with a nonzero exit.
+
+Project configuration uses the existing checkout setup ledger. Global client files use a private `~/.coord/setup/` ledger: `kith uninstall --repo "$HOME" --dry-run` previews restoring those unchanged writes. As with project uninstall, edited files and backups are retained. Configuration already overwritten by older untracked setup cannot be reconstructed; recover an earlier copy manually. All selected configuration is parsed and checked before writes, and backups precede each write. A partial setup can still require manual review; rerunning does not discard recovery material.
+
+Generated launchers use absolute paths from the current installation. Rerun setup after moving Node or Kith. MCP connections retain capabilities as usual; setup neither creates a session nor changes ownership rules.
