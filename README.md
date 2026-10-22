@@ -43,7 +43,7 @@ Git recording and integration require a commit identity configured for the repos
 Install the release:
 
 ```sh
-npm install --global kith-coord@0.1.4
+npm install --global kith-coord@0.1.5
 ```
 
 Choose the setup scope your client needs:

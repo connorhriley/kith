@@ -66,12 +66,12 @@ Uninstall restores the exact original bytes/permissions or deletes files created
 
 ## Registry installation
 
-The package is `kith-coord`, and its binary remains `kith`. Install it persistently (`npm install --global kith-coord@0.1.4`) before `kith init`, because generated configurations launch `kith` on PATH. Invoking init through npx alone does not create that persistent executable.
+The package is `kith-coord`, and its binary remains `kith`. Install it persistently (`npm install --global kith-coord@0.1.5`) before `kith init`, because generated configurations launch `kith` on PATH. Invoking init through npx alone does not create that persistent executable.
 
 An MCP client can instead use a pinned registry launcher without a global install:
 
 ```json
-{"mcpServers":{"kith":{"command":"npx","args":["--yes","--package","kith-coord@0.1.4","kith","mcp","--repo","/absolute/checkout"]}}}
+{"mcpServers":{"kith":{"command":"npx","args":["--yes","--package","kith-coord@0.1.5","kith","mcp","--repo","/absolute/checkout"]}}}
 ```
 
 Use a version you have verified; the unrelated npm package named `kith` is not Kith's distribution. Hook commands still need their configured executable to remain available. The clean-package smoke check exercises the installed binary, library, supervised worker and actual MCP discovery/status in a separate consumer.
