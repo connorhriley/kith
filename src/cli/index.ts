@@ -128,14 +128,17 @@ async function main(): Promise<void> {
     const targetDir = positional[1] ? path.resolve(positional[1]) : repoRoot;
     const notify = flags.notify !== false;
     const intervalMs = typeof flags.interval === 'string' ? Number(flags.interval) : 2500;
+    const isRaw = Boolean(flags.raw || flags.json);
     const watcher = new PassiveConflictWatcher(targetDir, {
       intervalMs,
-      notify,
+      notify: !isRaw && notify,
       onCollision: (alert) => {
-        console.log(`\n🚨 [COLLISION ALERT] ${alert.message}`);
+        if (!isRaw) {
+          console.log(`\n🚨 [COLLISION ALERT] ${alert.message}`);
+        }
       },
       onFileChange: (e) => {
-        if (!flags.quiet) {
+        if (!flags.quiet && !isRaw) {
           console.log(`📝 [EDIT] ${path.basename(e.repoPath)}/${e.filePath}`);
         }
       }

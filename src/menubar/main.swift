@@ -48,14 +48,23 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
                 process.waitUntilExit()
 
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    let collisions = json["collisions"] as? [[String: Any]] ?? []
-                    let recentEdits = json["recentEdits"] as? [[String: Any]] ?? []
-                    let repos = json["repos"] as? [String] ?? []
+                guard let outputString = String(data: data, encoding: .utf8),
+                      let start = outputString.firstIndex(of: "{"),
+                      let end = outputString.lastIndex(of: "}"),
+                      start <= end else {
+                    return
+                }
+                let jsonSubstring = String(outputString[start...end])
+                guard let jsonData = jsonSubstring.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                    return
+                }
+                let collisions = json["collisions"] as? [[String: Any]] ?? []
+                let recentEdits = json["recentEdits"] as? [[String: Any]] ?? []
+                let repos = json["repos"] as? [String] ?? []
 
-                    DispatchQueue.main.async {
-                        self.updateUI(collisions: collisions, recentEdits: recentEdits, repos: repos)
-                    }
+                DispatchQueue.main.async {
+                    self.updateUI(collisions: collisions, recentEdits: recentEdits, repos: repos)
                 }
             } catch {
                 // Ignore process launch errors
