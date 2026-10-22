@@ -24,7 +24,6 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
       cfg.mcpServers.kith = {
         command: nodeBinary,
         args: [kithEntry, 'mcp'],
-        cwd: targetWorkspace,
         env: {
           PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
         }
@@ -35,7 +34,7 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
         found: true,
         configPath: claudeDesktopConfig,
         configured: true,
-        notes: `Configured with cwd: ${targetWorkspace}`
+        notes: 'Configured globally (works across all repositories)'
       });
     } catch (e) {
       results.push({
