@@ -31,6 +31,8 @@ async function fixture(options={}){
  if(options.cursor)vscode.cursor={mcp:{registerServer:c=>events.registered.push(c),unregisterServer:n=>events.unregistered.push(n)}};
  const ctx={extensionPath:base,asAbsolutePath:p=>path.join(base,p),subscriptions:[],extension:{packageJSON:{version:'0.1.3'}}};
  if(options.manual){const dir=path.join(root,options.cursor?'.cursor':'.vscode');fs.mkdirSync(dir);fs.writeFileSync(path.join(dir,'mcp.json'),'{ // preserve comment\n "servers":{"kith":{"command":"custom"},"peer":{"env":{"TOKEN":"fixture-private"}}},\n}');}
+ if(options.workspaceConfig){const file=path.join(temp,'existing.code-workspace');fs.writeFileSync(file,'{"mcp":{"servers":{"Kith":null}},"folders":[]}');vscode.workspace.workspaceFile={scheme:'file',fsPath:file};}
+ if(options.malformed){const dir=path.join(root,'.vscode');fs.mkdirSync(dir);fs.writeFileSync(path.join(dir,'mcp.json'),'{"servers":{"kith":{"env":{"TOKEN":"fixture-private"}}}');}
  if(options.overlap){const peer=path.join(root,'.coord/worktrees/peer');execFileSync('git',['worktree','add','-qb','peer',peer],{cwd:root});fs.writeFileSync(path.join(root,'work.mjs'),'export const left = true;\n');fs.writeFileSync(path.join(peer,'work.mjs'),'export const right = true;\n');events.peer=peer;}
  const load=Module._load;
  Module._load=function(request,...args){return request==='vscode'?vscode:load.call(this,request,...args);};
@@ -65,6 +67,13 @@ test('preserves commented/custom existing MCP configuration and avoids a duplica
 });
 test('untrusted workspaces run no server or observation and missing Node never becomes a clean verdict',async()=>{
  for(const options of [{trusted:false},{badNode:true}]){const f=await fixture(options);try{assert.equal(f.events.registered.length,0);assert.equal(f.api.getSnapshot().complete,false);assert.equal(fs.existsSync(path.join(f.root,'.coord')),false);}finally{await f.close();}}
+});
+test('preserves workspace-file MCP entries and refuses registration over malformed configuration',async()=>{
+ for(const options of [{workspaceConfig:true},{malformed:true}]){const f=await fixture(options);try{
+  assert.equal(f.events.registered.length,0);
+  assert.match(f.api.getRegistration(),options.malformed?/cannot be read/:/Existing Kith configuration preserved/);
+  assert.doesNotMatch(f.events.output,/fixture-private/);
+ }finally{await f.close();}}
 });
 test('reports real differing worktree copies and clears resolved observations',async()=>{
  const f=await fixture({overlap:true});try{

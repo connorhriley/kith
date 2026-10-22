@@ -44,7 +44,12 @@ export async function runJson(node: string, launcher: string, args: string[], si
 export function existingKith(files: string[]): string | undefined {
   for (const file of files) {
     if (!fs.existsSync(file)) continue;
-    try { const errors: ParseError[]=[]; const value = parse(fs.readFileSync(file, 'utf8'), errors, {allowTrailingComma:true}); if(errors.length) throw new Error('Invalid JSONC'); if (value?.mcpServers?.kith || value?.servers?.kith || value?.mcpServers?.['kith-editor'] || value?.servers?.['kith-editor']) return file; }
+    try {
+      const errors: ParseError[]=[];
+      const value = parse(fs.readFileSync(file, 'utf8'), errors, {allowTrailingComma:true});
+      if(errors.length) throw new Error('Invalid JSONC');
+      if ([value?.mcpServers,value?.servers,value?.mcp?.servers].some(entries=>entries&&typeof entries==='object'&&Object.keys(entries).some(key=>['kith','kith-editor'].includes(key.toLowerCase())))) return file;
+    }
     catch { throw new Error(`MCP configuration cannot be read: ${file}. It was left unchanged.`); }
   }
   return undefined;

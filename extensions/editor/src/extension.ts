@@ -18,7 +18,7 @@ export function activate(context:vscode.ExtensionContext) {
   const cursorApi=()=>(vscode as typeof vscode&{cursor?:{mcp?:CursorMcp}}).cursor?.mcp;
   const configurationFiles=()=>cursorApi()
     ? [...folders().map(f=>path.join(f.uri.fsPath,'.cursor/mcp.json')),path.join(os.homedir(),'.cursor/mcp.json')]
-    : [...folders().map(f=>path.join(f.uri.fsPath,'.vscode/mcp.json')), ...(context.globalStorageUri?.fsPath ? [path.resolve(context.globalStorageUri.fsPath,'../../mcp.json')] : [])];
+    : [...folders().map(f=>path.join(f.uri.fsPath,'.vscode/mcp.json')), ...(vscode.workspace.workspaceFile?.scheme==='file'?[vscode.workspace.workspaceFile.fsPath]:[]), ...(context.globalStorageUri?.fsPath ? [path.resolve(context.globalStorageUri.fsPath,'../../mcp.json')] : [])];
   async function connectMcp() {
     const current=++generation;
     registration?.dispose();registration=undefined;
