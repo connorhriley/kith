@@ -1,0 +1,105 @@
+{
+  "name": "kith",
+  "displayName": "Kith",
+  "description": "Connect coding agents to Kith and inspect local worktree coordination in VS Code and Cursor.",
+  "version": "0.1.3",
+  "publisher": "kith-coord",
+  "license": "MIT",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/connorhriley/kith.git",
+    "directory": "extensions/editor"
+  },
+  "engines": {
+    "vscode": "^1.102.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "mcp",
+    "agents",
+    "worktrees",
+    "coordination"
+  ],
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Kith runs local Git and Node processes only in trusted workspaces."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Local filesystem repositories are required."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "kith.showStatus",
+        "title": "Kith: Show Workspace Status"
+      },
+      {
+        "command": "kith.refresh",
+        "title": "Kith: Refresh Workspace Status"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "kith.editor",
+        "label": "Kith"
+      }
+    ],
+    "configuration": {
+      "title": "Kith",
+      "properties": {
+        "kith.nodePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional absolute path to Node.js 22.13+ (22.x) or 24+. Kith otherwise detects Node on this machine."
+        },
+        "kith.mcp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Offer the bundled Kith MCP server through the editor. Existing Kith configurations are preserved."
+        },
+        "kith.statusIntervalSeconds": {
+          "type": "integer",
+          "default": 15,
+          "minimum": 5,
+          "maximum": 300,
+          "description": "Seconds between read-only workspace observations."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.cjs",
+    "check": "npm run typecheck && npm run build && npm run test",
+    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository --out ../../artifacts/kith-editor.vsix",
+    "test:host": "node scripts/test-host.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/vscode": "1.102.0",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.27.7",
+    "typescript": "5.9.3"
+  },
+  "packageManager": "npm@10.9.9",
+  "dependencies": {
+    "jsonc-parser": "3.3.1"
+  }
+}

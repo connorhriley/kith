@@ -95,6 +95,8 @@ Default setup installs MCP configuration for Claude, Codex and Cursor plus agent
 | Cursor | Native CLI workflow and fail-closed edit hooks validated; GUI discovery/trust unvalidated |
 | Other MCP clients | stdio server via `kith mcp`; client-specific validation required |
 
+For VS Code and Cursor, the [editor extension](extensions/editor) offers a bundled MCP server and a small read-only status indicator. Install its VSIX through **Extensions → Install from VSIX**. It preserves existing MCP entries and leaves server approval and tool permissions to the editor. No global npm installation is needed; compatible Node.js is still required.
+
 Native checks are version-specific. GUI discovery and persisted project trust need separate checks. See [integration setup](docs/integrations.md), [recorded validation](docs/client-validation.md), and [session ownership](docs/sessions-and-mutexes.md) before mixing hooks, CLI commands, and MCP clients.
 
 The npm package is **`kith-coord`**, with the command name **`kith`**. For a pinned npx MCP launcher, see [registry setup](docs/integrations.md#registry-installation). The unrelated npm package `kith` is not this project.
