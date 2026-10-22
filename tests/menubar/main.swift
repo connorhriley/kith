@@ -37,3 +37,8 @@ precondition(worktreeActivity("unknown") == "Ownership unavailable")
 precondition(overlapExplanation.contains("merge not verified"))
 precondition(radarLabel("file\nname") == "file↵name")
 print("Native radar labels distinguish lease/retained/unknown and path counts from conflict verdicts.")
+
+precondition(sharedPathsLabel(0) == "0 shared paths")
+precondition(sharedPathsLabel(14) == "14 shared paths")
+precondition(recentEditsLabel(377) == "File mtimes within 5m: showing 6 of 377")
+precondition(recentEditsLabel(0) == "File mtimes within 5m: showing 0 of 0")

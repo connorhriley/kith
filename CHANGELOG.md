@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 — 2026-10-22
 
 - Group read-only radar observations by checkout, distinguishing current recorded Kith leases, retained sessions, unregistered checkouts and unavailable ownership. Label counts as paths to review before integration, with full checkout/owner details and preservation guidance. Reuse the same snapshot in the optional editor view without extra status subprocesses. No ownership, recovery or cleanup behavior changes.
+- Label checkout counts as shared paths and recent file mtimes as the six shown within a five-minute window; improve read-only menu text contrast.
 
 ## 0.1.4 — 2026-10-22
 

@@ -29,7 +29,7 @@ async function fixture(options={}){
   McpStdioServerDefinition:class{constructor(label,command,args,env,version){Object.assign(this,{label,command,args,env,version});}},
  };
  if(options.cursor)vscode.cursor={mcp:{registerServer:c=>events.registered.push(c),unregisterServer:n=>events.unregistered.push(n)}};
- const ctx={extensionPath:base,asAbsolutePath:p=>path.join(base,p),subscriptions:[],extension:{packageJSON:{version:'0.1.3'}}};
+ const ctx={extensionPath:base,asAbsolutePath:p=>path.join(base,p),subscriptions:[],extension:{packageJSON:{version:require('../package.json').version}}};
  if(options.manual){const dir=path.join(root,options.cursor?'.cursor':'.vscode');fs.mkdirSync(dir);fs.writeFileSync(path.join(dir,'mcp.json'),'{ // preserve comment\n "servers":{"kith":{"command":"custom"},"peer":{"env":{"TOKEN":"fixture-private"}}},\n}');}
  if(options.workspaceConfig){const file=path.join(temp,'existing.code-workspace');fs.writeFileSync(file,'{"mcp":{"servers":{"Kith":null}},"folders":[]}');vscode.workspace.workspaceFile={scheme:'file',fsPath:file};}
  if(options.malformed){const dir=path.join(root,'.vscode');fs.mkdirSync(dir);fs.writeFileSync(path.join(dir,'mcp.json'),'{"servers":{"kith":{"env":{"TOKEN":"fixture-private"}}}');}

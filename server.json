@@ -3,7 +3,7 @@
   "name": "io.github.connorhriley/kith",
   "title": "Kith",
   "description": "Coordinate coding agents with work claims, Git worktrees, shared resources and verified integration.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "repository": {
     "url": "https://github.com/connorhriley/kith",
     "source": "github"
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "kith-coord",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "runtimeHint": "npx",
       "runtimeArguments": [
         {

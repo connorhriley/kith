@@ -75,3 +75,6 @@ func radarLabel(_ text: String) -> String {
     return String(text.prefix(140)).replacingOccurrences(of: "\n", with: "↵").replacingOccurrences(of: "\r", with: "↵")
 }
 let overlapExplanation = "Different/unverified dirty copies; merge not verified."
+
+func sharedPathsLabel(_ count: Int) -> String { return "\(count) shared paths" }
+func recentEditsLabel(_ count: Int) -> String { return "File mtimes within 5m: showing \(min(count, 6)) of \(count)" }

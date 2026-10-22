@@ -81,6 +81,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         @discardableResult func note(_ text: String, in target: NSMenu) -> NSMenuItem {
             let item = NSMenuItem(title: radarLabel(text), action: nil, keyEquivalent: "")
             item.toolTip = text
+            item.attributedTitle = NSAttributedString(string: radarLabel(text), attributes: [.foregroundColor: NSColor.secondaryLabelColor])
             item.isEnabled = false
             target.addItem(item)
             return item
@@ -88,7 +89,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         if !scanAvailable {
             note("Scan unavailable — no clean verdict", in: menu)
         } else {
-            note(collisions.isEmpty ? "No differing shared dirty paths observed" : "Review before integration: \(collisions.count) shared dirty paths", in: menu)
+            note(collisions.isEmpty ? "No differing shared dirty paths observed" : "Review before integration: \(collisions.count) distinct shared paths", in: menu)
             note(overlapExplanation, in: menu)
             note("Leases describe recorded participation, not file writers.", in: menu)
             let active = worktrees.filter { $0["activity"] as? String == "active" }.count
@@ -100,7 +101,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
                 let label = row["label"] as? String ?? "Checkout"
                 let checkout = row["path"] as? String ?? "Unavailable path"
                 let shared = row["sharedDirtyPaths"] as? Int ?? 0
-                let parent = NSMenuItem(title: radarLabel("\(label) — \(worktreeActivity(activity)); \(shared) paths"), action: nil, keyEquivalent: "")
+                let parent = NSMenuItem(title: radarLabel("\(label) — \(worktreeActivity(activity)); \(sharedPathsLabel(shared))"), action: nil, keyEquivalent: "")
                 parent.toolTip = checkout
                 let detail = NSMenu()
                 note(checkout, in: detail)
@@ -131,7 +132,8 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
 
         // Recent Edits section
-        let editsHeader = NSMenuItem(title: "Recently modified files (\(recentEdits.count)):", action: nil, keyEquivalent: "")
+        let editsHeader = NSMenuItem(title: recentEditsLabel(recentEdits.count), action: nil, keyEquivalent: "")
+        editsHeader.attributedTitle = NSAttributedString(string: recentEditsLabel(recentEdits.count), attributes: [.foregroundColor: NSColor.secondaryLabelColor])
         editsHeader.isEnabled = false
         menu.addItem(editsHeader)
 
@@ -147,6 +149,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
                 let label = String(key.suffix(100)).replacingOccurrences(of: "\n", with: "↵")
                 let item = NSMenuItem(title: "  📝 \(label) (\(age)s ago)", action: nil, keyEquivalent: "")
                 item.toolTip = key
+                item.attributedTitle = NSAttributedString(string: item.title, attributes: [.foregroundColor: NSColor.secondaryLabelColor])
                 item.isEnabled = false
                 menu.addItem(item)
             }
