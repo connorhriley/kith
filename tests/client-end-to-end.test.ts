@@ -199,15 +199,18 @@ it('runs literal commands through MCP with renewable mutex leases and owned work
   const script = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(readyFile)},'ready');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseFile)})){clearInterval(timer);process.stdout.write(JSON.stringify({cwd:process.cwd(),arg:process.argv[1]}));}},20);`;
   const command = [process.execPath, '-e', script, 'literal $value; words'];
   const engine = new KithEngine(root);
-  const pending = tool(one.client, 'kith_run_with_mutex', { agentId: 'command-owner', mutexName: 'native', command, leaseDurationMs: 250, commandTimeoutMs: 10000 });
+  // Allow OS inspection/scheduling overhead, but explicitly keep this real command alive
+  // beyond the first observed expiry so renewal and peer exclusion are still required.
+  const pending = tool(one.client, 'kith_run_with_mutex', { agentId: 'command-owner', mutexName: 'native', command, leaseDurationMs: 2000, commandTimeoutMs: 20000 });
   try {
     const deadline = Date.now() + 8000;
     while (!fs.existsSync(readyFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
     expect(fs.existsSync(readyFile), 'supervised command became ready').toBe(true);
     const lease = () => engine.coordDb.db.prepare("SELECT expires_at FROM resources WHERE type='mutex' AND name='native'").get() as { expires_at: number };
     const initialExpiry = lease().expires_at;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    expect(lease().expires_at).toBeGreaterThan(initialExpiry);
+    while (Date.now() <= initialExpiry + 100) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(Date.now()).toBeGreaterThan(initialExpiry);
+    expect(lease().expires_at).toBeGreaterThan(Date.now());
     engine.fencing.registerAgent({ id: 'peer' });
     expect(engine.broker.tryAcquireMutex({ agentId: 'peer', mutexName: 'native' }).acquired).toBe(false);
     fs.writeFileSync(releaseFile, 'release');

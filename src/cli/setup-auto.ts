@@ -37,7 +37,7 @@ function ownedLauncher(value: Record<string, any>): boolean {
 export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = os.homedir(), options: { dryRun?: boolean } = {}): ClientDetectionResult[] {
   const layout = discoverRepository(targetWorkspace);
   const workspace = layout.checkoutRoot;
-  home = fs.realpathSync(home);
+  home = physicalPath(home);
   const server = { command: process.execPath, args: [installedCliPath(), 'mcp', '--repo', workspace] };
   const results: ClientDetectionResult[] = [];
   const groups = new Map<string, { coordDir: string; plan: Map<string, { content: string; mode?: number }> }>();

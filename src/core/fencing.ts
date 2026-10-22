@@ -42,6 +42,7 @@ export class FencingAndAgentManager {
   public static readonly DEFAULT_LEASE_MS = 5 * 60 * 1000;
   private readonly capabilities = new Map<string, string>();
   private static ownWindowsStart: string | null = null;
+  private static inspectionFailure: string | null = null;
 
   constructor(private readonly coordDb: CoordDatabase) {}
 
@@ -54,6 +55,7 @@ export class FencingAndAgentManager {
 
   /** A real kernel process identity; tests must not supply liveness sentinels. */
   public static getProcessStartTime(pid: number): string | null {
+    this.inspectionFailure = null;
     if (!Number.isSafeInteger(pid) || pid <= 0) return null;
     try {
       if (process.platform === 'linux') {
@@ -66,8 +68,8 @@ export class FencingAndAgentManager {
         const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
         const ticks = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command',
           `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString([System.Globalization.CultureInfo]::InvariantCulture)`],
-          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, windowsHide: true }).trim();
-        if (!/^\d+$/.test(ticks)) return null;
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000, windowsHide: true }).trim();
+        if (!/^\d+$/.test(ticks)) { this.inspectionFailure = 'invalid kernel creation-time response'; return null; }
         const identity = `windows:${ticks}`;
         if (pid === process.pid) this.ownWindowsStart = identity;
         return identity;
@@ -77,7 +79,11 @@ export class FencingAndAgentManager {
         env: { ...process.env, LC_ALL: 'C' },
       }).trim();
       return out || null;
-    } catch { return null; }
+    } catch (error) {
+      const failure = error as NodeJS.ErrnoException & { status?: number; signal?: string };
+      this.inspectionFailure = [failure.code, failure.status === undefined ? null : `exit ${failure.status}`, failure.signal].filter(Boolean).join(', ') || 'inspection unavailable';
+      return null;
+    }
   }
 
   public static isProcessAlive(pid: number, expectedStartTime: string): boolean {
@@ -110,7 +116,7 @@ export class FencingAndAgentManager {
       if (params.sessionToken !== undefined) throw new SessionOwnershipError(params.id);
       const pid = params.pid ?? process.pid;
       const start = FencingAndAgentManager.getProcessStartTime(pid);
-      if (!start) throw new Error(`Cannot determine start time of live session owner PID ${pid}`);
+      if (!start) throw new Error(`Cannot determine start time of live session owner PID ${pid} (${FencingAndAgentManager.inspectionFailure ?? 'inspection unavailable'})`);
       const now = Date.now();
       const epoch = this.coordDb.nextFencingToken();
       const token = crypto.randomBytes(32).toString('base64url');

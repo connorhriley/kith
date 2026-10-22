@@ -129,11 +129,11 @@ try {
  execFileSync(process.execPath,[cli,'setup',root],{cwd:root,env:setupEnv,encoding:'utf8'});
  const autoConfig=JSON.parse(fs.readFileSync(cursorFile,'utf8'));
  assert.equal(autoConfig.custom,true);assert.equal(autoConfig.mcpServers.peer.command,'peer');
- assert.equal(autoConfig.mcpServers.kith.command,process.execPath);assert.equal(autoConfig.mcpServers.kith.args.at(-1),root);
- assert.equal(JSON.parse(fs.readFileSync(path.join(setupHome,'.claude.json'),'utf8')).mcpServers.kith.args.at(-1),root);
+ assert.equal(autoConfig.mcpServers.kith.command,process.execPath);assert.equal(fs.realpathSync.native(autoConfig.mcpServers.kith.args.at(-1)),fs.realpathSync.native(root));
+ assert.equal(fs.realpathSync.native(JSON.parse(fs.readFileSync(path.join(setupHome,'.claude.json'),'utf8')).mcpServers.kith.args.at(-1)),fs.realpathSync.native(root));
  const autoClient=new Client({name:'auto-generated-native-launcher',version:'1'});clients.push(autoClient);
  await autoClient.connect(new StdioClientTransport({...autoConfig.mcpServers.kith,cwd:path.parse(root).root,env:setupEnv,stderr:'ignore'}));
- const autoStatus=body(await autoClient.callTool({name:'kith_get_status',arguments:{}}));assert.equal(autoStatus.repository.root,root);
+ const autoStatus=body(await autoClient.callTool({name:'kith_get_status',arguments:{}}));assert.equal(fs.realpathSync.native(autoStatus.repository.root),fs.realpathSync.native(root));
  await autoClient.close();
  assert.equal(JSON.parse(command('uninstall')).ok,true);assert.equal(fs.readFileSync(cursorFile,'utf8'),originalCursor);
  fs.unlinkSync(cursorFile); // Only this disposable test's restored peer configuration.
@@ -153,6 +153,7 @@ try {
  report.checks.push('damaged state refused without replacing database, creating client config or losing integrated work');
  report.phase='complete';report.passed=true;
 } catch(error) {
+ if(error.stderr)report.commandError=String(error.stderr).slice(0,1500).replace(/[A-Za-z0-9_-]{43}/g,'[redacted]');
  report.location=error.stack?.split('\n').find(line=>line.includes('validate-windows.mjs:'))?.trim();
  report.error=String(error.message).split('\n')[0].replace(/[A-Za-z0-9_-]{43}/g,'[redacted]');process.exitCode=1;
 } finally {
