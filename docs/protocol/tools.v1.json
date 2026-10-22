@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.2.0",
+  "protocolVersion": "1.3.0",
   "tools": [
     {
       "name": "kith_start_session",
@@ -87,6 +87,12 @@
           "isolateWorktree": {
             "type": "boolean",
             "description": "Recommended: true, giving each parallel agent a separate Git worktree"
+          },
+          "waitTimeoutMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600000,
+            "description": "Wait up to this many milliseconds for the whole scope; default fail-fast, not a FIFO file queue"
           },
           "repository": {
             "type": "string",
@@ -199,6 +205,11 @@
           },
           "reason": {
             "type": "string"
+          },
+          "waitTimeoutMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600000
           },
           "repository": {
             "type": "string",
@@ -384,6 +395,67 @@
         "required": [
           "agentId",
           "mutexName",
+          "command"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_run_dev_server",
+      "description": "Run a literal argv command with an allocated port in PORT/KITH_PORT and substituted {port} arguments. Renews the lease while running; cancellation/disconnect stops the process group before release. Uses coordinator permissions. Requires macOS/Linux; no implicit shell or readiness guarantee.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "serviceName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "command": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "basePort": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "leaseDurationMs": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 86400000
+          },
+          "commandTimeoutMs": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600000
+          },
+          "maxOutputBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1048576
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+          }
+        },
+        "required": [
+          "agentId",
+          "serviceName",
           "command"
         ],
         "additionalProperties": false,

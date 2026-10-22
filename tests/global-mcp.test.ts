@@ -37,7 +37,7 @@ it('connects at filesystem root without a ledger and completes parallel tasks in
   const roots = [repo('one'), repo('two')];
   const c = await connect(path.parse(temp).root);
   const tools = (await c.listTools()).tools;
-  expect(tools).toHaveLength(13); expect(tools.every(t => t.inputSchema.properties?.repository)).toBe(true);
+  expect(tools).toHaveLength(14); expect(tools.every(t => t.inputSchema.properties?.repository)).toBe(true);
   expect((await c.callTool({ name: 'kith_get_status', arguments: {} })).isError).toBe(true);
   expect((await c.callTool({ name: 'kith_get_status', arguments: { repository: 'relative/path' } })).isError).toBe(true);
   expect((await c.callTool({ name: 'kith_get_status', arguments: { repository: path.parse(temp).root } })).isError).toBe(true);

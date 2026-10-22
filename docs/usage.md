@@ -17,6 +17,65 @@ kith_complete_work   {"agentId":"auth-worker","verificationCmd":"pnpm typecheck"
 
 Use a different ID and nonoverlapping scope for another agent. An overlapping exclusive scope returns a tool error. Commands run with the MCP server permissions and require client approval; their working directory defaults to the registered worktree. Keep the connection open and heartbeat before the default five-minute session expiry. See the runnable [two-client example](../examples/two-agents.mjs).
 
+## Launch a dev server on its allocated port
+
+These additions are available in source builds on `main`; the published `kith-coord@0.1.3` does not include them yet. Build/link the checkout before using the CLI examples.
+
+Run from the target repository (or pass `--repo /absolute/checkout`). Use a unique agent ID for each session. A standalone invocation creates and ends its own temporary session; an existing session must provide its capability as usual.
+
+```sh
+# A server that reads PORT needs no extra arguments.
+kith dev --agent web-a --service web -- npm run dev
+
+# For a tool requiring an explicit flag, substitute the allocated port.
+kith dev --agent web-b --service web -- npm run dev -- --port '{port}'
+
+# Vite: refuse a fallback port so the server cannot silently switch away.
+kith dev --agent web-c --service web --base 3000 -- pnpm exec vite --port '{port}' --strictPort
+```
+
+Kith starts scanning at 3000 by default, checks TCP availability and live reservations, and prints the allocation to stderr. It launches the literal argv with `PORT` and `KITH_PORT` set to the allocated number. Every `{port}` occurrence in an argument is substituted; shell metacharacters remain literal. It does not inject framework flags or rewrite configuration. Tools that ignore `PORT` must receive their own port flag via `{port}`. Use `--cwd apps/web` to select a subdirectory; the default is the registered worktree or selected checkout.
+
+The lease renews while the supervised process group runs. Ctrl-C/SIGTERM stops that group before releasing the reservation, and the command's exit status is preserved. For a temporary CLI session, completion also ends that session. A named service serializes launches from the same agent; different agents/services can run concurrently on separate ports.
+
+This does not hold a listening socket for the application or prove readiness. An unrelated process can win the bind race; the command's bind error is surfaced, with no automatic restart that might repeat side effects. The allocation is not a readiness URL or proof that a framework honored its port. Detached daemons escaping the group are outside the supervision boundary. Native Windows supervised launch is refused; use macOS/Linux or WSL.
+
+MCP clients with an active session can call:
+
+```text
+kith_run_dev_server {"agentId":"web-a","serviceName":"web","command":["pnpm","exec","vite","--port","{port}","--strictPort"],"commandTimeoutMs":600000}
+```
+
+This is a foreground tool call, returning the port, captured output and exit code when it ends. MCP defaults to a 60-second execution deadline and 64 KiB combined output limit; explicit limits allow up to 10 minutes and 1 MiB. Cancel the request or disconnect to stop the group. For a server needed throughout a longer interactive session, use the streaming CLI. Client approval applies: the process runs with the coordinator's permissions, not the client's shell sandbox. CLI output streams and has the existing supervisor's 16 MiB default combined output limit.
+
+## Wait for a shared file claim
+
+By default, overlapping exclusive claims still fail immediately. Opt in to bounded retry for occasional shared files:
+
+```sh
+# Within an existing capability-owned CLI session:
+kith begin --agent worker-1 --title "Update shared config" --scope 'package.json' --wait --wait-ms 30000
+
+# Or acquire a file scope without creating a new task:
+kith lock acquire --agent worker-1 --scope 'package.json' --wait --wait-ms 30000
+```
+
+`--wait` alone waits up to 60 seconds. `--wait-ms` also enables waiting without `--wait`, accepts 0–600000 milliseconds, and returns a conflict with nonzero exit status on timeout. Ctrl-C cancels the wait. Waiting renews the owning session, but cannot revive an expired or replaced session.
+
+The whole scope is checked atomically on each retry. No partial requested claim, task, or new worktree is created while blocked. On success, the usual exclusive ownership rules apply. Explicit requests report `waitedMs` and `waitTimedOut` alongside the normal result. Unsupported paths and invalid scopes fail immediately rather than being retried.
+
+On MCP, add `waitTimeoutMs` to `kith_begin_work` or `kith_check_and_lock_files`:
+
+```text
+kith_check_and_lock_files {"agentId":"worker-1","patterns":["file:package.json"],"waitTimeoutMs":30000}
+```
+
+The request remains open while waiting and responds to request cancellation and connection loss. Another request on the same connection can still heartbeat or release unrelated claims.
+
+This is cooperative retry, **not a FIFO file queue**. Use task dependencies when order matters. Do not claim multiple shared files in different orders across agents: retain no unnecessary claims while waiting, and always choose a finite deadline. Waiting for a worktree task grants ownership; it does not automatically rebase an existing worktree onto a peer's edits. Review the current file before changing it.
+
+Library callers can await `engine.beginWorkWhenAvailable(...)`, `engine.acquireLocksWhenAvailable(...)`, or `engine.broker.executeWithPort(...)`, passing an `AbortSignal` for cancellation. Await/cancel those operations before closing the engine.
+
 ## Keep existing PR branches and checks
 
 For independent PRs, create each task's Git worktree from the intended PR base first, connect Kith to that worktree and use a fresh agent ID with `isolateWorktree:false`. Keep the existing PR/review/merge process. Kith-created worktrees branch from the selected integration checkout's current HEAD; they inherit its setup and earlier integrated commits.
