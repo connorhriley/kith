@@ -1,3 +1,5 @@
+![Kith](lockup.png)
+
 # Kith for VS Code and Cursor
 
 One extension connects your editor's agent to Kith and adds a small read-only status indicator. Kith's coordination server is bundled; no global npm install is required.

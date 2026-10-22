@@ -9,7 +9,7 @@ const rootRequire=createRequire(path.resolve(__dirname,'../../../package.json'))
 const {Client}=rootRequire('@modelcontextprotocol/sdk/client/index.js');
 const {StdioClientTransport}=rootRequire('@modelcontextprotocol/sdk/client/stdio.js');
 test('sealed server payload finishes two project tasks and refuses capability reuse without runtime dependencies',async()=>{
- const temp=fs.mkdtempSync(path.join(os.tmpdir(),'kith-editor-bundle-'));
+ const temp=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'kith-editor-bundle-')));
  const server=path.join(temp,'server');fs.cpSync(path.resolve(__dirname,'../server'),server,{recursive:true});
  const roots=['one','two'].map(name=>{const r=path.join(temp,name);fs.mkdirSync(r);const git=(...a)=>execFileSync('git',a,{cwd:r,stdio:'ignore'});git('init','-q');git('config','user.name','Fixture');git('config','user.email','fixture@example.invalid');fs.writeFileSync(path.join(r,'.gitignore'),'.coord/\n');git('add','.');git('commit','-qm','base');return r;});
  const c=new Client({name:'editor-bundle-workflow',version:'1'});
@@ -17,7 +17,7 @@ test('sealed server payload finishes two project tasks and refuses capability re
   await c.connect(new StdioClientTransport({command:process.execPath,args:[path.join(server,'launch.cjs'),'mcp'],cwd:path.parse(temp).root,stderr:'ignore'}));
   assert.equal((await c.listTools()).tools.length,13);
   assert.equal((await c.callTool({name:'kith_get_status',arguments:{}})).isError,true);
-  const call=async(name,args)=>{const r=await c.callTool({name,arguments:args});assert.equal(r.isError,false,`Unexpected ${name} refusal`);return r.structuredContent;};
+  const call=async(name,args)=>{const r=await c.callTool({name,arguments:args});const diagnostic=r.isError?String(r.content?.[0]?.text??'').replace(/[A-Za-z0-9_-]{43}/g,'[redacted]').slice(0,1500):'';assert.equal(r.isError,false,`Unexpected ${name} refusal: ${diagnostic}`);return r.structuredContent;};
   const tokens=[];
   for(const [index,repository] of roots.entries()){
    const begun=await call('kith_begin_work',{repository,agentId:'same-id',title:'Real editor task',scopeGlobs:['change.mjs'],isolateWorktree:true});tokens.push(begun.sessionToken);
