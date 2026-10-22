@@ -3,7 +3,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { discoverRepository } from './repository.js';
+import { discoverRepository, physicalPath } from './repository.js';
+import { readCoordinationState } from './observation.js';
 
 const execFileAsync = promisify(execFile);
 export interface FileChangeEvent { filePath: string; repoPath: string; timestamp: number }
@@ -14,6 +15,15 @@ export interface CollisionAlert {
   severity: 'collision';
   message: string;
   timestamp: number;
+}
+export interface RadarWorktree {
+  path: string;
+  label: string;
+  activity: 'active' | 'retained' | 'unregistered' | 'unknown';
+  agentIds: string[];
+  detail: string;
+  dirtyFiles: number | null;
+  sharedDirtyPaths: number;
 }
 export interface ScanIssue { repository: string; message: string }
 
@@ -54,6 +64,8 @@ export class PassiveConflictWatcher {
   private activeCollisions = new Map<string, CollisionAlert>();
   private repositories = new Map<string, string>();
   private errors: ScanIssue[] = [];
+  private primaryRoots = new Map<string, string>();
+  private worktrees: RadarWorktree[] = [];
 
   constructor(public readonly rootDir: string, private readonly options: {
     intervalMs?: number;
@@ -76,6 +88,7 @@ export class PassiveConflictWatcher {
   public discoverGitRepos(): string[] {
     this.errors = [];
     this.repositories.clear();
+    this.primaryRoots.clear();
     const candidates: string[] = [];
     const marker = (dir: string) => {
       try { fs.lstatSync(path.join(dir, '.git')); return true; }
@@ -99,6 +112,7 @@ export class PassiveConflictWatcher {
         const layout = discoverRepository(candidate);
         if (!layout.commonGitDir) throw new Error('Git repository unavailable');
         this.repositories.set(layout.checkoutRoot, layout.commonGitDir);
+        if (!layout.isLinkedWorktree) this.primaryRoots.set(layout.commonGitDir, layout.checkoutRoot);
         if (inspected.has(layout.commonGitDir)) continue;
         inspected.add(layout.commonGitDir);
         const listing = execFileSync('git', ['worktree', 'list', '--porcelain', '-z'], { cwd: layout.checkoutRoot, encoding: 'utf8', timeout: 4000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -106,6 +120,7 @@ export class PassiveConflictWatcher {
           const linked = discoverRepository(record.slice(9));
           if (linked.commonGitDir !== layout.commonGitDir) throw new Error('Worktree repository identity changed during discovery');
           this.repositories.set(linked.checkoutRoot, layout.commonGitDir);
+          if (!linked.isLinkedWorktree) this.primaryRoots.set(layout.commonGitDir, linked.checkoutRoot);
         }
       } catch (error) {
         this.errors.push({ repository: candidate, message: `Cannot inspect repository: ${error instanceof Error ? error.message : String(error)}` });
@@ -119,10 +134,11 @@ export class PassiveConflictWatcher {
     const repos = this.discoverGitRepos();
     const now = Date.now();
     const seen = new Set<string>();
+    const dirtyCounts = new Map<string, number>();
     const overlaps = new Map<string, { file: string; repos: string[] }>();
     for (const repo of repos) {
       try {
-        const { stdout } = await execFileAsync('git', ['-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: repo, timeout: 4000, maxBuffer: 4 * 1024 * 1024 });
+        const { stdout } = await execFileAsync('git', ['-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: repo, timeout: 4000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
         const records = stdout.split('\0');
         const dirty = new Map<string, string>();
         for (let i = 0; i < records.length; i++) {
@@ -132,6 +148,7 @@ export class PassiveConflictWatcher {
           dirty.set(record.slice(3), status);
           if (/[RC]/.test(status)) dirty.set(records[++i], status); // NUL format carries both rename paths.
         }
+        dirtyCounts.set(repo, [...dirty.keys()].filter(file => file && file !== '.coord' && !file.startsWith('.coord/')).length);
         for (const [file, status] of dirty) {
           if (!file || file === '.coord' || file.startsWith('.coord/')) continue;
           const key = JSON.stringify([repo, file]);
@@ -180,6 +197,31 @@ export class PassiveConflictWatcher {
     }
     // A failed scan cannot establish that a previously observed overlap is resolved.
     this.activeCollisions = this.errors.length ? new Map([...this.activeCollisions, ...current]) : current;
+    // Read a private SQLite snapshot once per repository. Never open the engine,
+    // renew/reap owners, or mistake an expired lease for a current participant.
+    const states = new Map<string, ReturnType<typeof readCoordinationState>>();
+    this.worktrees = repos.map(repo => {
+      const common = this.repositories.get(repo)!;
+      const primary = this.primaryRoots.get(common);
+      const row: RadarWorktree = { path: repo,
+        label: `${path.basename(primary ?? path.dirname(common))} / ${repo === primary ? 'primary' : path.basename(repo)}`,
+        activity: 'unknown', agentIds: [], detail: 'Ownership unavailable; inspect kith status --offline before recovery.',
+        dirtyFiles: dirtyCounts.get(repo) ?? null,
+        sharedDirtyPaths: [...this.activeCollisions.values()].filter(alert => alert.repos.includes(repo)).length };
+      try {
+        let state = states.get(common);
+        if (!state) { state = readCoordinationState(primary ?? repo, { ownersOnly: true }); states.set(common, state); }
+        if (state.state === 'unavailable') { row.detail += ` ${state.error}`; return row; }
+        const owners = state.agents.filter(agent => agent.worktree_path ? physicalPath(agent.worktree_path) === repo : repo === primary);
+        const active = owners.filter(agent => agent.status === 'active' && Number.isFinite(agent.lease_expires_at) && agent.lease_expires_at > state.observedAt);
+        row.agentIds = (active.length ? active : owners).map(agent => agent.id);
+        row.activity = active.length ? 'active' : owners.length ? 'retained' : 'unregistered';
+        row.detail = active.length ? 'Current recorded Kith lease; does not identify file writers.'
+          : owners.length ? `Recorded ${[...new Set(owners.map(agent => agent.status === 'active' ? 'expired lease' : agent.status))].join(', ')}; preserve work and inspect before cleanup.`
+          : 'No recorded Kith session; activity and ownership outside Kith are unknown.';
+      } catch (error) { row.detail += ` ${error instanceof Error ? error.message : String(error)}`; }
+      return row;
+    });
     if (this.errors.length) this.options.onScanError?.(this.errors);
     return this.getActiveCollisions();
   }
@@ -199,7 +241,7 @@ export class PassiveConflictWatcher {
     if (this.watchTimer) clearTimeout(this.watchTimer);
     this.watchTimer = null;
   }
-  public getScanState() { return { complete: this.errors.length === 0, errors: [...this.errors], repos: [...this.repositories.keys()] }; }
+  public getScanState() { return { complete: this.errors.length === 0, errors: [...this.errors], repos: [...this.repositories.keys()], ownershipComplete: this.worktrees.every(row => row.activity !== 'unknown'), worktrees: this.worktrees.map(row => ({ ...row, agentIds: [...row.agentIds] })) }; }
   public getActiveCollisions(): CollisionAlert[] { return [...this.activeCollisions.values()]; }
   public getRecentEdits(): Array<{ key: string; repo: string; ageSec: number }> {
     const now = Date.now();

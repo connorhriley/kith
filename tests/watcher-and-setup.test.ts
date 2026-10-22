@@ -204,3 +204,13 @@ it('omits future mtimes instead of reporting activity and ages known mtimes acro
   const later = new PassiveConflictWatcher(repo); await later.scanOnce();
   expect(later.getRecentEdits()[0].ageSec).toBe(60);
 });
+
+
+it('radar leaves a first-use repository unregistered and creates no coordination state',async()=>{
+ const repo=repository(),watcher=new PassiveConflictWatcher(repo);
+ await watcher.scanOnce();expect(watcher.getScanState()).toMatchObject({complete:true,ownershipComplete:true,worktrees:[{path:repo,activity:'unregistered',dirtyFiles:0,sharedDirtyPaths:0}]});
+ expect(fs.existsSync(path.join(repo,'.coord'))).toBe(false);
+ const output=spawnSync(process.execPath,[cli,'watch',repo,'--once','--no-notify'],{encoding:'utf8'});
+ expect(output.status,output.stderr).toBe(0);expect(output.stdout).toMatch(/No Kith session/);expect(output.stdout).toMatch(/outside Kith are unknown/);
+ expect(fs.existsSync(path.join(repo,'.coord'))).toBe(false);
+});

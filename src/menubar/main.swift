@@ -9,6 +9,8 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
     var kithScriptPath = ""
     var pollInFlight = false
     var scanAvailable = false
+    var worktrees: [[String: Any]] = []
+    var ownershipAvailable = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
@@ -41,12 +43,16 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async {
                     self.pollInFlight = false
                     self.scanAvailable = true
+                    self.worktrees = json["worktrees"] as? [[String: Any]] ?? []
+                    self.ownershipAvailable = json["ownershipComplete"] as? Bool == true
                     self.updateUI(collisions: json["collisions"] as? [[String: Any]] ?? [], recentEdits: json["recentEdits"] as? [[String: Any]] ?? [], repos: json["repos"] as? [String] ?? [])
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.pollInFlight = false
                     self.scanAvailable = false
+                    self.worktrees = []
+                    self.ownershipAvailable = false
                     self.statusItem.button?.title = "⚪ Kith"
                     self.buildMenu(collisions: [], recentEdits: [], repos: [])
                 }
@@ -55,13 +61,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
     }
 
     func updateUI(collisions: [[String: Any]], recentEdits: [[String: Any]], repos: [String]) {
-        if let button = statusItem.button {
-            if collisions.isEmpty {
-                button.title = "🟢 Kith"
-            } else {
-                button.title = "⚠️ Kith (\(collisions.count))"
-            }
-        }
+        statusItem.button?.title = radarTitle(paths: collisions.count, ownershipAvailable: ownershipAvailable)
         buildMenu(collisions: collisions, recentEdits: recentEdits, repos: repos)
     }
 
@@ -69,7 +69,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
 
         // Title Header
-        let titleItem = NSMenuItem(title: "Kith Agent Radar", action: nil, keyEquivalent: "")
+        let titleItem = NSMenuItem(title: "Kith Worktree Radar", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
         menu.addItem(titleItem)
 
@@ -78,43 +78,57 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         menu.addItem(dirItem)
         menu.addItem(NSMenuItem.separator())
 
-        // Collisions section
-        if !scanAvailable {
-            let unavailable = NSMenuItem(title: "Scan unavailable — no clean verdict", action: nil, keyEquivalent: "")
-            unavailable.isEnabled = false
-            menu.addItem(unavailable)
-        } else if !collisions.isEmpty {
-            let colHeader = NSMenuItem(title: "⚠️ Worktree overlaps (\(collisions.count)):", action: nil, keyEquivalent: "")
-            colHeader.attributedTitle = NSAttributedString(
-                string: "⚠️ Worktree overlaps (\(collisions.count)):",
-                attributes: [.foregroundColor: NSColor.systemOrange, .font: NSFont.boldSystemFont(ofSize: 13)]
-            )
-            colHeader.isEnabled = false
-            menu.addItem(colHeader)
-
-            for col in collisions.prefix(8) {
-                let file = col["filePath"] as? String ?? "Unverified path"
-                let label = String(file.prefix(100)).replacingOccurrences(of: "\n", with: "↵")
-                let item = NSMenuItem(title: "  ⚠️ " + label, action: nil, keyEquivalent: "")
-                item.toolTip = col["message"] as? String
-                item.isEnabled = false
-                menu.addItem(item)
-            }
-            if collisions.count > 8 {
-                let more = NSMenuItem(title: "  … and \(collisions.count - 8) more (kith watch --once)", action: nil, keyEquivalent: "")
-                more.isEnabled = false
-                menu.addItem(more)
-            }
-            let advisory = NSMenuItem(title: "Different or unverified contents; not proven conflicts", action: nil, keyEquivalent: "")
-            advisory.isEnabled = false
-            menu.addItem(advisory)
-            menu.addItem(NSMenuItem.separator())
-        } else {
-            let okItem = NSMenuItem(title: "No differing shared dirty paths observed", action: nil, keyEquivalent: "")
-            okItem.isEnabled = false
-            menu.addItem(okItem)
-            menu.addItem(NSMenuItem.separator())
+        @discardableResult func note(_ text: String, in target: NSMenu) -> NSMenuItem {
+            let item = NSMenuItem(title: radarLabel(text), action: nil, keyEquivalent: "")
+            item.toolTip = text
+            item.isEnabled = false
+            target.addItem(item)
+            return item
         }
+        if !scanAvailable {
+            note("Scan unavailable — no clean verdict", in: menu)
+        } else {
+            note(collisions.isEmpty ? "No differing shared dirty paths observed" : "Review before integration: \(collisions.count) shared dirty paths", in: menu)
+            note(overlapExplanation, in: menu)
+            note("Leases describe recorded participation, not file writers.", in: menu)
+            let active = worktrees.filter { $0["activity"] as? String == "active" }.count
+            let retained = worktrees.filter { $0["activity"] as? String == "retained" }.count
+            note("Checkouts: \(active) with current leases; \(retained) retained", in: menu)
+            menu.addItem(NSMenuItem.separator())
+            for row in worktrees.prefix(20) {
+                let activity = row["activity"] as? String ?? "unknown"
+                let label = row["label"] as? String ?? "Checkout"
+                let checkout = row["path"] as? String ?? "Unavailable path"
+                let shared = row["sharedDirtyPaths"] as? Int ?? 0
+                let parent = NSMenuItem(title: radarLabel("\(label) — \(worktreeActivity(activity)); \(shared) paths"), action: nil, keyEquivalent: "")
+                parent.toolTip = checkout
+                let detail = NSMenu()
+                note(checkout, in: detail)
+                let dirty = (row["dirtyFiles"] as? Int).map(String.init) ?? "Unknown"
+                note("\(dirty) Git changes (excludes ignored files)", in: detail)
+                if let agents = row["agentIds"] as? [String], !agents.isEmpty { note("Recorded: " + agents.joined(separator: ", "), in: detail) }
+                note(row["detail"] as? String ?? "Ownership unavailable", in: detail)
+                let paths = collisions.filter { ($0["repos"] as? [String] ?? []).contains(checkout) }
+                if !paths.isEmpty {
+                    detail.addItem(NSMenuItem.separator())
+                    note("Review these copies before integrating:", in: detail)
+                    for path in paths.prefix(8) {
+                        let peers = (path["repos"] as? [String] ?? []).filter { $0 != checkout }
+                        let names = peers.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
+                        let item = note((path["filePath"] as? String ?? "Unverified path") + " ↔ " + names, in: detail)
+                        item.toolTip = path["message"] as? String
+                    }
+                    if paths.count > 8 { note("… \(paths.count - 8) more: kith watch --once", in: detail) }
+                }
+                detail.addItem(NSMenuItem.separator())
+                note("Inspect in this checkout: kith status --offline", in: detail)
+                note("Preserve unfinished work; this view never cleans up.", in: detail)
+                parent.submenu = detail
+                menu.addItem(parent)
+            }
+            if worktrees.count > 20 { note("… \(worktrees.count - 20) more checkouts: kith watch --once", in: menu) }
+        }
+        menu.addItem(NSMenuItem.separator())
 
         // Recent Edits section
         let editsHeader = NSMenuItem(title: "Recently modified files (\(recentEdits.count)):", action: nil, keyEquivalent: "")

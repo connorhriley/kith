@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Group read-only radar observations by checkout, distinguishing current recorded Kith leases, retained sessions, unregistered checkouts and unavailable ownership. Label counts as paths to review before integration, with full checkout/owner details and preservation guidance. Reuse the same snapshot in the optional editor view without extra status subprocesses. No ownership, recovery or cleanup behavior changes.
+
 ## 0.1.4 — 2026-10-22
 
 - Include the optional existing VS Code/Cursor adapter, bundling the same Kith core and a read-only view. Preserve existing MCP configuration and native trust/approval controls.

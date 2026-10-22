@@ -73,7 +73,7 @@ See [path and scope rules](path-and-scope-rules.md) for repository discovery, li
 
 ## Observations and previews
 
-Workspace status distinguishes recorded branch/lease from observed Git state. Dirty overlap means the same relative path is changed in multiple active checkouts; it does not prove a merge conflict. Ahead/behind uses the reported target HEAD, not a fetched remote branch. Commit age does not trigger release; ownership TTL and heartbeat remain authoritative. Unavailable observations must not be interpreted as clean.
+Workspace status distinguishes recorded branch/lease from observed Git state. Dirty overlap means the same relative path is changed in multiple checkouts; it does not prove a merge conflict. Ahead/behind uses the reported target HEAD, not a fetched remote branch. Commit age does not trigger release; ownership TTL and heartbeat remain authoritative. Unavailable observations must not be interpreted as clean.
 
 `kith_preview_integrate` uses committed source/target trees and reports Git's exact conflict paths. It refuses dirty inputs rather than silently checkpointing them. It can create unreachable Git objects but leaves files/indexes/refs untouched; normal session authorization can renew a heartbeat. Actual completion rechecks inputs and performs the requested project verification independently. A successful preview is not a verification result.
 
@@ -81,3 +81,7 @@ Preview refuses repositories with configured custom merge drivers because Git ca
 
 
 Passive CLI/menu observations use Git status and available file mtimes. They do not identify file writers or establish that a session is participating. Missing files and future timestamps cannot establish edit age and are omitted from timed recent-file lists. Incomplete scans retain unknown health; any retained findings may be stale. Use an explicit checkout and its owning session for integration, or offline inspection for recovery. Never clear warnings by deleting retained work.
+
+The radar groups differing paths by checkout. **Active Kith lease** means a recorded active session with an unexpired lease, not proof of a live writer. **Retained** means its recorded sessions are completed, idle, dead or expired; it is not permission to delete the checkout. **No Kith session** means outside activity is unknown. **Ownership unavailable** means the preserved coordination snapshot could not be read; inspect `kith status --offline` or `kith recover` in that checkout. Reads never renew or reap owners. Git change counts exclude ignored files and say nothing about unpushed commits or whether cleanup is safe.
+
+The menu's path count is a review list before integration, not an urgency score or a count of colliding agents. Identical dirty copies are excluded. A path shown under several checkouts need not differ between every pair. Recorded owners are not attributed as file writers. Review the worktree copies and run normal verification through the owning session before integration; preserve unfinished work in retained checkouts.
