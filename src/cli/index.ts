@@ -58,7 +58,8 @@ async function main(): Promise<void> {
   const { positional, flags, passthroughCmd } = parseFlags(process.argv.slice(2));
   const cmd = positional[0] ?? 'help';
   const subCmd = positional[1];
-  const repoRoot = typeof flags.repo === 'string' ? flags.repo : process.cwd();
+  const targetFromPositional = (['init', 'setup', 'watch', 'menubar', 'bar', 'tray', 'doctor', 'recover'].includes(cmd) && positional[1]) ? path.resolve(positional[1]) : undefined;
+  const repoRoot = typeof flags.repo === 'string' ? path.resolve(flags.repo) : (targetFromPositional ?? process.cwd());
 
   if (flags.version || cmd === 'version') { console.log(KITH_VERSION); return; }
   if (flags.help || cmd === 'help') { printHelp(); return; }
