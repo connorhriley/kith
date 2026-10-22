@@ -1,6 +1,12 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import { KITH_VERSION } from '../version.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import { uninstallKith } from './setup-ledger.js';
 import { doctorReport } from './doctor.js';
 import { readCoordinationState, recoveryReport } from '../core/observation.js';
@@ -92,6 +98,29 @@ async function main(): Promise<void> {
       console.log(`  ${statusIcon} ${r.clientName.padEnd(24)} -> ${r.notes}`);
     }
     console.log('\nAll installed AI tools are now wired to Kith. Zero manual JSON editing required.\n');
+    return;
+  }
+
+  if (cmd === 'menubar' || cmd === 'bar' || cmd === 'tray') {
+    const targetDir = positional[1] ? path.resolve(positional[1]) : (repoRoot === '/' ? '/Users/user/Briefed' : repoRoot);
+    const candidates = [
+      '/opt/homebrew/bin/kith-menubar',
+      path.resolve(__dirname, '../../bin/kith-menubar'),
+      path.resolve(__dirname, '../bin/kith-menubar')
+    ];
+    const menubarBin = candidates.find(c => fs.existsSync(c)) ?? '/opt/homebrew/bin/kith-menubar';
+    if (!fs.existsSync(menubarBin)) {
+      console.error(`Error: Menu bar binary not found at ${menubarBin}`);
+      process.exitCode = 1;
+      return;
+    }
+    const child = spawn(menubarBin, [targetDir], {
+      detached: true,
+      stdio: 'ignore'
+    });
+    child.unref();
+    console.log(`\n✨ Kith Menu Bar Radar launched for ${targetDir}!`);
+    console.log(`   Look at the top-right menu bar of your macOS screen for '🟢 Kith'.\n`);
     return;
   }
 

@@ -135,5 +135,37 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
     // Ignore
   }
 
+  // 5. Antigravity (Gemini)
+  const antigravityConfig = path.join(home, '.gemini/config/mcp_config.json');
+  if (fs.existsSync(path.dirname(antigravityConfig))) {
+    try {
+      const cfg = fs.existsSync(antigravityConfig) ? JSON.parse(fs.readFileSync(antigravityConfig, 'utf8')) : {};
+      cfg.mcpServers = cfg.mcpServers || {};
+      cfg.mcpServers.kith = {
+        command: nodeBinary,
+        args: [kithEntry, 'mcp'],
+        env: {
+          PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
+        }
+      };
+      fs.writeFileSync(antigravityConfig, JSON.stringify(cfg, null, 2), 'utf8');
+      results.push({
+        clientName: 'Antigravity (Gemini)',
+        found: true,
+        configPath: antigravityConfig,
+        configured: true,
+        notes: 'Configured in ~/.gemini/config/mcp_config.json'
+      });
+    } catch (e) {
+      results.push({
+        clientName: 'Antigravity (Gemini)',
+        found: true,
+        configPath: antigravityConfig,
+        configured: false,
+        notes: `Error: ${e instanceof Error ? e.message : String(e)}`
+      });
+    }
+  }
+
   return results;
 }
