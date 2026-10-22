@@ -45,6 +45,15 @@ Git recording and integration require a commit identity configured for the repos
 
 Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith). You can also search for `kith-coord.kith` in the editor's Extensions view.
 
+To select release **0.1.5** explicitly with an editor CLI already on your `PATH`:
+
+```sh
+code --install-extension kith-coord.kith@0.1.5
+cursor --install-extension kith-coord.kith@0.1.5
+```
+
+Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](extensions/editor/README.md#install) also links the published 0.1.5 VSIX.
+
 Open a trusted local Git checkout and approve Kith's MCP server through the editor. The extension bundles the coordination server, detects Node, and preserves existing MCP entries, hooks and tool permissions. **No global npm install is needed.** Each agent still needs to use Kith's tools; installing the extension does not enforce claims on other writers.
 
 Start with a scoped task:
