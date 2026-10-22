@@ -1,6 +1,6 @@
 # Client integrations
 
-Install Kith persistently or build and link the checkout first. On macOS/Linux, generated configurations use the `kith` executable already on PATH; they do not download an unverified package at hook execution time.
+For CLI-generated configuration, install Kith persistently or build and link the checkout first. On macOS/Linux, generated configurations use the `kith` executable already on PATH; they do not download an unverified package at hook execution time.
 
 | Selection | Files and behavior |
 | --- | --- |
@@ -10,6 +10,12 @@ Install Kith persistently or build and link the checkout first. On macOS/Linux, 
 | `agents` | Updates only the marked Kith block in AGENTS.md and creates a generic `.agent/skills/kith/SKILL.md` |
 | `git` | Installs a pre-commit hook only when one does not exist; uses an in-repository Git hooks path and skips external hooks directories |
 | `shims` | Creates optional `.coord/bin/npm`, `pnpm`, and `yarn` wrappers |
+
+## VS Code and Cursor extension
+
+Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith). Open a trusted local Git checkout with a supported Node installation, then approve the bundled server through the editor's native MCP controls. No global npm install or hand-written MCP entry is required for this path.
+
+The extension preserves existing project/global Kith entries and suppresses its duplicate registration when one exists. Other MCP servers, hooks and permissions remain untouched. Custom entries continue to use their configured launcher; installing the extension does not replace it. Use a unique agent ID, pass the original absolute `repository` on each call, and edit only the worktree returned by `kith_begin_work`. The small status view is read-only. See [extension settings](../extensions/editor/README.md) and [recorded native checks](client-validation.md#editor-marketplaces-and-signed-in-chats).
 
 ## Start with MCP
 

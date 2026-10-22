@@ -1,0 +1,84 @@
+{
+  "checkedAt": "2026-10-22T20:37:24.745310+00:00",
+  "type": "internal synthetic marketplace and native host validation",
+  "extensionVersion": "0.1.4",
+  "extensionSource": "70e44620d4e24c488f2f6020809a9ccd67b1ae00",
+  "passed": true,
+  "results": [
+    {
+      "editor": "vscode",
+      "appVersion": "1.143.0",
+      "vscodeApiVersion": "1.143.0",
+      "extensionVersion": "0.1.4",
+      "search": {
+        "editor": "vscode",
+        "serviceUrl": "https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery",
+        "query": "kith",
+        "searchRank": 1,
+        "extensionId": "Kith-coord.kith",
+        "version": "0.1.4",
+        "checkedAt": "2026-10-22T20:27:15.575204+00:00"
+      },
+      "marketplaceIdInstallPassed": true,
+      "nativeActivationPassed": true,
+      "nativeMcpRegistration": "Bundled Kith offered through VS Code MCP. VS Code manages server approval and start status.",
+      "nodeAutodetectionWithMinimalPathPassed": true,
+      "existingConfigurationPreservedByteForByte": true,
+      "duplicateRegistrationSuppressed": true,
+      "readOnlyObservationCreatesNoCoordinationState": true,
+      "installedPayloadMatchesValidatedRelease": true,
+      "installedWorkflowPassed": true,
+      "workflowChecks": [
+        "owned sessions, refused overlap and refused capability theft",
+        "native absolute and Git-style paths, literal brackets, internal/escaping links, isolated worktrees and distinct port leases",
+        "dirty preview refusal, committed preview, failed verification and successful retry/integration",
+        "killed MCP owner recovered with new capability and preserved worktree, then integrated",
+        "offline inspection preserves original state; tracked MCP setup/uninstall preserves integrated work",
+        "global client connects at filesystem root, routes two projects independently and refuses cross-project capability reuse",
+        "automatic setup preserves peer configuration, binds native launcher from filesystem root and restores original bytes",
+        "damaged state refused without replacing database, creating client config or losing integrated work"
+      ]
+    },
+    {
+      "editor": "cursor",
+      "appVersion": "3.24.18",
+      "vscodeApiVersion": "1.128.0",
+      "extensionVersion": "0.1.4",
+      "search": {
+        "editor": "cursor",
+        "serviceUrl": "https://marketplace.cursorapi.com/_apis/public/gallery/extensionquery",
+        "query": "kith",
+        "searchRank": 1,
+        "extensionId": "kith-coord.kith",
+        "version": "0.1.4",
+        "checkedAt": "2026-10-22T20:27:16.859036+00:00"
+      },
+      "marketplaceIdInstallPassed": true,
+      "nativeActivationPassed": true,
+      "nativeMcpRegistration": "Bundled Kith offered through Cursor MCP. Cursor manages server approval and start status.",
+      "nodeAutodetectionWithMinimalPathPassed": true,
+      "existingConfigurationPreservedByteForByte": true,
+      "duplicateRegistrationSuppressed": true,
+      "readOnlyObservationCreatesNoCoordinationState": true,
+      "installedPayloadMatchesValidatedRelease": true,
+      "installedWorkflowPassed": true,
+      "workflowChecks": [
+        "owned sessions, refused overlap and refused capability theft",
+        "native absolute and Git-style paths, literal brackets, internal/escaping links, isolated worktrees and distinct port leases",
+        "dirty preview refusal, committed preview, failed verification and successful retry/integration",
+        "killed MCP owner recovered with new capability and preserved worktree, then integrated",
+        "offline inspection preserves original state; tracked MCP setup/uninstall preserves integrated work",
+        "global client connects at filesystem root, routes two projects independently and refuses cross-project capability reuse",
+        "automatic setup preserves peer configuration, binds native launcher from filesystem root and restores original bytes",
+        "damaged state refused without replacing database, creating client config or losing integrated work"
+      ]
+    }
+  ],
+  "liveClientConfigurationPathsChecked": 15,
+  "liveClientConfigurationsByteIdentical": true,
+  "boundaries": [
+    "Native host checks do not sign in or make model calls.",
+    "SDK workflows against installed bundled servers are distinct from model-driven GUI chats.",
+    "Results apply to recorded versions, not all clients or later extension releases."
+  ]
+}

@@ -6,13 +6,15 @@ One extension connects your editor's agent to Kith and adds a small read-only st
 
 ## Install
 
-Use **Extensions → Install from VSIX** and select `kith-editor.vsix`. Open a trusted local Git workspace with Node.js **22.13+ on 22.x or 24+** installed. Kith detects Node automatically; **Kith: Node Path** in user settings can select a different installation.
+Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith), or search for the extension ID in your editor. Release assets also provide `kith-editor.vsix` for **Extensions → Install from VSIX**.
+
+Open a trusted local Git workspace with Node.js **22.13+ on 22.x or 24+** installed. Kith detects Node automatically; **Kith: Node Path** in user settings can select a different installation.
 
 The extension offers Kith through the editor's native MCP API. The editor still controls server approval, tool permissions and start/stop. Existing Kith server entries are preserved and suppress a duplicate registration. Other MCP servers, hooks and permissions are untouched. VS Code 1.102+ and a Cursor version exposing its MCP extension API are required.
 
 Tell the agent which repository contains the task. The same connection supports multiple repositories through Kith's `repository` argument; ownership stays scoped to each repository. Follow the returned worktree path and retain your normal verification and merge gates.
 
-Click **Kith** in the status bar or run **Kith: Show Workspace Status**. It observes linked-worktree dirty paths and reads existing coordination state offline. It does not initialize a project database, attribute writes to processes, enforce non-cooperating editors, or certify that changes merge. An unavailable scan stays unavailable. No telemetry or model calls are added.
+Click **Kith** in the status bar or run **Kith: Show Workspace Status**. It observes linked-worktree dirty paths and reads existing coordination state offline, distinguishing recorded active leases, retained sessions and unavailable ownership. Retained work is preserved for review. It does not initialize a project database, attribute writes to processes, enforce non-cooperating editors, or certify that changes merge. An unavailable scan stays unavailable. No telemetry or model calls are added.
 
 ## Development
 
@@ -29,4 +31,6 @@ The VSIX is written to `artifacts/kith-editor.vsix`. Host validation opens an ed
 
 Native API references: [VS Code MCP provider](https://code.visualstudio.com/api/extension-guides/ai/mcp#register-an-mcp-server-in-your-extension), [Cursor MCP registration](https://cursor.com/docs/extension-api).
 
-Native host checks on macOS passed with VS Code 1.143.0 and Cursor 3.24.18 (VS Code API 1.128.0): extension activation, native MCP registration, refresh, and no workspace configuration or database creation. These checks do not sign in, approve tools, or make model calls. Separate real MCP workflow tests exercise the bundled server through verified integration in two disposable repositories, including refusal of a capability from the other repository. CI checks the minimum VS Code version too.
+Fresh marketplace installs of published extension 0.1.4 passed in VS Code 1.143.0 and Cursor 3.24.18, using each editor's own marketplace. Installed payloads matched the validated release. Native host checks on macOS passed with those versions (Cursor's VS Code API: 1.128.0): extension activation, native MCP registration, refresh, and no workspace configuration or database creation. These checks do not sign in, approve tools, or make model calls. Separate real MCP workflow tests exercise the bundled server through verified integration in two disposable repositories, including refusal of a capability from the other repository. CI checks the minimum VS Code version too.
+
+Signed-in GUI validation separately completed a two-chat invoice task in VS Code: overlapping claim refused, separate worktrees, mutex-protected tests, failed full verification with preserved target, then successful retry/integration with all five tests passing. Cursor completed both implementations and the failed-verification check; its account usage limit blocked the final integration retry, which remains pending. These checks used extension 0.1.4 and preserved all 15 monitored client configuration paths byte-for-byte. See [versioned evidence and boundaries](../../docs/client-validation.md#editor-marketplaces-and-signed-in-chats).
