@@ -52,7 +52,7 @@ try {
   run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import path from 'node:path';
-    import { KithEngine } from ${JSON.stringify(manifest.name)};
+    import { KithEngine, KITH_PROTOCOL_VERSION } from ${JSON.stringify(manifest.name)};
     import { createRequire } from 'node:module';
     import { Client } from '@modelcontextprotocol/sdk/client/index.js';
     import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -62,14 +62,26 @@ try {
     try {
       engine.fencing.registerAgent({ id: 'package-smoke' });
       assert(engine.locks.acquireLocks({ agentId: 'package-smoke', patterns: ['src/**'] }).ok);
+      engine.fencing.registerAgent({ id: 'package-peer' });
+      assert(engine.locks.acquireLocks({ agentId: 'package-peer', patterns: ['shared.json'] }).ok);
+      assert.equal((await engine.acquireLocksWhenAvailable({ agentId: 'package-smoke', patterns: ['shared.json'], waitTimeoutMs: 20 })).waitTimedOut, true);
+      engine.locks.releaseLocks({ agentId: 'package-peer' });
+      assert((await engine.acquireLocksWhenAvailable({ agentId: 'package-smoke', patterns: ['shared.json'], waitTimeoutMs: 100 })).ok);
+      const dev = await engine.broker.executeWithPort({ agentId: 'package-smoke', serviceName: 'consumer',
+        command: [process.execPath, '-e', 'process.stdout.write(process.env.PORT+":"+process.argv[1])', '{port}'] });
+      assert.equal(dev.exitCode, 0); assert.equal(dev.stdout, dev.port+':'+dev.port);
+      assert.equal(engine.broker.getResource('port', 'package-smoke:consumer'), null);
     } finally { engine.close(); }
     const client = new Client({ name: 'clean-package-consumer', version: '1.0.0' });
     try {
       await client.connect(new StdioClientTransport({ command: process.execPath, args: [${JSON.stringify(cli)}, 'mcp', '--repo', process.cwd()], cwd: path.parse(process.cwd()).root, stderr: 'ignore' }));
-      assert((await client.listTools()).tools.some(tool => tool.name === 'kith_preview_integrate'));
+      const tools = (await client.listTools()).tools;
+      assert(tools.some(tool => tool.name === 'kith_preview_integrate'));
+      assert(tools.some(tool => tool.name === 'kith_run_dev_server'));
+      assert(tools.find(tool => tool.name === 'kith_begin_work').inputSchema.properties.waitTimeoutMs);
       const status = await client.callTool({ name: 'kith_get_status', arguments: {} });
       assert.equal(status.isError, false);
-      assert.equal(status.structuredContent.protocolVersion, '1.2.0');
+      assert.equal(status.structuredContent.protocolVersion, KITH_PROTOCOL_VERSION);
       assert.equal(status.structuredContent.contractsIncluded, false);
       assert.equal(typeof status.structuredContent.contractCount, 'number');
     } finally { await client.close(); }

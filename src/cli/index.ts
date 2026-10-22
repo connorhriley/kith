@@ -37,7 +37,7 @@ function parseFlags(argv: string[]): {
       } else {
         const key = arg.slice(2);
         const next = mainArgs[i + 1];
-        if (!['worktree', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify'].includes(key) && next && !next.startsWith('--')) {
+        if (!['worktree', 'wait', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify'].includes(key) && next && !next.startsWith('--')) {
           flags[key] = next;
           i++;
         } else {
@@ -52,10 +52,28 @@ function parseFlags(argv: string[]): {
   return { positional, flags, passthroughCmd };
 }
 
+async function interruptible<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> {
+  const controller = new AbortController();
+  let interrupted: NodeJS.Signals | undefined;
+  const sigint = () => { interrupted = 'SIGINT'; controller.abort(); };
+  const sigterm = () => { interrupted = 'SIGTERM'; controller.abort(); };
+  process.on('SIGINT', sigint); process.on('SIGTERM', sigterm);
+  try { return await run(controller.signal); }
+  catch (err) {
+    if (!interrupted) throw err;
+    process.exitCode = interrupted === 'SIGINT' ? 130 : 143;
+  } finally { process.off('SIGINT', sigint); process.off('SIGTERM', sigterm); }
+}
+
 async function main(): Promise<void> {
   const { positional, flags, passthroughCmd } = parseFlags(process.argv.slice(2));
   const cmd = positional[0] ?? 'help';
   const subCmd = positional[1];
+  const claimWaitTimeout = () => {
+    const value = flags['wait-ms'];
+    if (value !== undefined && typeof value !== 'string') throw new Error('--wait-ms requires a millisecond value');
+    return value === undefined ? 60000 : Number(value);
+  };
   const targetFromPositional = (['init', 'setup', 'watch', 'menubar', 'bar', 'tray', 'doctor', 'recover'].includes(cmd) && positional[1]) ? path.resolve(positional[1]) : undefined;
   const repoRoot = typeof flags.repo === 'string' ? path.resolve(flags.repo) : (targetFromPositional ?? (cmd === 'mcp' ? process.env.CLAUDE_PROJECT_DIR : undefined) ?? process.cwd());
 
@@ -180,7 +198,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const commands = ['session', 'status', 'begin', 'complete', 'heartbeat', 'task', 'lock', 'contract', 'worktree', 'port', 'mutex', 'hook'];
+  const commands = ['session', 'status', 'begin', 'complete', 'heartbeat', 'task', 'lock', 'contract', 'worktree', 'port', 'dev', 'mutex', 'hook'];
   if (!commands.includes(cmd)) throw new Error(`Unknown command '${cmd}'. Run kith help.`);
   const subcommands: Record<string, string[]> = {
     session: ['start', 'end'],
@@ -201,7 +219,7 @@ async function main(): Promise<void> {
   };
   const register = () => engine.fencing.registerAgent({ id: agentId,
     client: String(flags.client ?? 'cli'), pid: typeof flags['owner-pid'] === 'string' ? Number(flags['owner-pid'])
-      : cmd === 'mutex' && !sessionToken ? process.pid : process.ppid,
+      : ['mutex', 'dev'].includes(cmd) && !sessionToken ? process.pid : process.ppid,
     sessionToken, leaseDurationMs: typeof flags['lease-ms'] === 'string' ? Number(flags['lease-ms']) : undefined,
   });
   try {
@@ -240,13 +258,18 @@ async function main(): Promise<void> {
 
       const session = register();
 
-      const res = engine.beginWork({
+      const options = {
         agentId,
         title,
         intentSummary: typeof flags.summary === 'string' ? flags.summary : title,
         scopeGlobs,
         isolateWorktree: Boolean(flags.worktree),
-      });
+      };
+      const res = flags.wait || flags['wait-ms'] !== undefined
+        ? await interruptible((signal) => engine.beginWorkWhenAvailable({ ...options, signal,
+          waitTimeoutMs: claimWaitTimeout() }))
+        : engine.beginWork(options);
+      if (!res) { if (!sessionToken) engine.fencing.abandonAgentSession(agentId); return; }
 
       console.log(JSON.stringify({ ...res, sessionToken: session.sessionToken }, null, 2));
       process.exitCode = res.ok ? 0 : 1;
@@ -304,7 +327,11 @@ async function main(): Promise<void> {
           .map((s) => s.trim())
           .filter(Boolean);
         const session = register();
-        const res = engine.locks.acquireLocks({ agentId, patterns });
+        const res = flags.wait || flags['wait-ms'] !== undefined
+          ? await interruptible((signal) => engine.acquireLocksWhenAvailable({ agentId, patterns, signal,
+            waitTimeoutMs: claimWaitTimeout() }))
+          : engine.locks.acquireLocks({ agentId, patterns });
+        if (!res) { if (!sessionToken) engine.fencing.abandonAgentSession(agentId); return; }
         console.log(JSON.stringify({ ...res, sessionToken: session.sessionToken }, null, 2));
         process.exitCode = res.ok ? 0 : 1;
         return;
@@ -370,9 +397,10 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (cmd === 'mutex') {
+    if (cmd === 'mutex' || cmd === 'dev') {
       const mutexName = String(flags.name ?? 'default-mutex');
       const commandToRun = passthroughCmd.length ? passthroughCmd : String(flags.cmd ?? '');
+      if (cmd === 'dev' && (!passthroughCmd.length || !passthroughCmd[0])) throw new Error('Provide a literal command after `--` for kith dev');
       if (!commandToRun) {
         console.error('Error: provide a command after `--` for `kith mutex`');
         process.exitCode = 1;
@@ -386,13 +414,20 @@ async function main(): Promise<void> {
       const sigterm = () => interrupt('SIGTERM');
       process.on('SIGINT', sigint); process.on('SIGTERM', sigterm);
       try {
-        const res = await engine.broker.executeWithMutex({
-          agentId, mutexName, command: commandToRun, signal: controller.signal,
+        const shared = {
+          agentId, signal: controller.signal,
           leaseDurationMs: typeof flags['lease-ms'] === 'string' ? Number(flags['lease-ms']) : undefined,
           timeoutMs: typeof flags['wait-ms'] === 'string' ? Number(flags['wait-ms']) : undefined,
           commandTimeoutMs: typeof flags['timeout-ms'] === 'string' ? Number(flags['timeout-ms']) : undefined,
-          onStdout: (chunk) => process.stdout.write(chunk), onStderr: (chunk) => process.stderr.write(chunk),
-        });
+          onStdout: (chunk: Buffer) => process.stdout.write(chunk), onStderr: (chunk: Buffer) => process.stderr.write(chunk),
+        };
+        const res = cmd === 'dev'
+          ? await engine.broker.executeWithPort({ ...shared, command: passthroughCmd,
+            serviceName: String(flags.service ?? 'web'), basePort: flags.base === undefined ? 3000 : Number(flags.base),
+            cwd: path.resolve(engine.fencing.getAgent(agentId)?.worktree_path ?? engine.coordDb.repoRoot, typeof flags.cwd === 'string' ? flags.cwd : '.'),
+            onPort: (port) => process.stderr.write(`Kith: ${String(flags.service ?? 'web')} allocated port ${port} (PORT, KITH_PORT, {port})\n`),
+          })
+          : await engine.broker.executeWithMutex({ ...shared, mutexName, command: commandToRun });
         process.exitCode = res.exitCode;
       } catch (err) {
         if (interrupted) process.exitCode = interrupted === 'SIGINT' ? 130 : 143;
@@ -512,7 +547,9 @@ Usage:
   kith lock acquire|release|list                  Manage fencing-token file/glob locks
   kith contract publish|list                      Manage Contract Blackboard
   kith worktree spawn|remove|list|preview                 Manage isolated Git worktrees
-  kith port --agent <id> --service <name>         Lease collision-free TCP port
+  kith port --agent <id> --service <name>         Reserve an available TCP port
+  kith dev --agent <id> -- <cmd>                Run with PORT and {port} argument substitution
+  kith begin/lock acquire ... --wait --wait-ms 60000  Wait for a scope claim (bounded, cancellable)
   kith mutex --agent <id> --name <m> -- <cmd>     Serialize commands via mutex
   kith hook pre|post|pre-commit                   Tool & git hook handlers
 `);

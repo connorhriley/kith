@@ -18,6 +18,18 @@ export interface ResourceRecord {
   expires_at: number;
 }
 
+export interface SupervisedCommandOptions {
+  agentId: string; command: string | string[]; cwd?: string;
+  timeoutMs?: number; commandTimeoutMs?: number; leaseDurationMs?: number;
+  killGraceMs?: number; signal?: AbortSignal; maxOutputBytes?: number;
+  onStdout?: (chunk: Buffer) => void; onStderr?: (chunk: Buffer) => void;
+}
+interface CommandLifecycle {
+  prepare: () => Promise<{ command: string[]; env: Record<string, string> }>;
+  renew: () => void;
+  release: () => void;
+}
+
 export class ResourceBroker {
   private activeExecutions = 0;
   public hasActiveCommands(): boolean { return this.activeExecutions > 0; }
@@ -42,6 +54,7 @@ export class ResourceBroker {
     const leaseMs = FencingAndAgentManager.validateLease(params.leaseDurationMs ?? FencingAndAgentManager.DEFAULT_LEASE_MS);
     const now = Date.now();
     const expiresAt = now + leaseMs;
+    if (!Number.isInteger(basePort) || basePort < 1 || basePort > 65535) throw new Error('basePort must be an integer between 1 and 65535');
     const resourceKey = `${params.agentId}:${params.serviceName}`;
 
     // Check if this agent already holds a port for this service
@@ -174,13 +187,49 @@ export class ResourceBroker {
     });
   }
 
+  /** Launch on the allocated port, without interpreting arguments as shell code. */
+  public async executeWithPort(params: Omit<SupervisedCommandOptions, 'command'> & {
+    command: string[]; serviceName: string; basePort?: number;
+    onPort?: (port: number) => void;
+  }) {
+    if (!params.command.length || !params.command[0]) throw new Error('A command is required');
+    if (!params.serviceName || params.serviceName.length > 128) throw new Error('serviceName must contain 1 to 128 characters');
+    const mutexName = `dev-port:${params.agentId}:${params.serviceName}`;
+    let allocation: Awaited<ReturnType<ResourceBroker['acquirePort']>> | undefined;
+    const leaseMs = FencingAndAgentManager.validateLease(params.leaseDurationMs ?? FencingAndAgentManager.DEFAULT_LEASE_MS);
+    const result = await this.executeGuarded({ ...params, mutexName }, {
+      prepare: async () => {
+        allocation = await this.acquirePort({ ...params, basePort: params.basePort ?? 3000 });
+        params.onPort?.(allocation.port);
+        return { command: params.command.map((arg) => arg.replaceAll('{port}', String(allocation!.port))),
+          env: { PORT: String(allocation.port), KITH_PORT: String(allocation.port) } };
+      },
+      renew: () => {
+        if (!allocation) return;
+        this.coordDb.withTransaction(() => {
+          this.fencing.assertSession(params.agentId);
+          const resource = this.getResource('port', `${params.agentId}:${params.serviceName}`);
+          if (!resource || resource.fencing_token !== allocation!.fencingToken || resource.expires_at <= Date.now()) {
+            throw new Error('Dev server port lease lost');
+          }
+          this.coordDb.db.prepare('UPDATE resources SET expires_at=? WHERE id=?').run(Date.now() + leaseMs, resource.id);
+        });
+      },
+      release: () => {
+        if (allocation) this.coordDb.db.prepare("DELETE FROM resources WHERE type='port' AND name=? AND fencing_token=?")
+          .run(`${params.agentId}:${params.serviceName}`, allocation.fencingToken);
+      },
+    });
+    return { ...result, port: allocation!.port };
+  }
+
   /** Renew leases while a detached, recorded process group runs; stop it before releasing. */
-  public async executeWithMutex(params: {
-    agentId: string; mutexName: string; command: string | string[]; cwd?: string;
-    timeoutMs?: number; commandTimeoutMs?: number; leaseDurationMs?: number;
-    killGraceMs?: number; signal?: AbortSignal; maxOutputBytes?: number;
-    onStdout?: (chunk: Buffer) => void; onStderr?: (chunk: Buffer) => void;
-  }): Promise<{ stdout: string; stderr: string; exitCode: number; waitedMs: number }> {
+  public executeWithMutex(params: SupervisedCommandOptions & { mutexName: string }) {
+    return this.executeGuarded(params);
+  }
+
+  private async executeGuarded(params: SupervisedCommandOptions & { mutexName: string }, lifecycle?: CommandLifecycle):
+    Promise<{ stdout: string; stderr: string; exitCode: number; waitedMs: number }> {
     if (process.platform === 'win32') throw new Error('Supervised mutex commands currently require macOS or Linux process groups');
     if (!params.command.length) throw new Error('A command is required');
     const leaseMs = FencingAndAgentManager.validateLease(params.leaseDurationMs ?? FencingAndAgentManager.DEFAULT_LEASE_MS);
@@ -220,6 +269,8 @@ export class ResourceBroker {
         await delay(Math.min(50, Math.max(10, leaseMs / 4)));
       }
       const waitedMs = Date.now() - started;
+      const prepared = await lifecycle?.prepare();
+      if (params.signal?.aborted) throw abortError();
       const candidates = ['./command-worker.js', '../command-worker.js', '../../dist/command-worker.js']
         .map((name) => fileURLToPath(new URL(name, import.meta.url)));
       const script = candidates.find((name) => fs.existsSync(name));
@@ -260,6 +311,7 @@ export class ResourceBroker {
         try {
           this.fencing.heartbeat(params.agentId);
           this.renewMutex({ ...params, fencingToken: run!.fencing_token });
+          lifecycle?.renew();
         } catch (err) { stop(err instanceof Error ? err : new Error(String(err))); }
       }, Math.max(10, Math.floor(leaseMs / 3)));
       const commandTimer = params.commandTimeoutMs === undefined ? undefined
@@ -287,8 +339,9 @@ export class ResourceBroker {
               run!.worker_start = identity;
               workerIdentity = identity;
               this.renewMutex({ ...params, fencingToken: run!.fencing_token });
+              lifecycle?.renew();
             });
-            worker.send({ command: params.command, cwd: params.cwd ?? this.coordDb.repoRoot, mutexName: params.mutexName });
+            worker.send({ command: prepared?.command ?? params.command, env: prepared?.env, cwd: params.cwd ?? this.coordDb.repoRoot, mutexName: params.mutexName });
           } catch (err) { stop(err instanceof Error ? err : new Error(String(err))); }
         } else {
           outcome = { exitCode: message.exitCode ?? 1, error: message.error };
@@ -334,6 +387,7 @@ export class ResourceBroker {
           if (run && !this.runIsAlive(run)) this.clearRun(run);
           // No protected command can start before the worker-group handshake.
           if (run && run.worker_pid === null) this.clearRun(run);
+          if (!this.getRun(params.mutexName)) lifecycle?.release();
         });
       } finally { this.activeExecutions--; }
     }
