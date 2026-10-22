@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 — 2026-10-22
+
+- Include the optional existing VS Code/Cursor adapter, bundling the same Kith core and a read-only view. Preserve existing MCP configuration and native trust/approval controls.
 
 - Stop inventing fresh edit times for deleted files or future mtimes in repeated passive scans. Keep overlap detection independent of timed recent-file visibility.
 - Diagnose existing global MCP configurations as well as project entries, recognize the uninitialized first-task state, and identify moved launchers or incorrect repository pins without changing files. Clarify global setup versus project instructions and per-call repository selection.
@@ -8,7 +10,7 @@
 
 - Launch dev servers with `kith dev`: allocate a port, set `PORT`/`KITH_PORT`, substitute literal `{port}` arguments, renew the reservation during supervision, and stop the process group before release. Add foreground `kith_run_dev_server` with the same permission/cancellation boundary as mutex commands. Native Windows supervision remains refused.
 - Add optional bounded waiting to `begin`, `lock acquire`, `kith_begin_work`, and `kith_check_and_lock_files`. Defaults remain fail-fast; timeout/cancellation leave no partial claim. Worktree creation follows successful ownership. File retry does not promise FIFO order; task dependencies provide explicit ordering.
-- Advance the additive MCP protocol to 1.3 and refresh its schema snapshot. No SQLite migration or npm release is included in this source change.
+- Advance the additive MCP protocol to 1.3 and refresh its schema snapshot. No SQLite migration is required.
 
 ## 0.1.3 — 2026-10-22
 

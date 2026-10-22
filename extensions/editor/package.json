@@ -2,7 +2,7 @@
   "name": "kith",
   "displayName": "Kith",
   "description": "Connect coding agents to Kith and inspect local worktree coordination in VS Code and Cursor.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "kith-coord",
   "license": "MIT",
   "icon": "icon.png",

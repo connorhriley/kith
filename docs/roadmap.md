@@ -14,7 +14,7 @@ MCP is the default agent interface. Keep one shared ownership ledger per Git com
 4. **Followable recovery.** Exercise disconnect, expiry, failed checks, partial setup, interrupted migration and damaged-state refusal. Preserve worktrees and matching stopped database/sidecars; no automatic repair, forced claim release or deletion of `.coord`.
 5. **Exact release evidence.** Require all six Linux/macOS and both Windows jobs on the candidate, including any editor checks, plus the exact packed-package consumer. Verify registry bytes and tag workflows after publication. Maintain versioned client evidence and honest platform limits.
 
-Published 0.1.3 / protocol 1.2 has recorded source/tag and clean-registry evidence. Current main adds protocol 1.3 dev-server supervision and bounded claim waits; these are not in published 0.1.3. The editor branch must pass its own native/bundled-server checks before integration and delivery. A green prior release does not certify a new branch.
+Published 0.1.3 / protocol 1.2 has recorded source/tag and clean-registry evidence. The 0.1.4 candidate adds protocol 1.3 dev-server supervision, bounded claim waits and the existing editor adapter. Its combined core/platform and bundled-server checks must pass before release. A green prior release does not certify a new branch.
 
 ## Deferred
 

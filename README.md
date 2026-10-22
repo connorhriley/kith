@@ -43,7 +43,7 @@ Git recording and integration require a commit identity configured for the repos
 Install the release:
 
 ```sh
-npm install --global kith-coord@0.1.3
+npm install --global kith-coord@0.1.4
 ```
 
 Choose the setup scope your client needs:
@@ -111,7 +111,7 @@ The npm package is **`kith-coord`**, with the command name **`kith`**. For a pin
 
 ## Dev servers and shared config
 
-On `main` (not yet in the published 0.1.3 package), `kith dev` runs a server with its allocated `PORT` and supports explicit `{port}` arguments. File claims also accept an optional bounded wait:
+In version 0.1.4, `kith dev` runs a server with its allocated `PORT` and supports explicit `{port}` arguments. File claims also accept an optional bounded wait:
 
 ```sh
 kith dev --agent web-a -- npm run dev -- --port '{port}'
