@@ -1,4 +1,4 @@
-![Kith](lockup.png)
+![Kith — Parallel agents. Shared direction.](banner.png)
 
 # Kith for VS Code and Cursor
 
