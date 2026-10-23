@@ -6,7 +6,7 @@ Kith is a local ledger for cooperating coding agents. Clients share one reposito
 
 Protocol 1.1 ships with package 0.1.2. Earlier `kith-coord@0.1.1` reports protocol 1.0 and includes full contracts in MCP status; the compact default and `includeContracts` input below require 0.1.2.
 
-`KITH_PROTOCOL_VERSION` and status responses advertise `1.4.0` in source builds. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema (3) have independent versions. The [tool snapshot](protocol/tools.v1.json) contains all 14 tool names, descriptions and JSON input schemas, exported from an actual MCP `tools/list` response. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
+`KITH_PROTOCOL_VERSION` and status responses advertise `1.4.0` starting with package 0.1.6. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema (3) have independent versions. The [tool snapshot](protocol/tools.v1.json) contains all 14 tool names, descriptions and JSON input schemas, exported from an actual MCP `tools/list` response. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
 
 For protocol 1.x, existing tool names, required input fields and the ownership/claim semantics below remain compatible. New optional fields/tools and additive result fields use a minor version; compatible repairs use a patch version. Removing tools, adding required inputs or changing ownership semantics requires a major version. Clients should ignore unknown result fields. The snapshot describes inputs; it is not a machine-validated schema for every result or a guarantee of source-level library compatibility.
 
@@ -38,15 +38,15 @@ Normal CLI/MCP status opens the engine and may migrate or reap. `kith status --o
 
 Preview refuses repositories with configured custom merge drivers because Git can execute their commands during merge-tree. It does not silently substitute a different merge policy. Actual integration can run trusted project code and still needs an appropriate verification command.
 
-## Protocol 1.3 additions (source builds)
+## Protocol 1.3 additions (0.1.4)
 
 `kith_run_dev_server` launches literal argv with an allocated port in `PORT`/`KITH_PORT` and substitutes `{port}` in arguments. It uses the existing process-group supervisor and permission boundary. Cancellation/disconnect drains execution before cleanup. It is foreground, with a default 60-second deadline and bounded output; longer-lived interactive servers should use `kith dev` in the CLI. No readiness or socket handoff is promised.
 
 `kith_begin_work` and `kith_check_and_lock_files` accept optional `waitTimeoutMs` (0–600000). Omitted fields preserve fail-fast behavior. Wait results add `waitedMs` and `waitTimedOut`; timeout keeps the normal conflict payload, with `isError:true`. Cancellation is a request error and never grants a partial claim. No FIFO ordering guarantee is added. The storage schema is unchanged; the published 0.1.3 package still uses protocol 1.2.
 
-## Protocol 1.4: keyed retries and operational failures (source builds)
+## Protocol 1.4: keyed retries and operational failures (0.1.6)
 
-These additions are not in the published 0.1.5 package. Existing callers can omit the new fields and retain the same ownership requirements.
+These additions ship in `kith-coord` 0.1.6. Existing callers can omit the new fields and retain the same ownership requirements.
 
 Mutating tools accept an optional client-generated `operationKey` (1–128 characters). Generate a fresh UUID for each logical attempt. After a timeout, resend the **same tool, original checkout, agent ID, key and arguments**. The server stores a reservation before execution and a result afterward in the existing repository database. It never executes the reserved operation a second time. A different tool, checkout or argument set with the same key returns `OPERATION_KEY_REUSED`. Explicit `sessionToken` may be supplied on another connection without changing the request identity.
 

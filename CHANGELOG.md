@@ -1,10 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 — 2026-10-23
 
 - Add optional MCP operation keys with a capability-bound durable result journal in the existing database. Lost replies replay without repeating mutations; concurrent duplicates report in-progress, and interrupted/unrecorded outcomes refuse automatic re-execution. Historical replies never revive expired/completed sessions or authorize a replacement generation.
 - Add structured operational failure codes and retryability while preserving existing result fields. Distinguish claim/mutex wait contention from command deadlines, partial effects, ownership rejection and failed integration; preserve bounded command output on cancellation/timeouts.
-- Advance source protocol to 1.4 and storage schema to 3. Transactional journal migration retains schema-2 ownership and recovery data; interrupted upgrades and missing journal state fail safely. No new runtime dependency, service or editor configuration changes.
+- Advance protocol to 1.4 and storage schema to 3. Transactional journal migration retains schema-2 ownership and recovery data; interrupted upgrades and missing journal state fail safely. No new runtime dependency, service or editor configuration changes.
 
 ## 0.1.5 — 2026-10-22
 
