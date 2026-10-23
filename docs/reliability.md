@@ -64,7 +64,7 @@ The SQLite implementation requires Node's unflagged SQLite API: [Node SQLite doc
 
 ## Existing databases
 
-No full-text SQLite extension is required. Contracts, tasks, locks and supervised commands use the canonical tables on every supported runtime. Older derived `contracts_fts` tables are left intact but are no longer read or maintained. Stop all clients before upgrading. Do not mix versions or rely on downgrading to an older search index after new contract writes. Removing the old derived search machinery requires no schema reset or automatic repair. Protocol 1.4 source builds add one operation journal table in the same database; see below.
+No full-text SQLite extension is required. Contracts, tasks, locks and supervised commands use the canonical tables on every supported runtime. Older derived `contracts_fts` tables are left intact but are no longer read or maintained. Stop all clients before upgrading. Do not mix versions or rely on downgrading to an older search index after new contract writes. Removing the old derived search machinery requires no schema reset or automatic repair. Kith 0.1.6 (protocol 1.4) adds one operation journal table in the same database; see below.
 
 ## Paths, scopes and merge boundaries
 
@@ -88,7 +88,7 @@ The menu's path count is a review list before integration, not an urgency score 
 
 ## Retrying timed-out MCP mutations
 
-Protocol 1.4 source builds support optional [operation keys and structured failures](protocol.md#protocol-14-keyed-retries-and-operational-failures-source-builds). Reusing a key returns the original recorded result, including failures; it never repeats the mutation. A live pending owner produces a retryable in-progress response. If the result was lost between a side effect and its database commit, the outcome is unknown and automatic execution is refused. Commands can leave partial effects despite cancellation or deadlines.
+Kith 0.1.6 (protocol 1.4) supports optional [operation keys and structured failures](protocol.md#protocol-14-keyed-retries-and-operational-failures-016). Reusing a key returns the original recorded result, including failures; it never repeats the mutation. A live pending owner produces a retryable in-progress response. If the result was lost between a side effect and its database commit, the outcome is unknown and automatic execution is refused. Commands can leave partial effects despite cancellation or deadlines.
 
 Replay is capability-protected historical access, not renewed ownership. Old session tokens cannot act on a replacement generation. Lost initial capability grants cannot be recovered with a key alone. Do not erase operation history to make a retry run; inspect effects and retained work before deliberately starting a new attempt. Keep the entire stopped database/sidecar set, because operation history and ownership belong to the same recovery snapshot.
 

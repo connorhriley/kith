@@ -41,18 +41,20 @@ Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workf
 
 Git recording and integration require a commit identity configured for the repository (`user.name` and `user.email`). Kith does not change your global Git identity.
 
+**Upgrading to 0.1.6:** Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. This release migrates storage schema 2 to 3, which older binaries refuse. Existing custom launchers are preserved; review their pinned version before reconnecting. See [recovery guidance](docs/reliability.md#recovery).
+
 ### VS Code or Cursor
 
 Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith). You can also search for `kith-coord.kith` in the editor's Extensions view.
 
-To select release **0.1.5** explicitly with an editor CLI already on your `PATH`:
+To select release **0.1.6** explicitly with an editor CLI already on your `PATH`:
 
 ```sh
-code --install-extension kith-coord.kith@0.1.5
-cursor --install-extension kith-coord.kith@0.1.5
+code --install-extension kith-coord.kith@0.1.6
+cursor --install-extension kith-coord.kith@0.1.6
 ```
 
-Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](extensions/editor/README.md#install) also links the published 0.1.5 VSIX.
+Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](extensions/editor/README.md#install) also links the published 0.1.6 VSIX.
 
 Open a trusted local Git checkout and approve Kith's MCP server through the editor. The extension bundles the coordination server, detects Node, and preserves existing MCP entries, hooks and tool permissions. **No global npm install is needed.** Each agent still needs to use Kith's tools; installing the extension does not enforce claims on other writers.
 
@@ -71,7 +73,7 @@ The [extension guide](extensions/editor/README.md) covers settings and existing 
 Install the release:
 
 ```sh
-npm install --global kith-coord@0.1.5
+npm install --global kith-coord@0.1.6
 ```
 
 Choose the setup scope your client needs:
