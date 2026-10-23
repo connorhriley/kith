@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add optional MCP operation keys with a capability-bound durable result journal in the existing database. Lost replies replay without repeating mutations; concurrent duplicates report in-progress, and interrupted/unrecorded outcomes refuse automatic re-execution. Historical replies never revive expired/completed sessions or authorize a replacement generation.
+- Add structured operational failure codes and retryability while preserving existing result fields. Distinguish claim/mutex wait contention from command deadlines, partial effects, ownership rejection and failed integration; preserve bounded command output on cancellation/timeouts.
+- Advance source protocol to 1.4 and storage schema to 3. Transactional journal migration retains schema-2 ownership and recovery data; interrupted upgrades and missing journal state fail safely. No new runtime dependency, service or editor configuration changes.
+
 ## 0.1.5 — 2026-10-22
 
 - Group read-only radar observations by checkout, distinguishing current recorded Kith leases, retained sessions, unregistered checkouts and unavailable ownership. Label counts as paths to review before integration, with full checkout/owner details and preservation guidance. Reuse the same snapshot in the optional editor view without extra status subprocesses. No ownership, recovery or cleanup behavior changes.

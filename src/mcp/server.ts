@@ -6,6 +6,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { KithEngine } from '../core/engine.js';
+import { OperationJournal, RetryError, failureData, toolReply } from './retries.js';
 import { discoverRepository } from '../core/repository.js';
 
 function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
@@ -13,7 +14,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
   const server = new McpServer({
     name: 'kith-coordinator',
     version: KITH_VERSION,
-  }, { instructions: 'Kith coordinates work claims, isolated worktrees, local resources and verified integration for cooperating coding agents. State stays local; no hosted service or model API key is required. The optional repository argument selects an absolute Git checkout for each call on a global connection. Keep passing the original checkout, even while editing its returned worktree. If no project context is available, ask for a repository path; never substitute HOME or a filesystem root. Each call is routed independently; there is no shared current project. Recommended workflow: one isolated worktree per parallel agent. Call kith_begin_work with isolateWorktree:true and explicit scopeGlobs; edit only the returned worktreePath, call kith_record_file_edit, run literal argv with kith_run_with_mutex, and finish with kith_complete_work plus a project verificationCmd. Heartbeat before the session expires. ' + (repoRoot && process.env.KITH_AGENT_ID
+  }, { instructions: 'Kith coordinates work claims, isolated worktrees, local resources and verified integration for cooperating coding agents. State stays local; no hosted service or model API key is required. The optional repository argument selects an absolute Git checkout for each call on a global connection. Keep passing the original checkout, even while editing its returned worktree. If no project context is available, ask for a repository path; never substitute HOME or a filesystem root. Each call is routed independently; there is no shared current project. Recommended workflow: one isolated worktree per parallel agent. Call kith_begin_work with isolateWorktree:true and explicit scopeGlobs; edit only the returned worktreePath, call kith_record_file_edit, run literal argv with kith_run_with_mutex, and finish with kith_complete_work plus a project verificationCmd. Heartbeat before the session expires. For mutations, generate a unique operationKey and reuse it only to recover that exact attempt after a timeout. Replay is a historical result, never a renewed claim. Inspect failure.code and failure.retryable; an unknown command outcome requires inspection, not automatic re-execution. ' + (repoRoot && process.env.KITH_AGENT_ID
     ? `This server shares a session with CLI/hooks. Use agentId '${process.env.KITH_AGENT_ID}'. Its inherited capability is handled internally; do not request or log it.`
     : 'Start with kith_begin_work or kith_start_session and a unique agentId. This connection retains its granted capability. Omit sessionToken on subsequent calls on this connection; only another connection needs it to resume that ID. Initial grant/resume replies contain the token and client transcripts may record it. Keep transcripts private.'
   ) });
@@ -23,11 +24,14 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
   const createContext = (root: string, inheritCapability: boolean) => {
     const engine = new KithEngine(root);
     const owned = new Set<string>();
+    const capabilities = new Map<string, string>();
+    const journal = new OperationJournal(engine.coordDb);
     const tokenFor = (args: { agentId: string; sessionToken?: string }) => args.sessionToken ??
-      (inheritCapability && process.env.KITH_AGENT_ID === args.agentId ? process.env.KITH_SESSION_TOKEN : undefined);
+      (inheritCapability && process.env.KITH_AGENT_ID === args.agentId ? process.env.KITH_SESSION_TOKEN : capabilities.get(args.agentId));
     const register = (args: { agentId: string; client?: string; sessionToken?: string; leaseDurationMs?: number }) => {
       const result = engine.fencing.registerAgent({ id: args.agentId, client: args.client ?? 'mcp',
-        sessionToken: tokenFor(args), leaseDurationMs: args.leaseDurationMs });
+        sessionToken: args.sessionToken ?? (inheritCapability && process.env.KITH_AGENT_ID === args.agentId ? process.env.KITH_SESSION_TOKEN : undefined), leaseDurationMs: args.leaseDurationMs });
+      capabilities.set(args.agentId, result.sessionToken);
       if (result.agent.pid === process.pid) owned.add(args.agentId);
       return result;
     };
@@ -39,8 +43,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
     const formatReply = (agentId: string | undefined, payload: unknown) => {
       const delta = agentId ? engine.consumeAgentDelta(agentId).formattedFooter : '';
       const data = payload as Record<string, unknown>;
-      return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) },
-        ...(delta ? [{ type: 'text' as const, text: delta }] : [])], structuredContent: data, isError: data.ok === false };
+      return toolReply(data, delta ? [{ type: 'text', text: delta }] : []);
     };
     const close = () => {
       for (const id of owned) {
@@ -48,7 +51,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
       }
       engine.close();
     };
-    return { engine, register, authorize, formatReply, close };
+    return { engine, register, authorize, formatReply, close, journal, tokenFor };
   };
   type Context = ReturnType<typeof createContext>;
   const contexts = new Map<string, Context>();
@@ -69,11 +72,30 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
   const engine = pinned ? contextFor().engine : undefined;
   const tool = <T extends z.ZodRawShape>(name: string, description: string, schema: T,
     handler: (args: z.infer<z.ZodObject<T>>, extra: Parameters<ToolCallback<z.ZodRawShape>>[1], context: Context) => Promise<CallToolResult>) => {
-    const inputSchema: z.ZodRawShape = { ...schema, repository: z.string().optional().describe('Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task.') };
+    const keyed = !['kith_get_status', 'kith_preview_integrate', 'kith_heartbeat'].includes(name);
+    const inputSchema: z.ZodRawShape = { ...schema, ...(keyed ? { operationKey: z.string().min(1).max(128).optional().describe('Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff.') } : {}), repository: z.string().optional().describe('Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task.') };
     server.tool(name, description, inputSchema,
       async (args, extra): Promise<CallToolResult> => {
         const { repository, ...input } = args as { repository?: string } & Record<string, unknown>;
-        return handler(input as z.infer<z.ZodObject<T>>, extra, contextFor(repository));
+        const execution = (async () => {
+          try {
+            const context = contextFor(repository);
+            const run = async () => { extra.signal.throwIfAborted(); return handler(input as z.infer<z.ZodObject<T>>, extra, context); };
+            if (!keyed || input.operationKey === undefined) return await run();
+            const identity = input as { agentId?: string; sessionToken?: string };
+            return await context.journal.execute({ key: input.operationKey as string, tool: name, input,
+              agentId: identity.agentId, token: () => identity.agentId ? context.tokenFor({ ...identity, agentId: identity.agentId }) : undefined,
+              authorize: () => {
+                if (!identity.agentId) throw new RetryError('INVALID_REQUEST', 'Keyed mutations require agentId and an owned session. Start a session first.');
+                const args = { ...identity, agentId: identity.agentId };
+                if (['kith_start_session', 'kith_begin_work', 'kith_claim_next_task'].includes(name)) context.register(args);
+                else context.authorize(args);
+                return { agentId: identity.agentId, sessionEpoch: context.engine.fencing.assertSession(identity.agentId), token: context.tokenFor(args)! };
+              }, run });
+          } catch (error) { return toolReply(failureData(error)); }
+        })();
+        commands.add(execution);
+        try { return await execution; } finally { commands.delete(execution); }
       });
   };
   let closing = false;
@@ -161,6 +183,8 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
     'Add a task to the orchestrated DAG queue with optional task dependencies and file scope globs.',
     {
       id: z.string().optional(),
+      agentId: z.string().optional().describe('Required for operationKey; identifies an already owned session.'),
+      sessionToken: z.string().optional(),
       title: z.string(),
       intentSummary: z.string().optional(),
       priority: z.number().optional(),
@@ -168,6 +192,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
       scopeGlobs: z.array(z.string()).optional(),
     },
     async (args, extra, { engine, register, authorize, formatReply }) => {
+      if (args.agentId) authorize({ ...args, agentId: args.agentId });
       const task = engine.intents.addTask(args);
       return formatReply(undefined, { ok: true, task });
     }
