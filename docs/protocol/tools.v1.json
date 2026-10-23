@@ -1,5 +1,5 @@
 {
-  "protocolVersion": "1.3.0",
+  "protocolVersion": "1.4.0",
   "tools": [
     {
       "name": "kith_start_session",
@@ -15,6 +15,12 @@
           },
           "leaseDurationMs": {
             "type": "number"
+          },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
           },
           "repository": {
             "type": "string",
@@ -94,6 +100,12 @@
             "maximum": 600000,
             "description": "Wait up to this many milliseconds for the whole scope; default fail-fast, not a FIFO file queue"
           },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+          },
           "repository": {
             "type": "string",
             "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
@@ -124,6 +136,12 @@
           "client": {
             "type": "string"
           },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+          },
           "repository": {
             "type": "string",
             "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
@@ -143,6 +161,13 @@
         "type": "object",
         "properties": {
           "id": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string",
+            "description": "Required for operationKey; identifies an already owned session."
+          },
+          "sessionToken": {
             "type": "string"
           },
           "title": {
@@ -165,6 +190,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
           },
           "repository": {
             "type": "string",
@@ -211,6 +242,12 @@
             "minimum": 0,
             "maximum": 600000
           },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+          },
           "repository": {
             "type": "string",
             "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
@@ -241,6 +278,12 @@
           },
           "content": {
             "type": "string"
+          },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
           },
           "repository": {
             "type": "string",
@@ -291,6 +334,12 @@
           "docComment": {
             "type": "string"
           },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+          },
           "repository": {
             "type": "string",
             "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
@@ -324,6 +373,12 @@
           },
           "basePort": {
             "type": "number"
+          },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
           },
           "repository": {
             "type": "string",
@@ -387,6 +442,12 @@
             "minimum": 1,
             "maximum": 1048576
           },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+          },
           "repository": {
             "type": "string",
             "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
@@ -447,6 +508,12 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 1048576
+          },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
           },
           "repository": {
             "type": "string",
@@ -536,6 +603,12 @@
           "verificationCmd": {
             "type": "string",
             "description": "Command to run in speculative merge tree (e.g. \"npm run typecheck\")"
+          },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
           },
           "repository": {
             "type": "string",

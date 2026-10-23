@@ -46,7 +46,7 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     if (JSON.stringify(before)!==JSON.stringify(files.map(identity))) throw new Error('Coordination state changed during snapshot; stop writers or retry');
     db = new DatabaseSync(path.join(scratch,'state.db'), {readOnly:true});
     db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000; BEGIN');
-    if (CoordDatabase.inspectSchema(db)!==2) throw new Error('Offline observation requires schema 2; preserve state and upgrade with clients stopped');
+    if (CoordDatabase.inspectSchema(db)<2) throw new Error('Offline observation requires schema 2 or newer; preserve state and upgrade with clients stopped');
     const all = <T=Record<string,unknown>>(sql:string) => db!.prepare(sql).all() as unknown as T[];
     const agents=all<AgentRecord>('SELECT * FROM agents ORDER BY registered_at DESC');
     if (options.ownersOnly) { db.exec('COMMIT'); return { ...empty, state: 'ready' as const, agents }; }

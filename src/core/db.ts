@@ -104,12 +104,13 @@ export class CoordDatabase {
     }
     if (!tables.some(table => table.name === 'meta')) throw new Error('Missing coordination schema metadata. Preserve the database before repair.');
     const row = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get() as { value: string } | undefined;
-    if (row?.value !== '1' && row?.value !== '2') {
+    if (row?.value !== '1' && row?.value !== '2' && row?.value !== '3') {
       throw new Error(`Unsupported coordination schema version: ${String(row?.value)}. Preserve the database before upgrading or repairing it.`);
     }
     const version = Number(row.value);
     const required = ['agents', 'tasks', 'locks', 'file_deps', 'contracts', 'conflicts', 'merge_queue', 'resources', 'quarantine', 'events',
-      ...(version === 2 ? ['agent_sessions', 'mutex_waiters', 'mutex_runs'] : [])];
+      ...(version >= 2 ? ['agent_sessions', 'mutex_waiters', 'mutex_runs'] : []),
+      ...(version >= 3 ? ['mcp_operations'] : [])];
     if (required.some(name => !tables.some(table => table.name === name))) {
       throw new Error('Incomplete coordination schema. Preserve the database before repair.');
     }
@@ -119,11 +120,12 @@ export class CoordDatabase {
       tasks: 'status,owner_agent_id,fencing_token,scope_globs_json,depends_on_json',
       locks: 'owner_agent_id,pattern,mode,fencing_token,expires_at',
       resources: 'type,name,owner_agent_id,fencing_token,expires_at',
-      ...(version === 2 ? {
+      ...(version >= 2 ? {
         agent_sessions: 'agent_id,token_hash,epoch',
         mutex_waiters: 'ticket,mutex_name,request_id,owner_agent_id,session_epoch,waiter_pid,waiter_start,expires_at',
         mutex_runs: 'mutex_name,run_id,owner_agent_id,session_epoch,fencing_token,supervisor_pid,supervisor_start,worker_pid,worker_start',
       } : {}),
+      ...(version >= 3 ? { mcp_operations: 'operation_key,request_hash,agent_id,session_epoch,capability_hash,owner_pid,owner_start,result_json,created_at' } : {}),
     };
     for (const [table, fields] of Object.entries(columns)) {
       try { db.prepare(`SELECT ${fields} FROM ${table} LIMIT 0`); }
@@ -132,7 +134,8 @@ export class CoordDatabase {
     const epoch = CoordDatabase.fencingEpoch(db);
     const tokens = ['SELECT fencing_token AS token FROM locks', 'SELECT fencing_token FROM tasks',
       'SELECT fencing_token FROM resources', 'SELECT fencing_token FROM merge_queue',
-      ...(version === 2 ? ['SELECT epoch FROM agent_sessions', 'SELECT session_epoch FROM mutex_waiters', 'SELECT fencing_token FROM mutex_runs'] : [])];
+      ...(version >= 2 ? ['SELECT epoch FROM agent_sessions', 'SELECT session_epoch FROM mutex_waiters', 'SELECT fencing_token FROM mutex_runs'] : []),
+      ...(version >= 3 ? ['SELECT session_epoch FROM mcp_operations'] : [])];
     if (db.prepare(`SELECT 1 FROM (${tokens.join(' UNION ALL ')}) WHERE token IS NOT NULL AND (typeof(token)!='integer' OR token<0 OR token>?) LIMIT 1`).get(epoch)) {
       throw new Error('Invalid or regressed fencing counter. Preserve the database before repair.');
     }
@@ -311,6 +314,14 @@ export class CoordDatabase {
           worker_pid INTEGER, worker_start TEXT
         );
       `);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS mcp_operations (
+          operation_key TEXT PRIMARY KEY, request_hash TEXT NOT NULL,
+          agent_id TEXT NOT NULL, session_epoch INTEGER NOT NULL, capability_hash TEXT NOT NULL,
+          owner_pid INTEGER NOT NULL, owner_start TEXT NOT NULL,
+          result_json TEXT, created_at INTEGER NOT NULL
+        );
+      `);
       if (version < 2) {
         // Legacy sessions have no capability. Invalidate coordination ownership, never files.
         this.db.exec(`
@@ -323,6 +334,7 @@ export class CoordDatabase {
           UPDATE meta SET value='2' WHERE key='schema_version';
         `);
       }
+      this.db.exec("UPDATE meta SET value='3' WHERE key='schema_version'");
     });
   }
 

@@ -64,7 +64,7 @@ The SQLite implementation requires Node's unflagged SQLite API: [Node SQLite doc
 
 ## Existing databases
 
-No full-text SQLite extension is required. Contracts, tasks, locks and supervised commands use the canonical tables on every supported runtime. Older derived `contracts_fts` tables are left intact but are no longer read or maintained. Stop all clients before upgrading. Do not mix versions or rely on downgrading to an older search index after new contract writes. No schema reset, new tables or automatic repair are involved.
+No full-text SQLite extension is required. Contracts, tasks, locks and supervised commands use the canonical tables on every supported runtime. Older derived `contracts_fts` tables are left intact but are no longer read or maintained. Stop all clients before upgrading. Do not mix versions or rely on downgrading to an older search index after new contract writes. Removing the old derived search machinery requires no schema reset or automatic repair. Protocol 1.4 source builds add one operation journal table in the same database; see below.
 
 ## Paths, scopes and merge boundaries
 
@@ -85,3 +85,11 @@ Passive CLI/menu observations use Git status and available file mtimes. They do 
 The radar groups differing paths by checkout. **Active Kith lease** means a recorded active session with an unexpired lease, not proof of a live writer. **Retained** means its recorded sessions are completed, idle, dead or expired; it is not permission to delete the checkout. **No Kith session** means outside activity is unknown. **Ownership unavailable** means the preserved coordination snapshot could not be read; inspect `kith status --offline` or `kith recover` in that checkout. Reads never renew or reap owners. Git change counts exclude ignored files and say nothing about unpushed commits or whether cleanup is safe.
 
 The menu's path count is a review list before integration, not an urgency score or a count of colliding agents. Identical dirty copies are excluded. A path shown under several checkouts need not differ between every pair. Recorded owners are not attributed as file writers. Review the worktree copies and run normal verification through the owning session before integration; preserve unfinished work in retained checkouts.
+
+## Retrying timed-out MCP mutations
+
+Protocol 1.4 source builds support optional [operation keys and structured failures](protocol.md#protocol-14-keyed-retries-and-operational-failures-source-builds). Reusing a key returns the original recorded result, including failures; it never repeats the mutation. A live pending owner produces a retryable in-progress response. If the result was lost between a side effect and its database commit, the outcome is unknown and automatic execution is refused. Commands can leave partial effects despite cancellation or deadlines.
+
+Replay is capability-protected historical access, not renewed ownership. Old session tokens cannot act on a replacement generation. Lost initial capability grants cannot be recovered with a key alone. Do not erase operation history to make a retry run; inspect effects and retained work before deliberately starting a new attempt. Keep the entire stopped database/sidecar set, because operation history and ownership belong to the same recovery snapshot.
+
+Schema 2 to 3 adds the journal transactionally and preserves current ownership, task state, files and process guards. A killed upgrade rolls back and can be retried. Startup refuses a schema-3 database missing its journal or required columns, rather than reconstructing an empty retry history. Stop old clients before upgrading; binaries that only support schema 2 refuse schema 3. Generic storage errors stay non-retryable because they can occur after external work. There are no new services, dependencies, retry daemons or UI controls.

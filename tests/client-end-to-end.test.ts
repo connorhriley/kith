@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { KithEngine } from '../src/index.js';
+import { KithEngine, KITH_PROTOCOL_VERSION } from '../src/index.js';
 import { initializeKithRepository } from '../src/cli/init.js';
 
 const cli = path.resolve('dist/cli/index.js');
@@ -444,7 +444,7 @@ it('exposes workspace observations and committed conflict previews through actua
   fs.writeFileSync(path.join(aPath,'src/base.mjs'),'export const base = 2;\n');
   fs.writeFileSync(path.join(bPath,'src/base.mjs'),'export const base = 3;\n');
   const state=data(await tool(one,'kith_get_status',{}));
-  expect(state.protocolVersion).toBe('1.3.0');
+  expect(state.protocolVersion).toBe(KITH_PROTOCOL_VERSION);
   expect(state.workspaces.find((w:any)=>w.agentId==='preview-a').overlaps).toContainEqual({path:'src/base.mjs',agentIds:['preview-b']});
   expect((await tool(one,'kith_preview_integrate',{agentId:'preview-a'})).isError).toBe(true);
   expect((await tool(two,'kith_preview_integrate',{agentId:'preview-a'})).isError).toBe(true);

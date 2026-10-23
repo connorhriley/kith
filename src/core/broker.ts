@@ -354,7 +354,7 @@ export class ResourceBroker {
           worker.once('error', reject);
         }), stopped]);
         if (params.signal?.aborted) failure ??= abortError();
-        if (failure) throw failure;
+        if (failure) throw Object.assign(failure, { stdout: Buffer.concat(stdout).toString(), stderr: Buffer.concat(stderr).toString() });
         if (!outcome) throw new Error('Command worker exited without a result');
         if (outcome.error) throw new Error(outcome.error);
         return { stdout: Buffer.concat(stdout).toString(), stderr: Buffer.concat(stderr).toString(), exitCode: outcome.exitCode, waitedMs };

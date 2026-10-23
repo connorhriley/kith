@@ -49,7 +49,7 @@ it('rolls back a failed legacy upgrade, preserves recovery files, and can retry 
   const file = path.join(coord, 'state.db');
   const db = new DatabaseSync(file);
   // The legacy layout has no session capabilities, queue tickets or command guards.
-  db.exec("DROP TABLE agent_sessions; DROP TABLE mutex_waiters; DROP TABLE mutex_runs; UPDATE meta SET value='1' WHERE key='schema_version';");
+  db.exec("DROP TABLE mcp_operations; DROP TABLE agent_sessions; DROP TABLE mutex_waiters; DROP TABLE mutex_runs; UPDATE meta SET value='1' WHERE key='schema_version';");
   db.exec("CREATE TRIGGER fail_upgrade BEFORE UPDATE ON agents BEGIN SELECT RAISE(ABORT,'interrupted upgrade'); END;");
   const tables = ['meta','agents','tasks','locks'];
   const dump = () => JSON.stringify(tables.map(t => db.prepare(`SELECT * FROM ${t}`).all()));
@@ -65,11 +65,11 @@ it('rolls back a failed legacy upgrade, preserves recovery files, and can retry 
     expect(recovered.intents.getTask('job')?.status).toBe('queued');
     expect(recovered.fencing.getAgent('legacy')?.status).toBe('dead');
     expect(recovered.locks.listLocks()).toEqual([]);
-    expect(recovered.coordDb.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()).toEqual({ value: '2' });
+    expect(recovered.coordDb.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()).toEqual({ value: '3' });
   } finally { recovered.close(); }
 });
 
-it.each(['locks', 'mutex_runs', 'agent_sessions', 'quarantine'])('refuses a schema-2 database missing %s instead of recreating empty state', table => {
+it.each(['locks', 'mutex_runs', 'agent_sessions', 'quarantine', 'mcp_operations'])('refuses a schema-3 database missing %s instead of recreating empty state', table => {
   const engine = new KithEngine(root);
   engine.fencing.registerAgent({ id: 'owner' });
   engine.locks.acquireLocks({ agentId: 'owner', patterns: ['work.txt'] });
@@ -157,7 +157,7 @@ it.each([['agents', 'pid_start_time'], ['locks', 'expires_at']])('refuses missin
   expect(fs.readFileSync(file)).toEqual(before);
 });
 
-it('rolls back an upgrade killed before commit and retries without losing unfinished work', async () => {
+it.each([1, 2])('rolls back a schema-%s upgrade killed before commit without losing ownership or unfinished work', async legacyVersion => {
   const original = new KithEngine(root);
   const session = original.fencing.registerAgent({ id: 'legacy' });
   original.intents.addTask({ id: 'job', title: 'Interrupted upgrade', scopeGlobs: ['unfinished.txt'] });
@@ -167,8 +167,10 @@ it('rolls back an upgrade killed before commit and retries without losing unfini
   fs.writeFileSync(path.join(coord, 'quarantine/before-copy'), 'recovery bytes');
   const file = path.join(coord, 'state.db');
   let db = new DatabaseSync(file);
-  db.exec("DROP TABLE agent_sessions; DROP TABLE mutex_waiters; DROP TABLE mutex_runs; UPDATE meta SET value='1' WHERE key='schema_version'");
-  const tables = ['meta', 'agents', 'tasks', 'locks'];
+  db.exec(legacyVersion === 1
+    ? "DROP TABLE mcp_operations; DROP TABLE agent_sessions; DROP TABLE mutex_waiters; DROP TABLE mutex_runs; UPDATE meta SET value='1' WHERE key='schema_version'"
+    : "DROP TABLE mcp_operations; UPDATE meta SET value='2' WHERE key='schema_version'");
+  const tables = ['meta', 'agents', 'tasks', 'locks', ...(legacyVersion === 2 ? ['agent_sessions', 'mutex_runs'] : [])];
   const dump = () => JSON.stringify(tables.map(t => db.prepare(`SELECT * FROM ${t}`).all()));
   const before = dump(); db.close();
   // Instrument only the child fixture: pause at SQLite COMMIT, after all migration writes.
@@ -195,13 +197,19 @@ it('rolls back an upgrade killed before commit and retries without losing unfini
   } finally { clearTimeout(timer); child.kill('SIGKILL'); await exited; }
   db = new DatabaseSync(file);
   expect(dump()).toBe(before);
-  expect(db.prepare("SELECT name FROM sqlite_master WHERE name IN ('agent_sessions','mutex_waiters','mutex_runs')").all()).toEqual([]);
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE name='mcp_operations'").all()).toEqual([]);
   db.close();
   const recovered = new KithEngine(root);
   try {
-    expect(() => recovered.fencing.resumeSession('legacy', session.sessionToken)).toThrow('capability');
-    recovered.fencing.registerAgent({ id: 'new-owner' });
-    expect(recovered.intents.claimNextTask('new-owner').task?.id).toBe('job');
+    if (legacyVersion === 1) {
+      expect(() => recovered.fencing.resumeSession('legacy', session.sessionToken)).toThrow('capability');
+      recovered.fencing.registerAgent({ id: 'new-owner' });
+      expect(recovered.intents.claimNextTask('new-owner').task?.id).toBe('job');
+    } else {
+      expect(recovered.fencing.resumeSession('legacy', session.sessionToken)).toBe(session.sessionEpoch);
+      expect(recovered.intents.getTask('job')).toMatchObject({ status: 'active', owner_agent_id: 'legacy' });
+      expect(recovered.locks.listLocks()).toHaveLength(1);
+    }
     expect(fs.readFileSync(path.join(root, 'unfinished.txt'), 'utf8')).toBe('unfinished source bytes');
     expect(fs.readFileSync(path.join(coord, 'quarantine/before-copy'), 'utf8')).toBe('recovery bytes');
   } finally { recovered.close(); }
@@ -216,7 +224,7 @@ it.each(['zero', 'empty'])('can retry an interrupted first initialization (%s) w
   const engine = new KithEngine(root);
   try {
     expect(engine.coordDb.currentFencingEpoch()).toBe(1000);
-    expect(engine.coordDb.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()).toEqual({ value: '2' });
+    expect(engine.coordDb.db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()).toEqual({ value: '3' });
     expect(fs.readFileSync(path.join(root, 'source.txt'), 'utf8')).toBe('existing project work');
   } finally { engine.close(); }
 });
