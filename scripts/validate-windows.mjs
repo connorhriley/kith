@@ -22,7 +22,10 @@ async function call(client,name,args={}) {
  const result=await client.callTool({name,arguments:args});
  if(result.isError) {
   const text=result.content?.[0]?.text??'Unknown tool failure';
-  throw new Error(`${name}: ${text.startsWith('{')?'Unexpected refusal':text.replace(/[A-Za-z0-9_-]{43}/g,'[redacted]')}`);
+  const data=result.structuredContent;
+  const reason=data?.failure?.message??data?.error;
+  const message=typeof reason==='string'?reason:(text.startsWith('{')?'Unexpected refusal':text);
+  throw new Error(`${name}: ${message.replace(/[A-Za-z0-9_-]{43}/g,'[redacted]')}`);
  }
  return body(result);
 }
