@@ -12,6 +12,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
     var worktrees: [[String: Any]] = []
     var ownershipAvailable = false
     var coordination: [String: Any] = [:]
+    var linkedContracts: [[String: Any]] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
@@ -46,6 +47,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
                     self.scanAvailable = true
                     self.coordination = json["coordination"] as? [String: Any] ?? [:]
                     self.worktrees = json["worktrees"] as? [[String: Any]] ?? []
+                    self.linkedContracts = json["linkedContracts"] as? [[String: Any]] ?? []
                     self.ownershipAvailable = json["ownershipComplete"] as? Bool == true
                     self.updateUI(collisions: json["collisions"] as? [[String: Any]] ?? [], recentEdits: json["recentEdits"] as? [[String: Any]] ?? [], repos: json["repos"] as? [String] ?? [])
                 }
@@ -54,6 +56,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
                     self.pollInFlight = false
                     self.scanAvailable = false
                     self.worktrees = []
+                    self.linkedContracts = []
                     self.ownershipAvailable = false
                     self.coordination = [:]
                     self.statusItem.button?.title = "⚪ Kith"
@@ -82,12 +85,20 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         }
         func checkout(_ row: [String: Any], in target: NSMenu) {
             let name = row["label"] as? String ?? "Checkout"
+            let checkoutPath = row["path"] as? String ?? "Path unavailable"
             let item = NSMenuItem(title: radarLabel(name), action: nil, keyEquivalent: ""), detail = NSMenu()
-            note(row["path"] as? String ?? "Path unavailable", in: detail)
+            note(checkoutPath, in: detail)
             note(worktreeActivity(row["activity"] as? String ?? "unknown"), in: detail)
             note("\(row["dirtyFiles"] ?? "Unknown") Git changes; \(sharedPathsLabel(row["sharedDirtyPaths"] as? Int ?? 0))", in: detail)
             note(row["detail"] as? String ?? "Status unavailable", in: detail)
             note("Inspect here: kith status --offline. Keep unfinished work.", in: detail)
+            if checkoutPath != "Path unavailable" {
+                detail.addItem(NSMenuItem.separator())
+                let openItem = NSMenuItem(title: "Reveal Checkout in Finder", action: #selector(openCheckoutClicked(_:)), keyEquivalent: "")
+                openItem.target = self; openItem.representedObject = checkoutPath; detail.addItem(openItem)
+                let copyItem = NSMenuItem(title: "Copy Checkout Path", action: #selector(copyTextClicked(_:)), keyEquivalent: "")
+                copyItem.target = self; copyItem.representedObject = checkoutPath; detail.addItem(copyItem)
+            }
             item.submenu = detail; target.addItem(item)
         }
         note("Kith · \(URL(fileURLWithPath: watchDir).lastPathComponent)")
@@ -115,6 +126,14 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
                 item.submenu = detail; menu.addItem(item)
             }
             if working.count > 8 { note("\(working.count - 8) more tasks: kith status --offline") }
+            let queued = coordination["queued"] as? [[String: Any]] ?? []
+            if !queued.isEmpty {
+                let detail = section("Queued tasks (\(queued.count))")
+                for row in queued.prefix(12) {
+                    let scopes = (row["scopes"] as? [String] ?? []).joined(separator: ", ")
+                    note("\(row["title"] ?? "Task") [p\(row["priority"] ?? 10)]" + (scopes.isEmpty ? "" : " — \(scopes)"), in: detail)
+                }
+            }
             let waiting = coordination["waiting"] as? [[String: Any]] ?? []
             for row in waiting.prefix(6) {
                 note("Waiting: \(row["agentId"] ?? "Agent") → \(row["resource"] ?? "resource") (held by \(row["holder"] ?? "not recorded"))")
@@ -142,15 +161,55 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
             for row in saved.prefix(20) { checkout(row, in: detail) }
             if saved.count > 20 { note("More: kith status --offline", in: detail) }
         }
+        if !linkedContracts.isEmpty {
+            let detail = section("Linked cross-repo contracts (\(linkedContracts.count))")
+            for row in linkedContracts.prefix(15) {
+                let alias = row["alias"] as? String ?? "@contract"
+                let repo = row["sourceRepoName"] as? String ?? "repo"
+                let file = row["filePath"] as? String ?? "file"
+                let locked = row["lockedByAgent"] as? String
+                let dirty = row["dirtyInCheckout"] as? Bool == true
+                let status = locked != nil ? " [locked by \(locked!)]" : (dirty ? " [dirty]" : "")
+                note("\(alias) → \(repo)/\(file)\(status)", in: detail)
+            }
+        }
         let detail = section("All checkouts (\(worktrees.count))")
         for row in worktrees.prefix(30) { checkout(row, in: detail) }
         if worktrees.count > 30 { note("More: kith watch --once", in: detail) }
         menu.addItem(NSMenuItem.separator())
+        let actionsMenu = section("Quick Agent Prompts")
+        let copyWorker = NSMenuItem(title: "Copy \"Claim Next Task\" Prompt", action: #selector(copyWorkerPromptClicked), keyEquivalent: "")
+        copyWorker.target = self; actionsMenu.addItem(copyWorker)
+        let copyArchitect = NSMenuItem(title: "Copy \"Plan Parallel Tasks (Architect)\" Prompt", action: #selector(copyArchitectPromptClicked), keyEquivalent: "")
+        copyArchitect.target = self; actionsMenu.addItem(copyArchitect)
         let refresh = NSMenuItem(title: "Refresh", action: #selector(scanNowClicked), keyEquivalent: "r")
         refresh.target = self; menu.addItem(refresh)
         let quit = NSMenuItem(title: "Quit Kith", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self; menu.addItem(quit)
         statusItem.menu = menu
+    }
+
+    @objc func copyWorkerPromptClicked() {
+        let prompt = "Use Kith on repository \(watchDir) to claim and execute the next queued task: call kith_claim_next_task with isolateWorktree: true, edit only inside the returned worktreePath within the task's scopeGlobs, call kith_record_file_edit after edits, and finish with kith_complete_work."
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(prompt, forType: .string)
+    }
+
+    @objc func copyArchitectPromptClicked() {
+        let prompt = "Use Kith on repository \(watchDir) to plan parallel multi-agent work: call kith_start_session, publish shared interfaces/routes via kith_publish_contract, and enqueue parallelizable tasks with disjoint scopeGlobs and dependsOn via kith_add_task."
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(prompt, forType: .string)
+    }
+
+    @objc func copyTextClicked(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    @objc func openCheckoutClicked(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
     }
 
     @objc func scanNowClicked() {

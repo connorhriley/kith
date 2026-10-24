@@ -188,10 +188,12 @@ export class IntentAndTaskEngine {
    * Orchestrator Mode: Atomically claims the highest-priority unblocked task whose scope locks are available.
    */
   public claimNextTask(agentId: string): {
+    ok: boolean;
     claimed: boolean;
     task: TaskRecord | null;
     fencingToken: number | null;
     locks: LockRecord[];
+    activeSiblingIntents: TaskRecord[];
     reason?: string;
   } {
     this.fencing.reapDeadAgents();
@@ -199,13 +201,24 @@ export class IntentAndTaskEngine {
     return this.coordDb.withTransaction(() => {
       this.fencing.assertSession(agentId);
       const allTasks = this.listTasks();
+      const activeSiblingIntents = allTasks.filter(
+        (t) => t.status === 'active' && t.owner_agent_id !== agentId
+      );
       const taskById = new Map(allTasks.map((t) => [t.id, t]));
       const queued = allTasks
         .filter((t) => t.status === 'queued')
         .sort((a, b) => b.priority - a.priority || a.created_at - b.created_at);
 
       if (queued.length === 0) {
-        return { claimed: false, task: null, fencingToken: null, locks: [], reason: 'no_queued_tasks' };
+        return {
+          ok: false,
+          claimed: false,
+          task: null,
+          fencingToken: null,
+          locks: [],
+          activeSiblingIntents,
+          reason: 'no_queued_tasks',
+        };
       }
 
       for (const candidate of queued) {
@@ -249,18 +262,22 @@ export class IntentAndTaskEngine {
         });
 
         return {
+          ok: true,
           claimed: true,
           task: this.getTask(candidate.id),
           fencingToken,
           locks,
+          activeSiblingIntents,
         };
       }
 
       return {
+        ok: false,
         claimed: false,
         task: null,
         fencingToken: null,
         locks: [],
+        activeSiblingIntents,
         reason: 'all_queued_tasks_blocked_by_dependencies_or_locks',
       };
     });
