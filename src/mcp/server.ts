@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { KithEngine } from '../core/engine.js';
 import {
-  compactContractsForScope,
+  compactPublishedContracts,
   compactDeltaFooter,
   compactFileEditResult,
   compactLinkedContracts,
@@ -152,12 +152,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
       finally { if (execution) commands.delete(execution); }
 
 
-      const siblingLocks = engine.locks.listLocks().filter((l) => l.owner_agent_id !== args.agentId);
-      const { publishedContracts, totalPublishedContracts } = compactContractsForScope(
-        engine.depGraph.listContracts(),
-        args.scopeGlobs,
-        siblingLocks
-      );
+      const contracts = compactPublishedContracts(engine.depGraph.listContracts());
 
       return formatReply(args.agentId, {
         ok: intentRes.ok,
@@ -170,8 +165,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
         lockConflicts: intentRes.lockConflicts,
         activeSiblingIntents: intentRes.activeSiblingIntents,
         ...('waitedMs' in intentRes && 'waitTimedOut' in intentRes ? { waitedMs: intentRes.waitedMs, waitTimedOut: intentRes.waitTimedOut } : {}),
-        publishedContracts,
-        totalPublishedContracts,
+        ...contracts,
         linkedContracts: compactLinkedContracts(intentRes.linkedContracts),
         crossRepoWarnings: intentRes.crossRepoWarnings,
         crossRepoComplete: intentRes.crossRepoComplete,
@@ -199,16 +193,10 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
       let res;
       try { res = execution ? await execution : engine.claimNextTask(options); }
       finally { if (execution) commands.delete(execution); }
-      const siblingLocks = engine.locks.listLocks().filter((l) => l.owner_agent_id !== args.agentId);
-      const { publishedContracts, totalPublishedContracts } = compactContractsForScope(
-        engine.depGraph.listContracts(),
-        res.task?.scope_globs ?? [],
-        siblingLocks
-      );
+      const contracts = compactPublishedContracts(engine.depGraph.listContracts());
       return formatReply(args.agentId, {
         ...res,
-        publishedContracts,
-        totalPublishedContracts,
+        ...contracts,
         linkedContracts: compactLinkedContracts(res.linkedContracts),
         agent: engine.fencing.getAgent(args.agentId),
         sessionToken: session.sessionToken,
@@ -382,12 +370,13 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
     {
       agentId: z.string().optional(),
       sessionToken: z.string().optional(),
+      includeHistory: z.boolean().optional().describe('Include completed task history; default false returns current/pending tasks plus completedTaskCount. Lock lease details are always preserved.'),
       includeContracts: z.boolean().optional().describe('Include the full contract registry. Default false keeps frequent status polls compact; contractCount always reports its size.'),
     },
     async (args, extra, { engine, register, authorize, formatReply }) => {
       if (args.agentId) authorize({ ...args, agentId: args.agentId });
       const state = engine.getStatus();
-      return formatReply(args.agentId, compactStatusResult(state, { includeContracts: args.includeContracts }));
+      return formatReply(args.agentId, compactStatusResult(state, { includeContracts: args.includeContracts, includeHistory: args.includeHistory }));
     }
   );
 

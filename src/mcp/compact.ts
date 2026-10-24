@@ -1,8 +1,5 @@
-import path from 'node:path';
 import type { BlastRadiusAlert, ContractRecord } from '../core/dep-graph.js';
 import type { PostFileEditHookResult, KithEngine } from '../core/engine.js';
-import type { LockRecord } from '../core/locks.js';
-import { LockEngine } from '../core/locks.js';
 import type { LinkedWorkspaceContract } from '../core/workspace-contracts.js';
 
 export interface CompactContract {
@@ -21,14 +18,13 @@ export interface CompactBreakingChangeGroup {
   symbolName: string;
   previousSignature: string;
   newSignature: string | null;
-  affectedDownstreamFiles: string[];
-  affectedAgents: string[];
+  affected: Array<Pick<BlastRadiusAlert, 'affectedDownstreamFile' | 'affectedAgentId' | 'hopDistance'>>;
 }
 
 /**
  * Strips internal database hashing/fingerprinting fields (`id`, `ast_hash`,
- * `params_fingerprint`, `updated_at`) that add ~60% token overhead without
- * providing actionable signal to an LLM agent.
+ * `params_fingerprint`, `updated_at`). Keep actionable signatures and ownership
+ * unchanged; full registry records remain available through includeContracts.
  */
 export function compactContract(contract: ContractRecord): CompactContract {
   const result: CompactContract = {
@@ -52,7 +48,7 @@ export function compactContract(contract: ContractRecord): CompactContract {
 export function compactBreakingChanges(alerts: BlastRadiusAlert[]): CompactBreakingChangeGroup[] {
   const grouped = new Map<string, CompactBreakingChangeGroup>();
   for (const alert of alerts) {
-    const key = `${alert.modifiedFile}#${alert.symbolName}`;
+    const key = JSON.stringify([alert.modifiedFile, alert.symbolName, alert.previousSignature, alert.newSignature]);
     let group = grouped.get(key);
     if (!group) {
       group = {
@@ -60,73 +56,46 @@ export function compactBreakingChanges(alerts: BlastRadiusAlert[]): CompactBreak
         symbolName: alert.symbolName,
         previousSignature: alert.previousSignature,
         newSignature: alert.newSignature,
-        affectedDownstreamFiles: [],
-        affectedAgents: [],
+        affected: [],
       };
       grouped.set(key, group);
     }
-    if (!group.affectedDownstreamFiles.includes(alert.affectedDownstreamFile)) {
-      group.affectedDownstreamFiles.push(alert.affectedDownstreamFile);
-    }
-    if (alert.affectedAgentId && !group.affectedAgents.includes(alert.affectedAgentId)) {
-      group.affectedAgents.push(alert.affectedAgentId);
-    }
+    const {modifiedFile, symbolName, previousSignature, newSignature, ...consumer} = alert;
+    group.affected.push(consumer);
   }
   return [...grouped.values()];
 }
 
-/**
- * Filters repository contracts to those relevant to the agent's declared
- * `scopeGlobs`, sibling active locks, or breaking changes, and compacts each
- * entry. Prevents dumping dozens of unrelated contracts on every session start.
+/** A write claim does not describe read dependencies. Keep contracts from every
+ * scope, with all breaking contracts first. Cap only the ordinary preview and
+ * explicitly point to the existing full registry when that preview is partial.
  */
-export function compactContractsForScope(
-  contracts: ContractRecord[],
-  scopeGlobs: string[],
-  activeLocks: LockRecord[] = [],
-  maxItems = 12
-): { publishedContracts: CompactContract[]; totalPublishedContracts: number } {
-  const scopeDirs = new Set(
-    scopeGlobs
-      .filter((g) => !g.includes('*'))
-      .map((g) => path.posix.dirname(g.replace(/\\/g, '/')))
-      .filter((d) => d && d !== '.')
-  );
-
-  const relevant = contracts.filter((c) => {
-    if (c.is_breaking) return true;
-    if (scopeGlobs.some((glob) => LockEngine.patternsOverlap(c.file_path, glob))) return true;
-    const dir = path.posix.dirname(c.file_path.replace(/\\/g, '/'));
-    if (scopeDirs.has(dir)) return true;
-    if (activeLocks.some((lock) => LockEngine.patternsOverlap(c.file_path, lock.pattern))) return true;
-    return false;
-  });
-
-  relevant.sort((a, b) => {
-    if (a.is_breaking !== b.is_breaking) return a.is_breaking ? -1 : 1;
-    return b.updated_at - a.updated_at;
-  });
-
+export function compactPublishedContracts(contracts: ContractRecord[]) {
+  const breaking = contracts.filter(c => c.is_breaking);
+  const ordinary = contracts.filter(c => !c.is_breaking);
+  const selected = [...breaking, ...ordinary.slice(0, Math.max(0, 30 - breaking.length))];
+  const omitted = contracts.length - selected.length;
   return {
-    publishedContracts: relevant.slice(0, maxItems).map(compactContract),
+    publishedContracts: selected.map(compactContract),
     totalPublishedContracts: contracts.length,
+    publishedContractsComplete: omitted === 0,
+    publishedContractsOmitted: omitted,
+    ...(omitted ? {contractDetails: 'Use kith_get_status with includeContracts: true in the same repository for all records.'} : {}),
   };
 }
 
 /**
  * Compacts cross-repo linked contracts by stripping internal `astHash` fields
- * and capping per-file symbol lists when a sibling file is clean and unlocked.
+ * without imposing another cap. The core already bounds these reports and
+ * carries explicit completeness/availability flags.
  */
 export function compactLinkedContracts(
-  linkedContracts: LinkedWorkspaceContract[] | undefined,
-  maxSymbolsPerCleanFile = 8
+  linkedContracts: LinkedWorkspaceContract[] | undefined
 ): Array<Record<string, unknown>> | undefined {
   if (!linkedContracts) return undefined;
   return linkedContracts.map((entry) => {
-    const isHot = Boolean(entry.dirtyInCheckout) || Boolean(entry.lockedByAgent) || entry.activeWorktreeDrifts.length > 0;
     const rawSymbols = entry.symbols ?? [];
-    const limit = isHot ? rawSymbols.length : maxSymbolsPerCleanFile;
-    const sliced = rawSymbols.slice(0, limit).map((sym) => ({
+    const symbols = rawSymbols.map((sym) => ({
       symbolName: sym.symbolName,
       kind: sym.kind,
       signature: sym.signature,
@@ -136,8 +105,8 @@ export function compactLinkedContracts(
       sourceRepo: entry.sourceRepo,
       sourceRepoName: entry.sourceRepoName,
       filePath: entry.filePath,
-      symbols: sliced,
-      totalSymbolsInFile: rawSymbols.length,
+      symbols,
+      totalSymbolsInFile: entry.exportsComplete ? rawSymbols.length : null,
       dirtyInCheckout: entry.dirtyInCheckout,
       exportsComplete: entry.exportsComplete,
       ownershipAvailable: entry.ownershipAvailable,
@@ -154,21 +123,14 @@ export function compactLinkedContracts(
  */
 export function compactFileEditResult(res: PostFileEditHookResult): Record<string, unknown> {
   const upserted = res.contractReport.upsertedContracts;
-  const hasIssues =
-    res.contractReport.breakingChanges.length > 0 ||
-    res.contractReport.removedSymbols.length > 0 ||
-    res.dirtyMergeConflicts.length > 0 ||
-    res.warnings.length > 0;
-
-  const limit = hasIssues ? 25 : 10;
   return {
     filePath: res.filePath,
     contractReport: {
       filePath: res.contractReport.filePath,
       upsertedCount: upserted.length,
-      upsertedContracts: upserted.slice(0, limit).map(compactContract),
+      upsertedContracts: upserted.map(compactContract),
       removedSymbols: res.contractReport.removedSymbols,
-      breakingChanges: compactBreakingChanges(res.contractReport.breakingChanges),
+      breakingChanges: res.contractReport.breakingChanges,
       transitiveDependents: res.contractReport.transitiveDependents,
     },
     dirtyMergeConflicts: res.dirtyMergeConflicts,
@@ -176,20 +138,10 @@ export function compactFileEditResult(res: PostFileEditHookResult): Record<strin
   };
 }
 
-export function compactLock(lock: LockRecord): Record<string, unknown> {
-  return {
-    pattern: lock.pattern,
-    mode: lock.mode,
-    owner_agent_id: lock.owner_agent_id,
-    task_id: lock.task_id,
-    fencing_token: lock.fencing_token,
-  };
-}
-
 /**
  * Compacts `kith_get_status` by omitting historical `"status": "done"` tasks
- * unless `includeHistory: true` is requested, compacting lock records, and
- * stripping internal contract fingerprints when `includeContracts: true`.
+ * unless `includeHistory: true` is requested. Keep complete lock lease records
+ * and the full registry when includeContracts is explicitly requested.
  */
 export function compactStatusResult(
   state: ReturnType<KithEngine['getStatus']>,
@@ -204,7 +156,6 @@ export function compactStatusResult(
 
   return {
     ...state,
-    locks: includeHistory ? state.locks : state.locks.map(compactLock),
     tasks: activeOrPendingTasks,
     completedTaskCount,
     historyIncluded: includeHistory,
@@ -236,7 +187,7 @@ export function compactDeltaFooter(footer: string): string {
         };
         if (!Array.isArray(parsed.breakingChanges)) return line;
         const compactPayload = {
-          filePath: parsed.filePath,
+          ...parsed,
           breakingChanges: compactBreakingChanges(parsed.breakingChanges),
         };
         return `${line.slice(0, jsonStart)}${JSON.stringify(compactPayload)}`;

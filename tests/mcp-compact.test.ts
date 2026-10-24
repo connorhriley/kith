@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { KithEngine } from '../src/core/engine.js';
 import {
   compactContract,
-  compactContractsForScope,
+  compactPublishedContracts,
   compactDeltaFooter,
   compactFileEditResult,
   compactLinkedContracts,
@@ -39,7 +39,7 @@ afterEach(() => {
 });
 
 describe('MCP Context Compactor (Token Reduction without Signal Loss)', () => {
-  it('filters unrelated contracts out of scoped work and strips internal fingerprint noise', () => {
+  it('preserves contracts across scopes and strips internal fingerprint overhead', () => {
     const repo = createGitRepo('kith-compact-scope-');
     fs.mkdirSync(path.join(repo, 'src/core'), { recursive: true });
     fs.mkdirSync(path.join(repo, 'src/menubar'), { recursive: true });
@@ -61,15 +61,16 @@ describe('MCP Context Compactor (Token Reduction without Signal Loss)', () => {
       expect(allContracts.length).toBe(16);
 
       const rawJson = JSON.stringify(allContracts);
-      const scoped = compactContractsForScope(allContracts, ['src/menubar/**'], []);
+      const scoped = compactPublishedContracts(allContracts);
       const compactJson = JSON.stringify(scoped);
 
       expect(scoped.totalPublishedContracts).toBe(16);
-      expect(scoped.publishedContracts).toHaveLength(1);
-      expect(scoped.publishedContracts[0].symbol_name).toBe('renderMenu');
+      expect(scoped.publishedContracts).toHaveLength(16);
+      expect(scoped.publishedContractsComplete).toBe(true);
+      expect(scoped.publishedContracts.some(c => c.symbol_name === 'renderMenu')).toBe(true);
       expect('params_fingerprint' in scoped.publishedContracts[0]).toBe(false);
       expect('ast_hash' in scoped.publishedContracts[0]).toBe(false);
-      expect(compactJson.length).toBeLessThan(rawJson.length * 0.15);
+      expect(compactJson.length).toBeLessThan(rawJson.length * 0.75);
     } finally {
       engine.close();
     }
@@ -164,7 +165,8 @@ describe('MCP Context Compactor (Token Reduction without Signal Loss)', () => {
       ]);
       expect(linked).toHaveLength(1);
       expect(linked![0].totalSymbolsInFile).toBe(12);
-      expect((linked![0].symbols as unknown[]).length).toBe(8);
+      expect((linked![0].symbols as unknown[]).length).toBe(12);
+      expect(linked![0].exportsComplete).toBe(true);
       expect('astHash' in (linked![0].symbols as Array<Record<string, unknown>>)[0]).toBe(false);
       expect(compactContract(rawEdit.contractReport.upsertedContracts[0]).symbol_name).toBe('alpha');
 
@@ -183,8 +185,8 @@ describe('MCP Context Compactor (Token Reduction without Signal Loss)', () => {
         breakingChanges: repeatedAlerts,
       })}`;
       const compactedFooter = compactDeltaFooter(rawFooter);
-      expect(compactedFooter.length).toBeLessThan(rawFooter.length * 0.35);
-      expect(compactedFooter).toContain('affectedDownstreamFiles');
+      expect(compactedFooter.length).toBeLessThan(rawFooter.length * 0.6);
+      expect(compactedFooter).toContain('affectedDownstreamFile');
       expect(compactedFooter).toContain('src/consumer9.ts');
     } finally {
       engine.close();
