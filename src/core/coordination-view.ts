@@ -4,6 +4,7 @@ type State = ReturnType<typeof readCoordinationState>;
 export interface CoordinationView {
   available: boolean;
   working: {agentId: string; client: string; title: string; taskId: string; checkout: string; scopes: string[]}[];
+  queued?: {taskId: string; title: string; priority: number; dependsOn: string[]; scopes: string[]}[];
   sessions: number;
   sessionKeys: string[];
   waiting: {agentId: string; resource: string; holder: string | null; position: number}[];
@@ -14,7 +15,7 @@ export interface CoordinationView {
 /** A presentation of current recorded coordination, never inferred file writers or a safety verdict. */
 export function coordinationView(state: State): CoordinationView {
   const result: CoordinationView = {available: state.state !== 'unavailable' && !state.truncated,
-    working: [], sessions: 0, sessionKeys: [], waiting: [], using: [], attention: []};
+    working: [], queued: [], sessions: 0, sessionKeys: [], waiting: [], using: [], attention: []};
   if (!result.available) {
     result.attention.push({message: 'Coordination status unavailable', nextStep: 'Inspect kith status --offline; preserve saved work before recovery.'});
     return result;
@@ -27,6 +28,16 @@ export function coordinationView(state: State): CoordinationView {
   result.sessions = active.length;
   result.sessionKeys = active.map(a=>JSON.stringify([state.repository.commonGitDir,a.id]));
   for (const task of state.tasks as Record<string, unknown>[]) {
+    if (task.status === 'queued') {
+      result.queued!.push({
+        taskId: String(task.id),
+        title: String(task.title),
+        priority: Number(task.priority ?? 10),
+        dependsOn: Array.isArray(task.depends_on) ? task.depends_on.map(String) : [],
+        scopes: Array.isArray(task.scope_globs) ? task.scope_globs.map(String) : [],
+      });
+      continue;
+    }
     const a = current(task.owner_agent_id, task.fencing_token);
     if (!a || task.status !== 'active') continue;
     const locks = state.locks.filter(l => (l.task_id === task.id || l.task_id === null) && l.owner_agent_id === a.id &&

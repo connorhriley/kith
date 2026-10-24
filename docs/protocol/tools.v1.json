@@ -136,6 +136,16 @@
           "client": {
             "type": "string"
           },
+          "isolateWorktree": {
+            "type": "boolean",
+            "description": "Recommended: true, giving the claiming agent an isolated Git worktree"
+          },
+          "waitTimeoutMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600000,
+            "description": "Wait up to this many milliseconds for a queued task to become unblocked and claimable"
+          },
           "operationKey": {
             "type": "string",
             "minLength": 1,

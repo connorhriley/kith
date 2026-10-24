@@ -159,6 +159,8 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
         activeSiblingIntents: intentRes.activeSiblingIntents,
         ...('waitedMs' in intentRes && 'waitTimedOut' in intentRes ? { waitedMs: intentRes.waitedMs, waitTimedOut: intentRes.waitTimedOut } : {}),
         publishedContracts: contracts,
+        linkedContracts: intentRes.linkedContracts,
+        crossRepoWarnings: intentRes.crossRepoWarnings,
       });
     }
   );
@@ -170,11 +172,24 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
       agentId: z.string().describe('Agent ID claiming the task'),
       sessionToken: z.string().optional(),
       client: z.string().optional(),
+      isolateWorktree: z.boolean().optional().describe('Recommended: true, giving the claiming agent an isolated Git worktree'),
+      waitTimeoutMs: z.number().int().min(0).max(600000).optional().describe('Wait up to this many milliseconds for a queued task to become unblocked and claimable'),
     },
     async (args, extra, { engine, register, authorize, formatReply }) => {
       const session = register(args);
-      const res = engine.intents.claimNextTask(args.agentId);
-      return formatReply(args.agentId, { ...res, sessionToken: session.sessionToken });
+      const options = { agentId: args.agentId, isolateWorktree: args.isolateWorktree };
+      const execution = args.waitTimeoutMs === undefined ? undefined
+        : engine.claimNextTaskWhenAvailable({ ...options, waitTimeoutMs: args.waitTimeoutMs,
+          signal: AbortSignal.any([disconnected.signal, extra.signal]) });
+      if (execution) commands.add(execution);
+      let res;
+      try { res = execution ? await execution : engine.claimNextTask(options); }
+      finally { if (execution) commands.delete(execution); }
+      return formatReply(args.agentId, {
+        ...res,
+        agent: engine.fencing.getAgent(args.agentId),
+        sessionToken: session.sessionToken,
+      });
     }
   );
 

@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { discoverRepository, physicalPath } from './repository.js';
 import { readCoordinationState } from './observation.js';
 import { coordinationView, type CoordinationView } from './coordination-view.js';
+import { inspectWorkspaceContracts, type LinkedWorkspaceContract } from './workspace-contracts.js';
 
 const execFileAsync = promisify(execFile);
 export interface FileChangeEvent { filePath: string; repoPath: string; timestamp: number }
@@ -67,7 +68,8 @@ export class PassiveConflictWatcher {
   private errors: ScanIssue[] = [];
   private primaryRoots = new Map<string, string>();
   private worktrees: RadarWorktree[] = [];
-  private coordination: CoordinationView = {available:false,working:[],sessions:0,sessionKeys:[],waiting:[],using:[],attention:[]};
+  private linkedContracts: LinkedWorkspaceContract[] = [];
+  private coordination: CoordinationView = {available:false,working:[],queued:[],sessions:0,sessionKeys:[],waiting:[],using:[],attention:[]};
 
   constructor(public readonly rootDir: string, private readonly options: {
     intervalMs?: number;
@@ -227,7 +229,11 @@ export class PassiveConflictWatcher {
     const views = [...states.values()].map(coordinationView);
     this.coordination = {available: this.errors.length === 0 && views.every(v=>v.available),
       sessions: views.reduce((n,v)=>n+v.sessions,0), sessionKeys: views.flatMap(v=>v.sessionKeys), working: views.flatMap(v=>v.working),
+      queued: views.flatMap(v=>v.queued ?? []),
       waiting: views.flatMap(v=>v.waiting), using: views.flatMap(v=>v.using), attention: views.flatMap(v=>v.attention)};
+    this.linkedContracts = [...new Set(this.primaryRoots.values())].flatMap(root => {
+      try { return inspectWorkspaceContracts(root).linkedContracts; } catch { return []; }
+    });
     if (this.errors.length) this.options.onScanError?.(this.errors);
     return this.getActiveCollisions();
   }
@@ -247,7 +253,7 @@ export class PassiveConflictWatcher {
     if (this.watchTimer) clearTimeout(this.watchTimer);
     this.watchTimer = null;
   }
-  public getScanState() { return { coordination: this.coordination, complete: this.errors.length === 0, errors: [...this.errors], repos: [...this.repositories.keys()], ownershipComplete: this.worktrees.every(row => row.activity !== 'unknown'), worktrees: this.worktrees.map(row => ({ ...row, agentIds: [...row.agentIds] })) }; }
+  public getScanState() { return { coordination: this.coordination, linkedContracts: [...this.linkedContracts], complete: this.errors.length === 0, errors: [...this.errors], repos: [...this.repositories.keys()], ownershipComplete: this.worktrees.every(row => row.activity !== 'unknown'), worktrees: this.worktrees.map(row => ({ ...row, agentIds: [...row.agentIds] })) }; }
   public getActiveCollisions(): CollisionAlert[] { return [...this.activeCollisions.values()]; }
   public getRecentEdits(): Array<{ key: string; repo: string; ageSec: number }> {
     const now = Date.now();

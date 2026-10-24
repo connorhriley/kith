@@ -8,7 +8,7 @@ import { uninstallKith } from './setup-ledger.js';
 import { doctorReport } from './doctor.js';
 import { readCoordinationState, recoveryReport } from '../core/observation.js';
 import { SessionOwnershipError } from '../core/fencing.js';
-import { KithEngine } from '../core/engine.js';
+import { buildSwarmPrompts, KithEngine } from '../core/engine.js';
 import { runKithMcpStdioServer } from '../mcp/server.js';
 import { enforcementMode, HookHandler } from './hook-handler.js';
 import { INTEGRATIONS, Integration, initializeKithRepository } from './init.js';
@@ -103,6 +103,14 @@ async function main(): Promise<void> {
   if (cmd === 'uninstall') { const report=uninstallKith(repoRoot,Boolean(flags['dry-run'])); console.log(JSON.stringify(report,null,2)); process.exitCode=report.ok?0:1; return; }
 
   if (cmd === 'doctor') { const report=doctorReport(repoRoot); console.log(JSON.stringify(report,null,2)); process.exitCode=report.ok?0:1; return; }
+
+  if (cmd === 'prompt') {
+    const prompts = buildSwarmPrompts(repoRoot);
+    const role = subCmd === 'architect' || subCmd === 'worker' ? subCmd : undefined;
+    if (flags.raw && role) { console.log(prompts[role]); return; }
+    console.log(JSON.stringify({ ok: true, repository: repoRoot, ...(role ? { role, prompt: prompts[role] } : prompts) }, null, 2));
+    return;
+  }
 
   if (cmd === 'recover' || cmd === 'status' && flags.offline) {
     const state = cmd === 'recover' ? recoveryReport(repoRoot) : readCoordinationState(repoRoot);
@@ -331,7 +339,12 @@ async function main(): Promise<void> {
       }
       if (subCmd === 'claim') {
         const session = register();
-        const res = engine.intents.claimNextTask(agentId);
+        const options = { agentId, isolateWorktree: Boolean(flags.worktree) };
+        const res = flags.wait || flags['wait-ms'] !== undefined
+          ? await interruptible((signal) => engine.claimNextTaskWhenAvailable({ ...options, signal,
+            waitTimeoutMs: claimWaitTimeout() }))
+          : engine.claimNextTask(options);
+        if (!res) { if (!sessionToken) engine.fencing.abandonAgentSession(agentId); return; }
         console.log(JSON.stringify({ ...res, sessionToken: session.sessionToken }, null, 2));
         process.exitCode = res.claimed ? 0 : 1;
         return;

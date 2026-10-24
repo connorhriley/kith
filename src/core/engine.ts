@@ -17,6 +17,14 @@ import { IntentAndTaskEngine } from './intents.js';
 import { LockEngine } from './locks.js';
 import { SpeculativeMergeTrain } from './merge-train.js';
 import { ConflictRecord, ShadowGitEngine } from './shadow-git.js';
+import {
+  buildSwarmPrompts,
+  inspectWorkspaceContracts,
+  LinkedWorkspaceContract,
+  SwarmPrompts,
+  verifyCrossRepoImportsForFile,
+  WorkspaceContractReport,
+} from './workspace-contracts.js';
 import { CoWWorktreeManager } from './worktree-cow.js';
 
 export interface AgentUnreadDelta {
@@ -124,6 +132,14 @@ export class KithEngine {
       );
     }
 
+    const crossRepoWarnings = verifyCrossRepoImportsForFile({
+      repoRoot: this.coordDb.repoRoot,
+      worktreeDir: targetRoot,
+      filePath: file,
+      content,
+    });
+    warnings.push(...crossRepoWarnings);
+
     return {
       filePath: file,
       contractReport,
@@ -191,12 +207,16 @@ export class KithEngine {
 
   public getStatus() {
     const agents = this.fencing.listAgents(true);
+    const workspaceContracts = inspectWorkspaceContracts(this.coordDb.repoRoot);
     return {
       protocolVersion: KITH_PROTOCOL_VERSION,
       repository: { root: this.coordDb.repoRoot, commonGitDir: this.coordDb.commonGitDir, coordDir: this.coordDb.coordDir },
       runtime: { node: process.version }, fencingEpoch: this.coordDb.currentFencingEpoch(),
       agents, locks: this.locks.listLocks(), tasks: this.intents.listTasks(),
-      conflicts: this.shadowGit.listConflicts(), contracts: this.depGraph.listContracts(), resources: this.broker.listResources(),
+      conflicts: this.shadowGit.listConflicts(), contracts: this.depGraph.listContracts(),
+      linkedContracts: workspaceContracts.linkedContracts,
+      crossRepoWarnings: workspaceContracts.warnings,
+      resources: this.broker.listResources(),
       mergeQueue: this.mergeTrain.listQueue(), quarantined: this.bashGuard.listQuarantined(),
       mutexWaiters: this.coordDb.db.prepare('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket').all(),
       commandGuards: this.coordDb.db.prepare('SELECT mutex_name,owner_agent_id,worker_pid,supervisor_pid FROM mutex_runs ORDER BY mutex_name').all(),
@@ -213,7 +233,57 @@ export class KithEngine {
     const intent = this.intents.declareIntent(params);
     const worktree = intent.ok && params.isolateWorktree
       ? this.worktrees.spawnWorktree({ agentId: params.agentId }) : null;
-    return { ...intent, worktree };
+    const workspaceContracts = inspectWorkspaceContracts(
+      this.coordDb.repoRoot,
+      worktree?.worktreePath ?? this.fencing.getAgent(params.agentId)?.worktree_path ?? undefined
+    );
+    return {
+      ...intent,
+      worktree,
+      linkedContracts: workspaceContracts.linkedContracts,
+      crossRepoWarnings: workspaceContracts.warnings,
+    };
+  }
+
+  public claimNextTask(params: { agentId: string; isolateWorktree?: boolean }) {
+    const claimedRes = this.intents.claimNextTask(params.agentId);
+    let worktree = null;
+    if (claimedRes.claimed && params.isolateWorktree) {
+      const existing = this.fencing.getAgent(params.agentId);
+      if (existing?.worktree_path && fs.existsSync(existing.worktree_path)) {
+        worktree = {
+          agentId: params.agentId,
+          worktreePath: existing.worktree_path,
+          branch: existing.branch ?? `kith/${params.agentId}`,
+          hydrationMethod: 'none' as const,
+          hydratedDirs: [] as string[],
+          durationMs: 0,
+        };
+      } else {
+        worktree = this.worktrees.spawnWorktree({ agentId: params.agentId });
+      }
+    }
+    const publishedContracts = this.depGraph.listContracts().slice(0, 30);
+    const workspaceContracts = inspectWorkspaceContracts(
+      this.coordDb.repoRoot,
+      worktree?.worktreePath ?? this.fencing.getAgent(params.agentId)?.worktree_path ?? undefined
+    );
+    return {
+      ...claimedRes,
+      worktree,
+      publishedContracts,
+      linkedContracts: workspaceContracts.linkedContracts,
+      crossRepoWarnings: workspaceContracts.warnings,
+    };
+  }
+
+  public async claimNextTaskWhenAvailable(params: {
+    agentId: string;
+    isolateWorktree?: boolean;
+    waitTimeoutMs: number;
+    signal?: AbortSignal;
+  }) {
+    return this.waitForOwnedClaim(params, () => this.claimNextTask(params));
   }
 
   public async beginWorkWhenAvailable(params: Parameters<KithEngine['beginWork']>[0] & {
@@ -282,4 +352,10 @@ export {
   ShadowGitEngine,
   ConflictRecord,
   CoWWorktreeManager,
+  buildSwarmPrompts,
+  inspectWorkspaceContracts,
+  verifyCrossRepoImportsForFile,
+  LinkedWorkspaceContract,
+  SwarmPrompts,
+  WorkspaceContractReport,
 };

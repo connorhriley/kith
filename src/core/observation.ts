@@ -51,7 +51,7 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     const all = <T=Record<string,unknown>>(sql:string) => db!.prepare(sql).all() as unknown as T[];
     const agents=all<AgentRecord>('SELECT * FROM agents ORDER BY registered_at DESC' + (options.coordinationOnly ? ' LIMIT 201' : ''));
     if (options.coordinationOnly) {
-      const tasks = all("SELECT * FROM tasks WHERE status IN ('active','blocked') ORDER BY updated_at DESC LIMIT 201").map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))}));
+      const tasks = all("SELECT * FROM tasks WHERE status IN ('active','blocked','queued') ORDER BY priority DESC, updated_at DESC LIMIT 201").map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))}));
       const locks = all('SELECT * FROM locks WHERE expires_at > '+observedAt+' ORDER BY acquired_at DESC LIMIT 501');
       const resources = all('SELECT * FROM resources ORDER BY acquired_at DESC LIMIT 201');
       const mutexWaiters = all('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket LIMIT 201');

@@ -90,6 +90,7 @@ export class LockEngine {
     const first = segments.findIndex(s => /[?*]/u.test(s));
     if (first < 0) return false;
     const prefix = segments.slice(0, first).join('/');
+    const recursivePrefix = Boolean(prefix) && segments.length === first + 1 && segments[first] === '**';
     const roots = new Set([this.coordDb.repoRoot, ...this.fencing.listAgents(true).map(a => a.worktree_path).filter((p): p is string => Boolean(p))]);
     const pending = [...roots].map(root => ({ root, relative: prefix }));
     let budget = 10_000;
@@ -102,7 +103,17 @@ export class LockEngine {
       for (const entry of entries) {
         if (--budget < 0) return true;
         const file = relative ? relative + '/' + entry.name : entry.name;
-        if (entry.isSymbolicLink()) return true;
+        if (entry.isSymbolicLink()) {
+          if (!recursivePrefix) return true;
+          try {
+            const scopeRoot = physicalPath(path.join(root, prefix));
+            const linkTarget = fs.realpathSync(path.join(dir, entry.name));
+            if (!isWithin(scopeRoot, linkTarget)) return true;
+            continue;
+          } catch {
+            return true;
+          }
+        }
         const fold = (value: string) => value.normalize('NFC').toLowerCase().replace(/ς/g, 'σ');
         if (!LockEngine.patternsOverlap(fold(pattern), fold(file)) && !LockEngine.patternsOverlap(fold(pattern), fold(file + '/**'))) continue;
         if (entry.isDirectory()) pending.push({ root, relative: file });
