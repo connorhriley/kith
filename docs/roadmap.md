@@ -14,7 +14,7 @@ MCP is the default agent interface. Keep one shared ownership ledger per Git com
 4. **Followable recovery.** Exercise disconnect, expiry, failed checks, partial setup, interrupted migration and damaged-state refusal. Preserve worktrees and matching stopped database/sidecars; no automatic repair, forced claim release or deletion of `.coord`.
 5. **Exact release evidence.** Require all six Linux/macOS and both Windows jobs on the candidate, including any editor checks, plus the exact packed-package consumer. Verify registry bytes and tag workflows after publication. Maintain versioned client evidence and honest platform limits.
 
-Published0.1.6 / protocol1.4 has recorded clean npm and editor-registry evidence, including durable mutation retries and preserved recovery. The current usability pass simplifies activation and read-only feedback without changing ownership, storage schema or the MCP protocol. Each candidate must pass its own combined core/platform, bundled-server and clean-install gates before publication; a green prior release does not certify a new branch.
+Published 0.1.6 / protocol 1.4 has recorded clean npm and editor-registry evidence, including durable mutation retries and preserved recovery. The current usability pass simplifies activation and read-only feedback without changing ownership, storage schema or the MCP protocol. Each candidate must pass its own combined core/platform, bundled-server and clean-install gates before publication; a green prior release does not certify a new branch.
 
 ## Deferred
 

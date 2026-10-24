@@ -103,3 +103,21 @@ it('excludes expired and replaced generations and reports unavailable data witho
   const before=files.map(f=>fs.existsSync(f)?fs.readFileSync(f):null);view(root);expect(files.map(f=>fs.existsSync(f)?fs.readFileSync(f):null)).toEqual(before);
   const unavailable={...readCoordinationState(root,{coordinationOnly:true}),state:'unavailable' as const};expect(coordinationView(unavailable)).toMatchObject({available:false,working:[],attention:[{message:'Coordination status unavailable',nextStep:expect.any(String)}]});
 });
+
+it('refuses older project storage during setup without migrating it or changing client configuration',()=>{
+  const root=repo(),e=engine(root),home=path.join(temp,'home');fs.mkdirSync(path.join(home,'.claude'),{recursive:true});
+  e.coordDb.db.exec("DROP TABLE mcp_operations; UPDATE meta SET value='2' WHERE key='schema_version'");
+  const file=e.coordDb.dbPath,before=fs.readFileSync(file);
+  expect(()=>autoConfigureAllClients(root,home,{guidance:true})).toThrow('Stop all Kith coordinators');
+  expect(fs.readFileSync(file)).toEqual(before);expect(fs.existsSync(path.join(home,'.claude.json'))).toBe(false);
+  expect(fs.existsSync(path.join(root,'AGENTS.md'))).toBe(false);
+});
+
+it('surfaces unresolved command guards and incomplete observations without inventing active work',()=>{
+  const root=repo(),e=engine(root);e.fencing.registerAgent({id:'alpha'});
+  const state=readCoordinationState(root,{coordinationOnly:true});
+  const guard={mutex_name:'tests',owner_agent_id:'alpha',session_epoch:state.sessionEpochs.alpha,fencing_token:123};
+  const observed=coordinationView({...state,commandGuards:[guard]});
+  expect(observed.working).toEqual([]);expect(observed.attention[0].message).toContain('Command recovery');
+  expect(coordinationView({...state,truncated:true})).toMatchObject({available:false,working:[]});
+});
