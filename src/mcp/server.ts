@@ -6,6 +6,13 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { KithEngine } from '../core/engine.js';
+import {
+  compactContractsForScope,
+  compactDeltaFooter,
+  compactFileEditResult,
+  compactLinkedContracts,
+  compactStatusResult,
+} from './compact.js';
 import { OperationJournal, RetryError, failureData, toolReply } from './retries.js';
 import { discoverRepository } from '../core/repository.js';
 
@@ -41,7 +48,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
       engine.fencing.heartbeat(args.agentId);
     };
     const formatReply = (agentId: string | undefined, payload: unknown) => {
-      const delta = agentId ? engine.consumeAgentDelta(agentId).formattedFooter : '';
+      const delta = agentId ? compactDeltaFooter(engine.consumeAgentDelta(agentId).formattedFooter) : '';
       const data = payload as Record<string, unknown>;
       return toolReply(data, delta ? [{ type: 'text', text: delta }] : []);
     };
@@ -145,7 +152,12 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
       finally { if (execution) commands.delete(execution); }
 
 
-      const contracts = engine.depGraph.listContracts().slice(0, 30);
+      const siblingLocks = engine.locks.listLocks().filter((l) => l.owner_agent_id !== args.agentId);
+      const { publishedContracts, totalPublishedContracts } = compactContractsForScope(
+        engine.depGraph.listContracts(),
+        args.scopeGlobs,
+        siblingLocks
+      );
 
       return formatReply(args.agentId, {
         ok: intentRes.ok,
@@ -158,8 +170,9 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
         lockConflicts: intentRes.lockConflicts,
         activeSiblingIntents: intentRes.activeSiblingIntents,
         ...('waitedMs' in intentRes && 'waitTimedOut' in intentRes ? { waitedMs: intentRes.waitedMs, waitTimedOut: intentRes.waitTimedOut } : {}),
-        publishedContracts: contracts,
-        linkedContracts: intentRes.linkedContracts,
+        publishedContracts,
+        totalPublishedContracts,
+        linkedContracts: compactLinkedContracts(intentRes.linkedContracts),
         crossRepoWarnings: intentRes.crossRepoWarnings,
         crossRepoComplete: intentRes.crossRepoComplete,
       });
@@ -186,8 +199,17 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
       let res;
       try { res = execution ? await execution : engine.claimNextTask(options); }
       finally { if (execution) commands.delete(execution); }
+      const siblingLocks = engine.locks.listLocks().filter((l) => l.owner_agent_id !== args.agentId);
+      const { publishedContracts, totalPublishedContracts } = compactContractsForScope(
+        engine.depGraph.listContracts(),
+        res.task?.scope_globs ?? [],
+        siblingLocks
+      );
       return formatReply(args.agentId, {
         ...res,
+        publishedContracts,
+        totalPublishedContracts,
+        linkedContracts: compactLinkedContracts(res.linkedContracts),
         agent: engine.fencing.getAgent(args.agentId),
         sessionToken: session.sessionToken,
       });
@@ -252,7 +274,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
         filePath: args.filePath,
         content: args.content,
       });
-      return formatReply(args.agentId, res);
+      return formatReply(args.agentId, compactFileEditResult(res));
     }
   );
 
@@ -365,8 +387,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
     async (args, extra, { engine, register, authorize, formatReply }) => {
       if (args.agentId) authorize({ ...args, agentId: args.agentId });
       const state = engine.getStatus();
-      return formatReply(args.agentId, { ...state, contracts: args.includeContracts ? state.contracts : [],
-        contractCount: state.contracts.length, contractsIncluded: args.includeContracts ?? false });
+      return formatReply(args.agentId, compactStatusResult(state, { includeContracts: args.includeContracts }));
     }
   );
 
