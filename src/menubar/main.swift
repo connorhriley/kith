@@ -16,15 +16,34 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
     var recentWorkspaces: [String] = []
 
     func registerWorkspace(_ path: String) {
+        let fm = FileManager.default
         let std = URL(fileURLWithPath: path).standardized.path
         if !recentWorkspaces.contains(std) { recentWorkspaces.insert(std, at: 0) }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        for candidate in ["\(home)/Projects/kith", "\(home)/Projects", "\(home)/Briefed"] {
-            if FileManager.default.fileExists(atPath: candidate) && !recentWorkspaces.contains(candidate) {
-                recentWorkspaces.append(candidate)
+        let home = fm.homeDirectoryForCurrentUser.path
+        let skip: Set<String> = ["Library", "Applications", "Pictures", "Music", "Movies", "Public", "Downloads", "Trash"]
+        if let topDirs = try? fm.contentsOfDirectory(atPath: home) {
+            for top in topDirs.sorted() where !top.hasPrefix(".") && !skip.contains(top) {
+                let topPath = "\(home)/\(top)"
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: topPath, isDirectory: &isDir), isDir.boolValue else { continue }
+                if fm.fileExists(atPath: "\(topPath)/.coord/state.db") && !recentWorkspaces.contains(topPath) {
+                    recentWorkspaces.append(topPath)
+                }
+                guard let subDirs = try? fm.contentsOfDirectory(atPath: topPath) else { continue }
+                var childCoordCount = 0
+                for sub in subDirs.sorted() where !sub.hasPrefix(".") && sub != "node_modules" {
+                    let subPath = "\(topPath)/\(sub)"
+                    if fm.fileExists(atPath: "\(subPath)/.coord/state.db") {
+                        childCoordCount += 1
+                        if !recentWorkspaces.contains(subPath) { recentWorkspaces.append(subPath) }
+                    }
+                }
+                if childCoordCount > 0 && !recentWorkspaces.contains(topPath) {
+                    recentWorkspaces.append(topPath)
+                }
             }
         }
-        UserDefaults.standard.set(Array(recentWorkspaces.prefix(10)), forKey: "KithRecentWorkspaces")
+        UserDefaults.standard.set(Array(recentWorkspaces.prefix(12)), forKey: "KithRecentWorkspaces")
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
