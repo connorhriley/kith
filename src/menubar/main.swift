@@ -4,7 +4,8 @@ import Foundation
 class KithMenuBarApp: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var timer: Timer?
-    var watchDir = ""
+    var selection = RadarSelection()
+    var watchDir: String { selection.path }
     var kithCliPath = ""
     var kithScriptPath = ""
     var pollInFlight = false
@@ -13,43 +14,21 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
     var ownershipAvailable = false
     var coordination: [String: Any] = [:]
     var linkedContracts: [[String: Any]] = []
+    var contractWarnings: [String] = []
     var recentWorkspaces: [String] = []
 
     func registerWorkspace(_ path: String) {
-        let fm = FileManager.default
-        let std = URL(fileURLWithPath: path).standardized.path
-        if !recentWorkspaces.contains(std) { recentWorkspaces.insert(std, at: 0) }
-        let home = fm.homeDirectoryForCurrentUser.path
-        let skip: Set<String> = ["Library", "Applications", "Pictures", "Music", "Movies", "Public", "Downloads", "Trash"]
-        if let topDirs = try? fm.contentsOfDirectory(atPath: home) {
-            for top in topDirs.sorted() where !top.hasPrefix(".") && !skip.contains(top) {
-                let topPath = "\(home)/\(top)"
-                var isDir: ObjCBool = false
-                guard fm.fileExists(atPath: topPath, isDirectory: &isDir), isDir.boolValue else { continue }
-                if fm.fileExists(atPath: "\(topPath)/.coord/state.db") && !recentWorkspaces.contains(topPath) {
-                    recentWorkspaces.append(topPath)
-                }
-                guard let subDirs = try? fm.contentsOfDirectory(atPath: topPath) else { continue }
-                var childCoordCount = 0
-                for sub in subDirs.sorted() where !sub.hasPrefix(".") && sub != "node_modules" {
-                    let subPath = "\(topPath)/\(sub)"
-                    if fm.fileExists(atPath: "\(subPath)/.coord/state.db") {
-                        childCoordCount += 1
-                        if !recentWorkspaces.contains(subPath) { recentWorkspaces.append(subPath) }
-                    }
-                }
-                if childCoordCount > 0 && !recentWorkspaces.contains(topPath) {
-                    recentWorkspaces.append(topPath)
-                }
-            }
-        }
-        UserDefaults.standard.set(Array(recentWorkspaces.prefix(12)), forKey: "KithRecentWorkspaces")
+        let canonical = URL(fileURLWithPath: path).standardized.path
+        recentWorkspaces.removeAll { $0 == canonical }
+        recentWorkspaces.insert(canonical, at: 0)
+        recentWorkspaces = Array(recentWorkspaces.prefix(10))
+        UserDefaults.standard.set(recentWorkspaces, forKey: "KithRecentWorkspaces")
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
         guard args.count == 4 else { NSApplication.shared.terminate(nil); return }
-        watchDir = URL(fileURLWithPath: args[1]).standardized.path
+        selection.select(args[1])
         kithCliPath = args[2]
         kithScriptPath = args[3]
         recentWorkspaces = UserDefaults.standard.stringArray(forKey: "KithRecentWorkspaces") ?? []
@@ -72,25 +51,30 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
     func pollRadar() {
         guard !pollInFlight else { return }
         pollInFlight = true
+        let revision = selection.revision, directory = watchDir
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self = self else { return }
             do {
-                let json = try runRadar(executable: self.kithCliPath, arguments: [self.kithScriptPath, "watch", self.watchDir, "--once", "--raw"])
+                let json = try runRadar(executable: self.kithCliPath, arguments: [self.kithScriptPath, "watch", directory, "--once", "--raw"])
                 DispatchQueue.main.async {
                     self.pollInFlight = false
+                    guard self.selection.accepts(revision) else { self.pollRadar(); return }
                     self.scanAvailable = true
                     self.coordination = json["coordination"] as? [String: Any] ?? [:]
                     self.worktrees = json["worktrees"] as? [[String: Any]] ?? []
                     self.linkedContracts = json["linkedContracts"] as? [[String: Any]] ?? []
+                    self.contractWarnings = json["contractWarnings"] as? [String] ?? []
                     self.ownershipAvailable = json["ownershipComplete"] as? Bool == true
                     self.updateUI(collisions: json["collisions"] as? [[String: Any]] ?? [], recentEdits: json["recentEdits"] as? [[String: Any]] ?? [], repos: json["repos"] as? [String] ?? [])
                 }
             } catch {
                 DispatchQueue.main.async {
                     self.pollInFlight = false
+                    guard self.selection.accepts(revision) else { self.pollRadar(); return }
                     self.scanAvailable = false
                     self.worktrees = []
                     self.linkedContracts = []
+                    self.contractWarnings = []
                     self.ownershipAvailable = false
                     self.coordination = [:]
                     self.statusItem.button?.title = "⚪ Kith"
@@ -132,6 +116,10 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
                 openItem.target = self; openItem.representedObject = checkoutPath; detail.addItem(openItem)
                 let copyItem = NSMenuItem(title: "Copy Checkout Path", action: #selector(copyTextClicked(_:)), keyEquivalent: "")
                 copyItem.target = self; copyItem.representedObject = checkoutPath; detail.addItem(copyItem)
+                for (title, role) in [("Copy Claim Next Task Prompt", "worker"), ("Copy Plan Tasks Prompt", "architect")] {
+                    let prompt = NSMenuItem(title: title, action: #selector(copyPromptClicked(_:)), keyEquivalent: "")
+                    prompt.target = self; prompt.representedObject = [checkoutPath, role]; detail.addItem(prompt)
+                }
             }
             item.submenu = detail; target.addItem(item)
         }
@@ -195,15 +183,16 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
             for row in saved.prefix(20) { checkout(row, in: detail) }
             if saved.count > 20 { note("More: kith status --offline", in: detail) }
         }
-        if !linkedContracts.isEmpty {
+        if !linkedContracts.isEmpty || !contractWarnings.isEmpty {
             let detail = section("Linked cross-repo contracts (\(linkedContracts.count))")
-            for row in linkedContracts.prefix(15) {
+            for warning in contractWarnings.prefix(8) { note(warning, in: detail) }
+            for row in linkedContracts.prefix(8) {
                 let alias = row["alias"] as? String ?? "@contract"
                 let repo = row["sourceRepoName"] as? String ?? "repo"
                 let file = row["filePath"] as? String ?? "file"
                 let locked = row["lockedByAgent"] as? String
                 let dirty = row["dirtyInCheckout"] as? Bool == true
-                let status = locked != nil ? " [locked by \(locked!)]" : (dirty ? " [dirty]" : "")
+                let status = row["ownershipAvailable"] as? Bool != true ? " [ownership unavailable]" : (locked != nil ? " [locked by \(locked!)]" : (dirty ? " [dirty]" : ""))
                 note("\(alias) → \(repo)/\(file)\(status)", in: detail)
             }
         }
@@ -211,11 +200,6 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         for row in worktrees.prefix(30) { checkout(row, in: detail) }
         if worktrees.count > 30 { note("More: kith watch --once", in: detail) }
         menu.addItem(NSMenuItem.separator())
-        let actionsMenu = section("Quick Agent Prompts")
-        let copyWorker = NSMenuItem(title: "Copy \"Claim Next Task\" Prompt", action: #selector(copyWorkerPromptClicked), keyEquivalent: "")
-        copyWorker.target = self; actionsMenu.addItem(copyWorker)
-        let copyArchitect = NSMenuItem(title: "Copy \"Plan Parallel Tasks (Architect)\" Prompt", action: #selector(copyArchitectPromptClicked), keyEquivalent: "")
-        copyArchitect.target = self; actionsMenu.addItem(copyArchitect)
         let wsMenu = section("Switch Workspace")
         for ws in recentWorkspaces where FileManager.default.fileExists(atPath: ws) {
             let label = "\(URL(fileURLWithPath: ws).lastPathComponent) (\(ws))"
@@ -236,9 +220,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
 
     @objc func switchWorkspaceClicked(_ sender: NSMenuItem) {
         guard let target = sender.representedObject as? String else { return }
-        watchDir = URL(fileURLWithPath: target).standardized.path
-        registerWorkspace(watchDir)
-        pollRadar()
+        selectWorkspace(target)
     }
 
     @objc func chooseWorkspaceClicked() {
@@ -249,22 +231,39 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         panel.allowsMultipleSelection = false
         panel.prompt = "Watch Workspace"
         if panel.runModal() == .OK, let url = panel.url {
-            watchDir = url.standardized.path
-            registerWorkspace(watchDir)
-            pollRadar()
+            selectWorkspace(url.path)
         }
     }
 
-    @objc func copyWorkerPromptClicked() {
-        let prompt = "Use Kith on repository \(watchDir) to claim and execute the next queued task: call kith_claim_next_task with isolateWorktree: true, edit only inside the returned worktreePath within the task's scopeGlobs, call kith_record_file_edit after edits, and finish with kith_complete_work."
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(prompt, forType: .string)
+    func selectWorkspace(_ path: String) {
+        selection.select(path)
+        registerWorkspace(watchDir)
+        scanAvailable = false; ownershipAvailable = false
+        coordination = [:]; worktrees = []; linkedContracts = []; contractWarnings = []
+        statusItem.button?.title = "⚪ Kith"
+        buildMenu(collisions: [], recentEdits: [], repos: [])
+        pollRadar()
     }
 
-    @objc func copyArchitectPromptClicked() {
-        let prompt = "Use Kith on repository \(watchDir) to plan parallel multi-agent work: call kith_start_session, publish shared interfaces/routes via kith_publish_contract, and enqueue parallelizable tasks with disjoint scopeGlobs and dependsOn via kith_add_task."
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(prompt, forType: .string)
+    @objc func copyPromptClicked(_ sender: NSMenuItem) {
+        guard let values = sender.representedObject as? [String], values.count == 2 else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let output = try runOutput(executable: self.kithCliPath, arguments: [self.kithScriptPath, "prompt", values[1], "--repo", values[0], "--raw"])
+                guard let prompt = String(data: output, encoding: .utf8), !prompt.isEmpty else { throw RadarError.invalid }
+                DispatchQueue.main.async {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(prompt, forType: .string)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    let alert = NSAlert()
+                    alert.messageText = "Could not prepare task prompt"
+                    alert.informativeText = "Choose an available Git checkout and try again. Existing work is unchanged."
+                    alert.runModal()
+                }
+            }
+        }
     }
 
     @objc func copyTextClicked(_ sender: NSMenuItem) {

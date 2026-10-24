@@ -25,7 +25,7 @@ private final class Capture {
 }
 
 /** Drain both pipes while the child runs; bound execution and reject failed/partial scans. */
-func runRadar(executable: String, arguments: [String], timeout: TimeInterval = 12) throws -> [String: Any] {
+func runOutput(executable: String, arguments: [String], timeout: TimeInterval = 12) throws -> Data {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
@@ -52,7 +52,12 @@ func runRadar(executable: String, arguments: [String], timeout: TimeInterval = 1
     guard group.wait(timeout: .now() + 2) == .success else { throw RadarError.timeout }
     _ = try errors.result()
     guard process.terminationStatus == 0 else { throw RadarError.failed }
-    guard let json = try JSONSerialization.jsonObject(with: output.result()) as? [String: Any],
+    return try output.result()
+}
+
+func runRadar(executable: String, arguments: [String], timeout: TimeInterval = 12) throws -> [String: Any] {
+    let data = try runOutput(executable: executable, arguments: arguments, timeout: timeout)
+    guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           json["complete"] as? Bool == true,
           json["ownershipComplete"] is Bool, json["coordination"] is [String: Any], json["worktrees"] is [[String: Any]],
           json["repos"] is [String], json["collisions"] is [[String: Any]], json["recentEdits"] is [[String: Any]] else { throw RadarError.invalid }
@@ -88,4 +93,15 @@ func coordinationTitle(_ view: [String: Any], available: Bool) -> String {
     if !(view["attention"] as? [[String: Any]] ?? []).isEmpty { return "Kith · needs attention" }
     let tasks = (view["working"] as? [[String: Any]] ?? []).count
     return tasks > 0 ? "Kith · \(tasks) task\(tasks == 1 ? "" : "s")" : "Kith · watching"
+}
+
+// A selection generation also rejects A -> B -> A late completions.
+struct RadarSelection {
+    private(set) var path = ""
+    private(set) var revision: UInt64 = 0
+    mutating func select(_ directory: String) {
+        path = URL(fileURLWithPath: directory).standardized.path
+        revision &+= 1
+    }
+    func accepts(_ capturedRevision: UInt64) -> Bool { capturedRevision == revision }
 }

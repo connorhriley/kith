@@ -8,14 +8,14 @@ One extension connects your editor's agent to Kith and adds a small read-only st
 
 **Upgrading to 0.1.6:** Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. This release migrates storage schema 2 to 3, which older binaries refuse. Existing custom launchers are preserved; review their pinned version before reconnecting. See [recovery guidance](../../docs/reliability.md#recovery).
 
-Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith), or search for the extension ID in your editor. To select **0.1.6** explicitly when a marketplace lookup selects an older release, use your editor's CLI if it is on `PATH`:
+Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith), or search for the extension ID in your editor. To select **0.1.7** explicitly when a marketplace lookup selects an older release, use your editor's CLI if it is on `PATH`:
 
 ```sh
-code --install-extension kith-coord.kith@0.1.6
-cursor --install-extension kith-coord.kith@0.1.6
+code --install-extension kith-coord.kith@0.1.7
+cursor --install-extension kith-coord.kith@0.1.7
 ```
 
-Use the command for your editor. Without the CLI, download the [published 0.1.6 VSIX](https://open-vsx.org/api/kith-coord/kith/0.1.6/file/kith-coord.kith-0.1.6.vsix) and select it through **Extensions → Install from VSIX**.
+Use the command for your editor. Without the CLI, download the [published 0.1.7 VSIX](https://open-vsx.org/api/kith-coord/kith/0.1.7/file/kith-coord.kith-0.1.7.vsix) and select it through **Extensions → Install from VSIX**.
 
 Open a trusted local Git workspace with Node.js **22.13+ on 22.x or 24+** installed. Kith detects Node automatically; **Kith: Node Path** in user settings can select a different installation.
 

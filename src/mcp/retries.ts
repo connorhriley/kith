@@ -44,7 +44,9 @@ export function classifyResult(data: Data): Data {
 
 export function toolReply(data: Data, footer: CallToolResult['content'] = []): CallToolResult {
   data = classifyResult(data);
-  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }, ...footer], structuredContent: data, isError: data.ok === false };
+  // Lossless compact JSON: text-only clients retain every field and string byte,
+  // while structured clients keep the same object. No summary or extra tool call.
+  return { content: [{ type: 'text', text: JSON.stringify(data) }, ...footer], structuredContent: data, isError: data.ok === false };
 }
 
 interface OperationRow {

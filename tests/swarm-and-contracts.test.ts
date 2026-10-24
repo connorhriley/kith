@@ -154,33 +154,33 @@ describe('Cross-agent DAG task queue & worktree handoff', () => {
 
 describe('Multi-repo tsconfig.json contract linking & drift warnings', () => {
   it('links sibling repo contracts via tsconfig.json paths without mutating the sibling repo and warns on mismatch or drift', () => {
-    const intelligenceRoot = createRepo('intelligence');
-    const frontendRoot = createRepo('atlas-frontend');
+    const providerRoot = createRepo('service-package');
+    const frontendRoot = createRepo('web-client');
 
-    const contractRel = 'workers/contracts/atlasInvestigation.ts';
-    const contractAbs = path.join(intelligenceRoot, contractRel);
+    const contractRel = 'workers/contracts/publicApi.ts';
+    const contractAbs = path.join(providerRoot, contractRel);
     fs.mkdirSync(path.dirname(contractAbs), { recursive: true });
     fs.writeFileSync(
       contractAbs,
       [
-        'export const ATLAS_INVESTIGATION_VERSION = "2.0.0";',
-        'export interface AtlasDossier { id: string; title: string; }',
-        'export function fetchDossier(id: string): Promise<AtlasDossier> { return Promise.resolve({ id, title: "ok" }); }',
+        'export const API_VERSION = "2.0.0";',
+        'export interface PublicRecord { id: string; title: string; }',
+        'export function fetchDossier(id: string): Promise<PublicRecord> { return Promise.resolve({ id, title: "ok" }); }',
       ].join('\n') + '\n'
     );
-    git(intelligenceRoot, 'add', '.');
-    git(intelligenceRoot, 'commit', '-qm', 'Add investigation contract');
+    git(providerRoot, 'add', '.');
+    git(providerRoot, 'commit', '-qm', 'Add investigation contract');
 
-    // Write tsconfig.json with JSONC comments and trailing commas in atlas-frontend
+    // Write tsconfig.json with JSONC comments and trailing commas in web-client
     fs.writeFileSync(
       path.join(frontendRoot, 'tsconfig.json'),
       `{
-        // Cross-repo contract links into sibling intelligence repo
+        // Cross-repo contract links into sibling service-package repo
         "compilerOptions": {
           "baseUrl": ".",
           "paths": {
             "@/*": ["./src/*"],
-            "@atlas-contract": ["../intelligence/workers/contracts/atlasInvestigation.ts"],
+            "@public-api": ["../service-package/workers/contracts/publicApi.ts"],
           },
         },
       }\n`
@@ -188,19 +188,19 @@ describe('Multi-repo tsconfig.json contract linking & drift warnings', () => {
     git(frontendRoot, 'add', '.');
     git(frontendRoot, 'commit', '-qm', 'Configure tsconfig paths');
 
-    // Inspecting frontend contracts must NOT initialize .coord in intelligence
+    // Inspecting frontend contracts must NOT initialize .coord in service-package
     const report = inspectWorkspaceContracts(frontendRoot);
-    expect(fs.existsSync(path.join(intelligenceRoot, '.coord'))).toBe(false);
+    expect(fs.existsSync(path.join(providerRoot, '.coord'))).toBe(false);
     expect(report.linkedContracts).toHaveLength(1);
     expect(report.linkedContracts[0]).toMatchObject({
-      alias: '@atlas-contract',
-      sourceRepoName: 'intelligence',
+      alias: '@public-api',
+      sourceRepoName: 'service-package',
       filePath: contractRel,
       dirtyInCheckout: false,
       lockedByAgent: null,
     });
     expect(report.linkedContracts[0].symbols.map((s) => s.symbolName)).toEqual(
-      expect.arrayContaining(['ATLAS_INVESTIGATION_VERSION', 'AtlasDossier', 'fetchDossier'])
+      expect.arrayContaining(['API_VERSION', 'PublicRecord', 'fetchDossier'])
     );
 
     // Frontend agent begins work in an isolated worktree and receives linkedContracts
@@ -214,14 +214,14 @@ describe('Multi-repo tsconfig.json contract linking & drift warnings', () => {
     });
     expect(begun.ok).toBe(true);
     expect(begun.linkedContracts).toHaveLength(1);
-    expect(begun.linkedContracts[0].alias).toBe('@atlas-contract');
+    expect(begun.linkedContracts[0].alias).toBe('@public-api');
 
-    // Editing a file that imports a non-existent symbol from @atlas-contract triggers a mismatch warning
+    // Editing a file that imports a non-existent symbol from @public-api triggers a mismatch warning
     const consumerRel = 'src/consumer.ts';
     const consumerAbs = path.join(begun.worktree!.worktreePath, consumerRel);
     fs.writeFileSync(
       consumerAbs,
-      `import { fetchDossier, NonExistentContractSymbol } from '@atlas-contract';\nexport const run = () => fetchDossier('1');\n`
+      `import { fetchDossier, NonExistentContractSymbol } from '@public-api';\nexport const run = () => fetchDossier('1');\n`
     );
     const editRes = frontendEngine.processPostFileEdit({
       agentId: 'fe-agent',
@@ -229,8 +229,8 @@ describe('Multi-repo tsconfig.json contract linking & drift warnings', () => {
     });
     expect(editRes.warnings.some((w) => w.includes('[CROSS-REPO CONTRACT MISMATCH]') && w.includes('NonExistentContractSymbol'))).toBe(true);
 
-    // Now a sibling agent in intelligence claims the contract and modifies it in an isolated worktree
-    const intelEngine = openEngine(intelligenceRoot);
+    // Now a sibling agent in service-package claims the contract and modifies it in an isolated worktree
+    const intelEngine = openEngine(providerRoot);
     intelEngine.fencing.registerAgent({ id: 'intel-agent', client: 'codex' });
     const intelWork = intelEngine.beginWork({
       agentId: 'intel-agent',
@@ -243,8 +243,8 @@ describe('Multi-repo tsconfig.json contract linking & drift warnings', () => {
     fs.writeFileSync(
       path.join(intelWork.worktree!.worktreePath, contractRel),
       [
-        'export const ATLAS_INVESTIGATION_VERSION = "3.0.0";',
-        'export interface AtlasDossier { id: string; title: string; version: number; }',
+        'export const API_VERSION = "3.0.0";',
+        'export interface PublicRecord { id: string; title: string; version: number; }',
       ].join('\n') + '\n'
     );
 

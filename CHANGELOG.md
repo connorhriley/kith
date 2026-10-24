@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.7 — 2026-10-24
+
+- Retain the bundled setup runtime outside temporary npx caches, verify MCP discovery, and preserve existing client settings, custom launchers and original-byte recovery backups. Clarify actual tasks, claims, resource waits and verification results in the read-only coordination view.
+- Serialize MCP text replies as lossless compact JSON, retaining structured data, literal command output, warnings, capabilities and retry/recovery fields. No summarizer, extra calls or dependencies.
+- Validate repository, branch, ownership, cleanliness and base before reusing a task worktree. Roll back queue/claim mutations when handoff fails; never remove partial or unfinished directories.
+- Bound advisory cross-repository inspection, require tracked files in a distinct Git repository, omit source initializers, resolve concrete wildcard imports, and report partial/unavailable observations without failing successful claims. Unsupported inherited configuration and re-exports defer to normal project verification.
+- Reject stale workspace scans, generate task prompts for selected Git checkouts, and retain only user-selected recent workspaces. Remove personal workspace defaults and automatic home-directory crawling. No new dependency or storage migration.
+
 ## 0.1.6 — 2026-10-23
 
 - Add optional MCP operation keys with a capability-bound durable result journal in the existing database. Lost replies replay without repeating mutations; concurrent duplicates report in-progress, and interrupted/unrecorded outcomes refuse automatic re-execution. Historical replies never revive expired/completed sessions or authorize a replacement generation.

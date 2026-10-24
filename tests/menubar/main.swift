@@ -47,3 +47,14 @@ precondition(coordinationHeadline(tasks: 0, sessions: 0).contains("Watching only
 precondition(coordinationHeadline(tasks: 0, sessions: 1).contains("no task started"))
 precondition(coordinationTitle(["available": true, "working": [["title": "Task"]]], available: true) == "Kith · 1 task")
 precondition(coordinationTitle(["available": true, "attention": [["message": "Check failed"]]], available: true) == "Kith · needs attention")
+
+var selection = RadarSelection()
+selection.select("/tmp/project-a")
+let old = selection.revision
+selection.select("/tmp/project-b")
+precondition(!selection.accepts(old), "An old scan must not relabel a new workspace")
+let current = selection.revision
+precondition(selection.accepts(current))
+selection.select("/tmp/project-a")
+precondition(!selection.accepts(old), "Returning to A must not accept its old scan")
+print("Workspace selection rejects late completions, including A -> B -> A.")

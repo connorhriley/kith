@@ -18,7 +18,9 @@ export interface LinkedWorkspaceContract {
     signature: string;
     astHash: string;
   }>;
-  dirtyInCheckout: boolean;
+  dirtyInCheckout: boolean | null;
+  exportsComplete: boolean;
+  ownershipAvailable: boolean;
   lockedByAgent: string | null;
   activeWorktreeDrifts: Array<{
     agentId: string;
@@ -31,6 +33,7 @@ export interface LinkedWorkspaceContract {
 export interface WorkspaceContractReport {
   linkedContracts: LinkedWorkspaceContract[];
   warnings: string[];
+  complete: boolean;
 }
 
 export interface SwarmPrompts {
@@ -39,7 +42,9 @@ export interface SwarmPrompts {
 }
 
 export function buildSwarmPrompts(repoRoot: string): SwarmPrompts {
-  const cleanRoot = physicalPath(repoRoot);
+  const layout = discoverRepository(repoRoot);
+  if (!layout.commonGitDir) throw new Error('Select a Git checkout for task prompts, not a parent workspace.');
+  const cleanRoot = layout.checkoutRoot;
   return {
     architect: `Use Kith on repository ${cleanRoot} to plan parallel multi-agent work:
 1. Call kith_start_session with a unique agentId (e.g. "architect-1") and repository "${cleanRoot}".
@@ -118,359 +123,167 @@ export function parseJsoncObject(raw: string): Record<string, unknown> | null {
   }
 }
 
-function primaryRepositoryRoot(repoRoot: string): string {
+
+// Advisory work is bounded independently of a repository's size. Never return source
+// initializers: callers can inspect an explicitly selected repository themselves.
+const MAX_SOURCE_BYTES = 64 * 1024;
+const MAX_REPLY_BYTES = 16 * 1024;
+const MAX_LINKS = 8;
+const MAX_SYMBOLS = 64;
+function git(root: string, ...args: string[]): string {
+  return execFileSync('git', ['-c', 'core.fsmonitor=false', ...args], {
+    cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 2000, maxBuffer: MAX_SOURCE_BYTES, env: {...process.env, GIT_OPTIONAL_LOCKS: '0'},
+  }).trim();
+}
+function readBounded(file: string): string {
+  const fd = fs.openSync(file, 'r');
   try {
-    const layout = discoverRepository(repoRoot);
-    if (layout.commonGitDir && path.basename(layout.commonGitDir) === '.git') {
-      return physicalPath(path.dirname(layout.commonGitDir));
-    }
-    return layout.checkoutRoot;
-  } catch {
-    return physicalPath(repoRoot);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_SOURCE_BYTES) throw new Error('Contract/config file exceeds inspection limit or is not a regular file');
+    const bytes = Buffer.alloc(MAX_SOURCE_BYTES + 1);
+    const size = fs.readSync(fd, bytes, 0, bytes.length, 0);
+    if (size > MAX_SOURCE_BYTES) throw new Error('Contract/config file exceeds inspection limit');
+    return bytes.subarray(0, size).toString('utf8');
+  } finally { fs.closeSync(fd); }
+}
+function resolveFile(base: string): string | undefined {
+  for (const name of [base, `${base}.ts`, `${base}.tsx`, `${base}.d.ts`, `${base}.js`, `${base}.jsx`, path.join(base, 'index.ts'), path.join(base, 'index.js')]) {
+    if (fs.existsSync(name) && fs.statSync(name).isFile()) return physicalPath(name);
   }
 }
 
-function resolveCandidateContractFiles(baseDirs: string[], rawTarget: string): string[] {
-  const cleanedTarget = rawTarget.replace(/\/?\*$/, '');
-  const hasWildcard = rawTarget.includes('*');
-
-  for (const baseDir of baseDirs) {
-    const candidateBase = path.resolve(baseDir, cleanedTarget);
-    if (hasWildcard) {
-      if (fs.existsSync(candidateBase) && fs.statSync(candidateBase).isDirectory()) {
-        const files: string[] = [];
-        for (const entry of fs.readdirSync(candidateBase, { withFileTypes: true })) {
-          if (
-            entry.isFile() &&
-            /\.(ts|tsx|js|jsx|mjs)$/.test(entry.name) &&
-            !entry.name.endsWith('.test.ts') &&
-            !entry.name.endsWith('.spec.ts')
-          ) {
-            files.push(physicalPath(path.join(candidateBase, entry.name)));
-            if (files.length >= 20) break;
-          }
-        }
-        if (files.length > 0) return files;
-      }
-      continue;
-    }
-
-    const candidates = [
-      candidateBase,
-      `${candidateBase}.ts`,
-      `${candidateBase}.tsx`,
-      `${candidateBase}.d.ts`,
-      `${candidateBase}.js`,
-      path.join(candidateBase, 'index.ts'),
-      path.join(candidateBase, 'index.tsx'),
-    ];
-    for (const candidate of candidates) {
-      try {
-        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-          return [physicalPath(candidate)];
-        }
-      } catch {
-        // Ignore inaccessible paths
-      }
-    }
-  }
-  return [];
-}
-
-function isFileDirtyInGit(checkoutRoot: string, relFilePath: string): boolean {
+/** Inspect explicit local TS/JS path aliases, never arbitrary directories or a global file crawl.
+ * Wildcards are resolved against concrete imports at edit time, not unioned across a folder.
+ * This is advisory static inspection, not a compiler or a cross-language compatibility verdict.
+ */
+export function inspectWorkspaceContracts(repoRoot: string, worktreeDir?: string, imports?: string[]): WorkspaceContractReport {
+  const report: WorkspaceContractReport = {linkedContracts: [], warnings: [], complete: true};
+  const unavailable = (detail: string) => {
+    report.complete = false;
+    if (report.warnings.length < 8) report.warnings.push(`[CROSS-REPO UNAVAILABLE] ${detail.slice(0, 300)}`);
+  };
   try {
-    const out = execFileSync(
-      'git',
-      ['-c', 'core.fsmonitor=false', 'status', '--porcelain=v1', '--', relFilePath],
-      {
-        cwd: checkoutRoot,
-        encoding: 'utf8',
-        timeout: 2000,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+    const layout = discoverRepository(worktreeDir ?? repoRoot);
+    if (!layout.commonGitDir) return report;
+    const activeRoot = layout.checkoutRoot;
+    let config: Record<string, unknown> | null = null;
+    for (const name of ['tsconfig.json', 'jsconfig.json']) {
+      const file = path.join(activeRoot, name);
+      if (!fs.existsSync(file)) continue;
+      repositoryFile(activeRoot, file); // Refuse config symlinks outside the checkout.
+      config = parseJsoncObject(readBounded(file));
+      if (!config) unavailable(`Cannot parse ${name}; aliases were not inspected.`);
+      break;
+    }
+    if (!config) return report;
+    const options = config.compilerOptions as {baseUrl?: unknown; paths?: Record<string, unknown>} | undefined;
+    if (config.extends || config.references) { unavailable('Inherited/referenced configuration is not inspected; use your normal compiler checks.'); return report; }
+    if (!options?.paths || typeof options.paths !== 'object') return report;
+    const caller = discoverRepository(repoRoot);
+    if (caller.commonGitDir !== layout.commonGitDir) { unavailable('Worktree repository identity differs from the caller.'); return report; }
+    const bases = [...new Set([activeRoot, caller.checkoutRoot])].map(root => path.resolve(root, typeof options.baseUrl === 'string' ? options.baseUrl : '.'));
+    let symbolBudget = MAX_SYMBOLS;
+    const aliases = Object.entries(options.paths).sort(([a], [b]) => b.length - a.length);
+    if (aliases.length > 32) unavailable('Alias limit reached; inspection is partial.');
+    const externalTargets = (targets: unknown) => Array.isArray(targets) && targets.slice(0, 8).some(target => typeof target === 'string' && !isWithin(caller.checkoutRoot, physicalPath(path.resolve(bases[bases.length - 1], target.replace('*', '')))));
+    const selected = imports ? [...new Set(imports)].slice(0, 32) : aliases.slice(0, 32).filter(([a]) => !a.includes('*')).map(([a]) => a);
+    if (imports && imports.length > 32) unavailable('Import limit reached; inspection is partial.');
+    if (!imports && aliases.some(([a, targets]) => a.includes('*') && externalTargets(targets))) unavailable('Wildcard aliases are checked for concrete imports after edits; not enumerated by status.');
+    for (const specifier of selected) {
+      const match = aliases.slice(0, 32).find(([alias]) => {
+        if (!alias.includes('*')) return alias === specifier;
+        const [prefix, suffix, extra] = alias.split('*');
+        return extra === undefined && specifier.startsWith(prefix) && specifier.endsWith(suffix) && specifier.length >= prefix.length + suffix.length;
+      });
+      if (!match || !Array.isArray(match[1])) continue;
+      const [alias, targets] = match;
+      if (!externalTargets(targets)) continue;
+      const star = alias.indexOf('*');
+      const substitution = star < 0 ? '' : specifier.slice(star, specifier.length - (alias.length - star - 1));
+      if (substitution.split(/[\\/]/).some(part => part === '..')) { unavailable('Alias traversal was not inspected.'); continue; }
+      let externalFile: string | undefined;
+      for (const target of targets.slice(0, 8)) {
+        if (typeof target !== 'string' || (target.match(/\*/g)?.length ?? 0) > 1) continue;
+        for (const base of bases) { externalFile = resolveFile(path.resolve(base, target.replace('*', substitution))); if (externalFile) break; }
+        if (externalFile) break;
       }
-    );
-    return out.trim().length > 0;
-  } catch {
-    return false;
-  }
+      if (!externalFile) { unavailable(`Cannot resolve '${specifier}'; no compatibility verdict available.`); continue; }
+      if (isWithin(activeRoot, externalFile)) continue;
+      const sibling = discoverRepository(path.dirname(externalFile));
+      if (!sibling.commonGitDir || sibling.commonGitDir === layout.commonGitDir) {
+        unavailable(`'${specifier}' does not select a separate Git repository; no external source was read.`); continue;
+      }
+      const siblingRoot = sibling.checkoutRoot;
+      const relative = repositoryFile(siblingRoot, externalFile);
+      // Untracked/private files and aliases escaping the discovered checkout are not contracts.
+      git(siblingRoot, 'ls-files', '--error-unmatch', '--', relative);
+      if (report.linkedContracts.length >= MAX_LINKS || symbolBudget <= 0) { unavailable('Contract/symbol limit reached; inspection is partial.'); break; }
+      const content = readBounded(externalFile);
+      const extracted = AstAnalyzer.extractExports(content);
+      const symbols = extracted.slice(0, symbolBudget).map(s => ({
+        symbolName: s.symbolName.slice(0, 128), kind: s.kind,
+        signature: `${s.kind} ${s.symbolName}`.slice(0, 160), astHash: s.astHash,
+      }));
+      symbolBudget -= symbols.length;
+      const exportsComplete = extracted.length === symbols.length && !/export\s+(?:\*|\{)/.test(content);
+      if (!exportsComplete) unavailable(`'${specifier}' exports are partial or re-exported; missing-export checks are unavailable.`);
+      let dirtyInCheckout: boolean | null = null;
+      try { dirtyInCheckout = Boolean(git(siblingRoot, 'status', '--porcelain=v1', '--', relative)); }
+      catch { unavailable(`'${specifier}' Git status is unavailable.`); }
+      const state = readCoordinationState(siblingRoot, {coordinationOnly: true});
+      const ownershipAvailable = state.state === 'missing' || state.state === 'ready' && state.schemaVersion === 3 && !state.truncated;
+      if (!ownershipAvailable) unavailable(`'${specifier}' sibling ownership is unavailable or partial; inspect its stopped state before recovery.`);
+      const agents = state.state === 'ready' ? state.agents.filter(a => a.status === 'active' && a.lease_expires_at > state.observedAt && state.sessionEpochs[a.id] !== undefined) : [];
+      const locked = state.locks.find(l => agents.some(a => a.id === l.owner_agent_id) && Number(l.expires_at) > state.observedAt && Number(l.fencing_token) >= state.sessionEpochs[String(l.owner_agent_id)] && LockEngine.patternsOverlap(relative, String(l.pattern)));
+      const drifts: LinkedWorkspaceContract['activeWorktreeDrifts'] = [];
+      for (const agent of agents.slice(0, 8)) {
+        if (!agent.worktree_path || physicalPath(agent.worktree_path) === siblingRoot) continue;
+        try {
+          const wt = discoverRepository(agent.worktree_path);
+          if (wt.checkoutRoot !== physicalPath(agent.worktree_path) || wt.commonGitDir !== sibling.commonGitDir) throw new Error('Worktree identity changed');
+          const file = path.join(wt.checkoutRoot, relative);
+          repositoryFile(wt.checkoutRoot, file);
+          const current = AstAnalyzer.extractExports(readBounded(file));
+          const original = new Map(extracted.map(s => [s.symbolName, s.astHash]));
+          const updated = new Map(current.map(s => [s.symbolName, s.astHash]));
+          const changed = [...updated].filter(([name, hash]) => original.get(name) !== hash).map(([name]) => name);
+          const removed = [...original.keys()].filter(name => !updated.has(name));
+          if (changed.length || removed.length) drifts.push({agentId: agent.id, worktreePath: wt.checkoutRoot, changedSymbols: changed.slice(0, 16), removedSymbols: removed.slice(0, 16)});
+          if (changed.length > 16 || removed.length > 16) unavailable(`'${specifier}' drift detail is partial.`);
+        } catch { unavailable(`'${specifier}' recorded worktree is unavailable; drift has not been verified.`); }
+      }
+      if (agents.length > 8) unavailable(`'${specifier}' owner/worktree inspection limit reached.`);
+      const link: LinkedWorkspaceContract = {alias: specifier, sourceRepo: siblingRoot, sourceRepoName: path.basename(siblingRoot), filePath: relative, absolutePath: externalFile, symbols, exportsComplete, ownershipAvailable, dirtyInCheckout, lockedByAgent: locked ? String(locked.owner_agent_id) : null, activeWorktreeDrifts: drifts};
+      report.linkedContracts.push(link);
+      if (Buffer.byteLength(JSON.stringify(report)) > MAX_REPLY_BYTES - 3000) {
+        report.linkedContracts.pop(); unavailable('Reply byte limit reached; inspection is partial.'); break;
+      }
+      if (locked) report.warnings.push(`[CROSS-REPO ACTIVE LOCK] '${specifier}' is claimed by '${locked.owner_agent_id}'.`.slice(0, 300));
+      if (dirtyInCheckout) report.warnings.push(`[CROSS-REPO CONTRACT DRIFT] '${specifier}' has uncommitted changes.`.slice(0, 300));
+      for (const drift of drifts) report.warnings.push(`[CROSS-REPO WORKTREE DRIFT] '${specifier}' has unmerged signature changes in '${drift.agentId}'.`.slice(0, 300));
+      if (report.warnings.length > 8) { report.warnings = report.warnings.slice(0, 7); unavailable('Warning limit reached; inspection is partial.'); }
+    }
+  } catch { unavailable('Contract inspection could not finish; existing claims/work remain valid. Use normal project verification.'); }
+  return report;
 }
 
-/**
- * Resolves cross-repository contracts referenced via tsconfig.json / jsconfig.json `compilerOptions.paths`
- * without mutating or initializing any sibling repository state.
- */
-export function inspectWorkspaceContracts(
-  repoRoot: string,
-  worktreeDir?: string
-): WorkspaceContractReport {
-  const primaryRoot = primaryRepositoryRoot(repoRoot);
-  const activeRoot = worktreeDir ? physicalPath(worktreeDir) : physicalPath(repoRoot);
-  const configSearchRoots = activeRoot !== primaryRoot ? [activeRoot, primaryRoot] : [primaryRoot];
-  const configNames = ['tsconfig.json', 'tsconfig.base.json', 'tsconfig.app.json', 'jsconfig.json'];
-
-  const pathMappings = new Map<string, string[]>();
-  let baseUrlRel = '.';
-
-  for (const root of configSearchRoots) {
-    for (const cfgName of configNames) {
-      const cfgPath = path.join(root, cfgName);
-      if (!fs.existsSync(cfgPath)) continue;
-      try {
-        const parsed = parseJsoncObject(fs.readFileSync(cfgPath, 'utf8'));
-        const compilerOptions =
-          parsed?.compilerOptions && typeof parsed.compilerOptions === 'object'
-            ? (parsed.compilerOptions as Record<string, unknown>)
-            : undefined;
-        if (!compilerOptions) continue;
-        if (typeof compilerOptions.baseUrl === 'string') {
-          baseUrlRel = compilerOptions.baseUrl;
-        }
-        const pathsObj =
-          compilerOptions.paths && typeof compilerOptions.paths === 'object'
-            ? (compilerOptions.paths as Record<string, unknown>)
-            : undefined;
-        if (!pathsObj) continue;
-        for (const [alias, targets] of Object.entries(pathsObj)) {
-          if (!Array.isArray(targets)) continue;
-          const stringTargets = targets.filter((t): t is string => typeof t === 'string');
-          if (stringTargets.length > 0 && !pathMappings.has(alias)) {
-            pathMappings.set(alias, stringTargets);
-          }
-        }
-      } catch {
-        // Ignore unreadable config
-      }
-    }
-    if (pathMappings.size > 0) break;
-  }
-
-  if (pathMappings.size === 0) {
-    return { linkedContracts: [], warnings: [] };
-  }
-
-  const baseDirs = configSearchRoots.map((r) => path.resolve(r, baseUrlRel));
-  const siblingStateCache = new Map<string, ReturnType<typeof readCoordinationState>>();
-  const linkedContracts: LinkedWorkspaceContract[] = [];
-  const warnings: string[] = [];
-  const seenTargets = new Set<string>();
-
-  for (const [alias, rawTargets] of pathMappings.entries()) {
-    for (const rawTarget of rawTargets) {
-      const resolvedFiles = resolveCandidateContractFiles(baseDirs, rawTarget);
-      for (const externalFile of resolvedFiles) {
-        if (isWithin(primaryRoot, externalFile) || isWithin(activeRoot, externalFile)) {
-          continue; // Internal path alias, not cross-repo
-        }
-        const dedupeKey = `${alias}::${externalFile}`;
-        if (seenTargets.has(dedupeKey)) continue;
-        seenTargets.add(dedupeKey);
-
-        let siblingRoot: string;
-        let relFilePath: string;
-        try {
-          const layout = discoverRepository(path.dirname(externalFile));
-          siblingRoot =
-            layout.commonGitDir && path.basename(layout.commonGitDir) === '.git'
-              ? physicalPath(path.dirname(layout.commonGitDir))
-              : layout.checkoutRoot;
-          relFilePath = repositoryFile(siblingRoot, externalFile);
-        } catch {
-          siblingRoot = path.dirname(externalFile);
-          relFilePath = path.basename(externalFile);
-        }
-
-        const siblingRepoName = path.basename(siblingRoot);
-        let content = '';
-        try {
-          content = fs.readFileSync(externalFile, 'utf8');
-        } catch {
-          continue;
-        }
-
-        const extracted = AstAnalyzer.extractExports(content);
-        const symbols = extracted.map((s) => ({
-          symbolName: s.symbolName,
-          kind: s.kind,
-          signature: s.signature,
-          astHash: s.astHash,
-        }));
-
-        const dirtyInCheckout = isFileDirtyInGit(siblingRoot, relFilePath);
-        let lockedByAgent: string | null = null;
-        const activeWorktreeDrifts: LinkedWorkspaceContract['activeWorktreeDrifts'] = [];
-
-        let siblingState = siblingStateCache.get(siblingRoot);
-        if (!siblingState) {
-          siblingState = readCoordinationState(siblingRoot, { coordinationOnly: true });
-          siblingStateCache.set(siblingRoot, siblingState);
-        }
-
-        if (siblingState.state === 'ready') {
-          const activeAgents = siblingState.agents.filter(
-            (a) =>
-              a.status === 'active' &&
-              Number.isFinite(a.lease_expires_at) &&
-              a.lease_expires_at > siblingState.observedAt &&
-              siblingState.sessionEpochs[a.id] !== undefined
-          );
-          const activeAgentById = new Map(activeAgents.map((a) => [a.id, a]));
-
-          for (const lock of siblingState.locks) {
-            const ownerId = String(lock.owner_agent_id ?? '');
-            const owner = activeAgentById.get(ownerId);
-            if (!owner) continue;
-            if (Number(lock.expires_at) <= siblingState.observedAt) continue;
-            if (Number(lock.fencing_token) < siblingState.sessionEpochs[ownerId]) continue;
-            if (LockEngine.patternsOverlap(relFilePath, String(lock.pattern))) {
-              lockedByAgent = ownerId;
-              break;
-            }
-          }
-
-          const baseSymbolMap = new Map(symbols.map((s) => [s.symbolName, s.astHash]));
-          for (const agent of activeAgents) {
-            if (!agent.worktree_path || physicalPath(agent.worktree_path) === siblingRoot) continue;
-            const wtFile = path.join(agent.worktree_path, relFilePath);
-            if (!fs.existsSync(wtFile)) continue;
-            try {
-              const wtContent = fs.readFileSync(wtFile, 'utf8');
-              if (wtContent === content) continue;
-              const wtSymbols = AstAnalyzer.extractExports(wtContent);
-              const wtSymbolMap = new Map(wtSymbols.map((s) => [s.symbolName, s.astHash]));
-              const changedSymbols: string[] = [];
-              const removedSymbols: string[] = [];
-
-              for (const [symName, baseHash] of baseSymbolMap.entries()) {
-                const wtHash = wtSymbolMap.get(symName);
-                if (!wtHash) removedSymbols.push(symName);
-                else if (wtHash !== baseHash) changedSymbols.push(symName);
-              }
-              for (const [symName] of wtSymbolMap.entries()) {
-                if (!baseSymbolMap.has(symName)) changedSymbols.push(symName);
-              }
-
-              if (changedSymbols.length > 0 || removedSymbols.length > 0) {
-                activeWorktreeDrifts.push({
-                  agentId: agent.id,
-                  worktreePath: agent.worktree_path,
-                  changedSymbols,
-                  removedSymbols,
-                });
-              }
-            } catch {
-              // Ignore unreadable worktree file
-            }
-          }
-        }
-
-        linkedContracts.push({
-          alias,
-          sourceRepo: siblingRoot,
-          sourceRepoName: siblingRepoName,
-          filePath: relFilePath,
-          absolutePath: externalFile,
-          symbols,
-          dirtyInCheckout,
-          lockedByAgent,
-          activeWorktreeDrifts,
-        });
-
-        if (lockedByAgent) {
-          warnings.push(
-            `[CROSS-REPO ACTIVE LOCK] Linked contract '${alias}' (${siblingRepoName}/${relFilePath}) is actively claimed by agent '${lockedByAgent}' in sibling repository '${siblingRepoName}'.`
-          );
-        }
-        if (dirtyInCheckout) {
-          warnings.push(
-            `[CROSS-REPO CONTRACT DRIFT] Linked contract '${alias}' (${siblingRepoName}/${relFilePath}) has uncommitted modifications in sibling repository '${siblingRepoName}'.`
-          );
-        }
-        for (const drift of activeWorktreeDrifts) {
-          const detail = [
-            drift.changedSymbols.length ? `modified: ${drift.changedSymbols.join(', ')}` : '',
-            drift.removedSymbols.length ? `removed: ${drift.removedSymbols.join(', ')}` : '',
-          ]
-            .filter(Boolean)
-            .join('; ');
-          warnings.push(
-            `[CROSS-REPO WORKTREE DRIFT] Linked contract '${alias}' (${siblingRepoName}/${relFilePath}) has unmerged signature changes in sibling agent '${drift.agentId}' worktree (${detail}).`
-          );
-        }
-      }
+export function verifyCrossRepoImportsForFile(params: {repoRoot: string; worktreeDir?: string; filePath: string; content: string}): string[] {
+  if (Buffer.byteLength(params.content) > MAX_SOURCE_BYTES) return ['[CROSS-REPO UNAVAILABLE] Edited file exceeds inspection limit; use normal project verification.'];
+  const imports = AstAnalyzer.extractImports(params.worktreeDir ?? params.repoRoot, params.filePath, params.content);
+  const report = inspectWorkspaceContracts(params.repoRoot, params.worktreeDir, imports.map(i => i.rawSpecifier));
+  const warnings = [...report.warnings];
+  const namedImports = [...params.content.matchAll(/import\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]/g)];
+  for (const imp of namedImports.slice(0, 32)) {
+    const link = report.linkedContracts.find(l => l.alias === imp[2]);
+    if (!link?.exportsComplete) continue;
+    const exported = new Set(link.symbols.map(s => s.symbolName));
+    for (const binding of imp[1].split(',')) {
+      const symbol = binding.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0];
+      if (!symbol || exported.has(symbol)) continue;
+      if (warnings.length >= 8) break;
+      warnings.push(`[CROSS-REPO CONTRACT MISMATCH] '${params.filePath.slice(0, 120)}' imports '${symbol.slice(0, 120)}' from '${imp[2].slice(0, 120)}', but that module has no such recorded export.`);
     }
   }
-
-  return { linkedContracts, warnings };
-}
-
-/**
- * Checks a modified source file's imports against linked cross-repo contracts (`tsconfig.json` `paths`),
- * returning actionable warnings if imported symbols do not exist or if the linked contract is drifting.
- */
-export function verifyCrossRepoImportsForFile(params: {
-  repoRoot: string;
-  worktreeDir?: string;
-  filePath: string;
-  content: string;
-}): string[] {
-  const report = inspectWorkspaceContracts(params.repoRoot, params.worktreeDir);
-  if (report.linkedContracts.length === 0) return [];
-
-  const imports = AstAnalyzer.extractImports(
-    params.worktreeDir ?? params.repoRoot,
-    params.filePath,
-    params.content
-  );
-  if (imports.length === 0) return [];
-
-  const warnings: string[] = [];
-  for (const imp of imports) {
-    if (imp.rawSpecifier.startsWith('.')) continue;
-    const matchedLinks = report.linkedContracts.filter((link) => {
-      if (link.alias === imp.rawSpecifier) return true;
-      if (link.alias.endsWith('/*')) {
-        const prefix = link.alias.slice(0, -1);
-        return imp.rawSpecifier.startsWith(prefix);
-      }
-      return false;
-    });
-    if (matchedLinks.length === 0) continue;
-
-    const exportedNames = new Set(
-      matchedLinks.flatMap((l) => l.symbols.map((s) => s.symbolName))
-    );
-
-    for (const sym of imp.importedSymbols) {
-      if (!sym || sym === '*' || sym.startsWith('* as ')) continue;
-      if (!exportedNames.has(sym)) {
-        const targetLabel = matchedLinks
-          .map((l) => `${l.sourceRepoName}/${l.filePath}`)
-          .join(', ');
-        warnings.push(
-          `[CROSS-REPO CONTRACT MISMATCH] '${params.filePath}' imports '${sym}' from '${imp.rawSpecifier}' (${targetLabel}), but '${sym}' is not exported by that contract.`
-        );
-      }
-    }
-
-    for (const link of matchedLinks) {
-      if (link.lockedByAgent) {
-        warnings.push(
-          `[CROSS-REPO ACTIVE LOCK] '${params.filePath}' imports '${imp.rawSpecifier}' (${link.sourceRepoName}/${link.filePath}), which is currently locked by sibling agent '${link.lockedByAgent}'.`
-        );
-      }
-      if (link.dirtyInCheckout) {
-        warnings.push(
-          `[CROSS-REPO CONTRACT DRIFT] '${params.filePath}' imports '${imp.rawSpecifier}' (${link.sourceRepoName}/${link.filePath}), which has uncommitted changes in '${link.sourceRepoName}'.`
-        );
-      }
-      for (const drift of link.activeWorktreeDrifts) {
-        warnings.push(
-          `[CROSS-REPO WORKTREE DRIFT] '${params.filePath}' imports '${imp.rawSpecifier}' (${link.sourceRepoName}/${link.filePath}), which has unmerged signature changes in sibling agent '${drift.agentId}' worktree.`
-        );
-      }
-    }
-  }
-
-  return [...new Set(warnings)];
+  return warnings;
 }

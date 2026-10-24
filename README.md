@@ -47,14 +47,14 @@ Git recording and integration require a commit identity configured for the repos
 
 Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith). You can also search for `kith-coord.kith` in the editor's Extensions view.
 
-To select release **0.1.6** explicitly with an editor CLI already on your `PATH`:
+To select release **0.1.7** explicitly with an editor CLI already on your `PATH`:
 
 ```sh
-code --install-extension kith-coord.kith@0.1.6
-cursor --install-extension kith-coord.kith@0.1.6
+code --install-extension kith-coord.kith@0.1.7
+cursor --install-extension kith-coord.kith@0.1.7
 ```
 
-Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](extensions/editor/README.md#install) also links the published 0.1.6 VSIX.
+Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](extensions/editor/README.md#install) also links the published 0.1.7 VSIX.
 
 Open a trusted local Git checkout and approve Kith's MCP server through the editor. The extension bundles the coordination server, detects Node, and preserves existing MCP entries, hooks and tool permissions. **No global npm install is needed.** Each agent still needs to use Kith's tools; installing the extension does not enforce claims on other writers.
 
@@ -70,13 +70,13 @@ The [extension guide](extensions/editor/README.md) covers settings and existing 
 
 ### CLI and other MCP clients
 
-**On main, for the next release:** one command from your Git checkout configures supported detected clients and adds project instructions:
+One command from your Git checkout configures supported detected clients and adds project instructions:
 
 ```sh
-npx --yes --package kith-coord kith setup
+npx --yes --package kith-coord@0.1.7 kith setup
 ```
 
-The durable-setup behavior described here is not in published **0.1.6**. For that release, install `kith-coord@0.1.6` globally first, then run `kith setup` in the project. [Client setup](docs/integrations.md#configure-detected-local-clients) covers configuration scope and advanced options.
+Durable setup starts with **0.1.7**. Earlier versions need a persistent global npm installation before setup. [Client setup](docs/integrations.md#configure-detected-local-clients) covers configuration scope and advanced options.
 
 Setup retains an exact self-contained runtime outside npx's cache, checks its MCP discovery, and backs up changes before writing them. Existing custom Kith launchers, peer servers, hooks and permissions are preserved. From outside a Git checkout it configures global connections; pass a project path to add that project's guidance. Reconnect the client and approve its MCP server through the client's normal controls.
 

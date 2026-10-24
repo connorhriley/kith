@@ -233,3 +233,25 @@ it('atomically reserves one mutation when independent MCP processes race on the 
   }
   expect(engine.intents.listTasks()).toHaveLength(1);
 });
+
+
+it('keeps compact text-only and structured clients equivalent through refusal and keyed replay', async () => {
+  const {client} = await connect();
+  const args = {agentId: 'compact', operationKey: 'compact-grant', title: 'Preserve literal \n content', scopeGlobs: ['src/**']};
+  const first = await call(client, 'kith_begin_work', args);
+  const grant = data(first);
+  expect(grant.task.title).toBe(args.title);
+  expect(grant.task.scope_globs).toEqual(['src/**']);
+  const text = (first.content[0] as {text: string}).text;
+  const pretty = JSON.stringify(grant, null, 2);
+  expect(Buffer.byteLength(text)).toBeLessThan(Buffer.byteLength(pretty) * 0.85);
+  const replay = data(await call(client, 'kith_begin_work', args));
+  expect(replay.task).toEqual(grant.task); expect(replay.sessionToken).toBe(grant.sessionToken);
+  expect(replay.operation.replayed).toBe(true);
+  const denied = data(await call(client, 'kith_check_and_lock_files', {agentId: 'compact', sessionToken: 'forged', patterns: ['other/**']}));
+  expect(denied.failure.code).toBe('SESSION_OWNERSHIP'); expect(denied.failure.retryable).toBe(false);
+  const delta = [{type: 'text' as const, text: 'Recovery detail must survive unchanged: \nInspect before retry.'}];
+  const failure = toolReply({ok: false, error: 'partial effect', stdout: '  literal output\n', failure: {code: 'COMMAND_TIMEOUT', retryable: false}}, delta);
+  expect(JSON.parse((failure.content[0] as {text: string}).text)).toEqual(failure.structuredContent);
+  expect(failure.content[1]).toEqual(delta[0]); expect(failure.isError).toBe(true);
+});

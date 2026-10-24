@@ -69,6 +69,8 @@ export class PassiveConflictWatcher {
   private primaryRoots = new Map<string, string>();
   private worktrees: RadarWorktree[] = [];
   private linkedContracts: LinkedWorkspaceContract[] = [];
+  private contractWarnings: string[] = [];
+  private contractsComplete = true;
   private coordination: CoordinationView = {available:false,working:[],queued:[],sessions:0,sessionKeys:[],waiting:[],using:[],attention:[]};
 
   constructor(public readonly rootDir: string, private readonly options: {
@@ -231,9 +233,11 @@ export class PassiveConflictWatcher {
       sessions: views.reduce((n,v)=>n+v.sessions,0), sessionKeys: views.flatMap(v=>v.sessionKeys), working: views.flatMap(v=>v.working),
       queued: views.flatMap(v=>v.queued ?? []),
       waiting: views.flatMap(v=>v.waiting), using: views.flatMap(v=>v.using), attention: views.flatMap(v=>v.attention)};
-    this.linkedContracts = [...new Set(this.primaryRoots.values())].flatMap(root => {
-      try { return inspectWorkspaceContracts(root).linkedContracts; } catch { return []; }
-    });
+    const reports = [...new Set(this.primaryRoots.values())].slice(0, 8).map(root => inspectWorkspaceContracts(root));
+    this.linkedContracts = reports.flatMap(report => report.linkedContracts).slice(0, 8);
+    this.contractWarnings = [...new Set(reports.flatMap(report => report.warnings))].slice(0, 8);
+    this.contractsComplete = this.primaryRoots.size <= 8 && reports.every(report => report.complete) && reports.reduce((n, report) => n + report.linkedContracts.length, 0) <= 8;
+    if (!this.contractsComplete && this.contractWarnings.length === 0) this.contractWarnings.push('Cross-repository inspection is partial; use normal project verification.');
     if (this.errors.length) this.options.onScanError?.(this.errors);
     return this.getActiveCollisions();
   }
@@ -253,7 +257,7 @@ export class PassiveConflictWatcher {
     if (this.watchTimer) clearTimeout(this.watchTimer);
     this.watchTimer = null;
   }
-  public getScanState() { return { coordination: this.coordination, linkedContracts: [...this.linkedContracts], complete: this.errors.length === 0, errors: [...this.errors], repos: [...this.repositories.keys()], ownershipComplete: this.worktrees.every(row => row.activity !== 'unknown'), worktrees: this.worktrees.map(row => ({ ...row, agentIds: [...row.agentIds] })) }; }
+  public getScanState() { return { coordination: this.coordination, contractWarnings: [...this.contractWarnings], contractsComplete: this.contractsComplete, linkedContracts: [...this.linkedContracts], complete: this.errors.length === 0, errors: [...this.errors], repos: [...this.repositories.keys()], ownershipComplete: this.worktrees.every(row => row.activity !== 'unknown'), worktrees: this.worktrees.map(row => ({ ...row, agentIds: [...row.agentIds] })) }; }
   public getActiveCollisions(): CollisionAlert[] { return [...this.activeCollisions.values()]; }
   public getRecentEdits(): Array<{ key: string; repo: string; ageSec: number }> {
     const now = Date.now();

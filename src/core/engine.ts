@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { discoverRepository, physicalPath, isWithin } from './repository.js';
 import { waitForClaim } from './claim-wait.js';
 import { KITH_PROTOCOL_VERSION } from '../version.js';
 import { observeWorkspaces, previewIntegration } from './workspace-observation.js';
@@ -216,6 +218,7 @@ export class KithEngine {
       conflicts: this.shadowGit.listConflicts(), contracts: this.depGraph.listContracts(),
       linkedContracts: workspaceContracts.linkedContracts,
       crossRepoWarnings: workspaceContracts.warnings,
+      crossRepoComplete: workspaceContracts.complete,
       resources: this.broker.listResources(),
       mergeQueue: this.mergeTrain.listQueue(), quarantined: this.bashGuard.listQuarantined(),
       mutexWaiters: this.coordDb.db.prepare('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket').all(),
@@ -230,9 +233,12 @@ export class KithEngine {
   }
 
   public beginWork(params: Parameters<IntentAndTaskEngine['declareIntent']>[0] & { isolateWorktree?: boolean }) {
-    const intent = this.intents.declareIntent(params);
-    const worktree = intent.ok && params.isolateWorktree
-      ? this.worktrees.spawnWorktree({ agentId: params.agentId }) : null;
+    const { intent, worktree } = this.coordDb.withTransaction(() => {
+      const intent = this.intents.declareIntent(params);
+      const worktree = intent.ok && params.isolateWorktree
+        ? this.worktrees.spawnWorktree({ agentId: params.agentId }) : null;
+      return { intent, worktree };
+    });
     const workspaceContracts = inspectWorkspaceContracts(
       this.coordDb.repoRoot,
       worktree?.worktreePath ?? this.fencing.getAgent(params.agentId)?.worktree_path ?? undefined
@@ -242,27 +248,19 @@ export class KithEngine {
       worktree,
       linkedContracts: workspaceContracts.linkedContracts,
       crossRepoWarnings: workspaceContracts.warnings,
+      crossRepoComplete: workspaceContracts.complete,
     };
   }
 
   public claimNextTask(params: { agentId: string; isolateWorktree?: boolean }) {
-    const claimedRes = this.intents.claimNextTask(params.agentId);
-    let worktree = null;
-    if (claimedRes.claimed && params.isolateWorktree) {
-      const existing = this.fencing.getAgent(params.agentId);
-      if (existing?.worktree_path && fs.existsSync(existing.worktree_path)) {
-        worktree = {
-          agentId: params.agentId,
-          worktreePath: existing.worktree_path,
-          branch: existing.branch ?? `kith/${params.agentId}`,
-          hydrationMethod: 'none' as const,
-          hydratedDirs: [] as string[],
-          durationMs: 0,
-        };
-      } else {
-        worktree = this.worktrees.spawnWorktree({ agentId: params.agentId });
-      }
-    }
+    // SQL ownership changes roll back if the filesystem handoff fails. Never remove
+    // a partially created directory: it may contain recovery material or user work.
+    const { claimedRes, worktree } = this.coordDb.withTransaction(() => {
+      const claimedRes = this.intents.claimNextTask(params.agentId);
+      const worktree = claimedRes.claimed && params.isolateWorktree
+        ? this.claimWorktree(params.agentId) : null;
+      return { claimedRes, worktree };
+    });
     const publishedContracts = this.depGraph.listContracts().slice(0, 30);
     const workspaceContracts = inspectWorkspaceContracts(
       this.coordDb.repoRoot,
@@ -274,7 +272,36 @@ export class KithEngine {
       publishedContracts,
       linkedContracts: workspaceContracts.linkedContracts,
       crossRepoWarnings: workspaceContracts.warnings,
+      crossRepoComplete: workspaceContracts.complete,
     };
+  }
+
+  private claimWorktree(agentId: string) {
+    this.fencing.assertSession(agentId);
+    const agent = this.fencing.getAgent(agentId)!;
+    if (!agent.worktree_path) return this.worktrees.spawnWorktree({ agentId });
+    const root = physicalPath(agent.worktree_path);
+    const owner = discoverRepository(this.coordDb.repoRoot);
+    const layout = discoverRepository(root);
+    const git = (...args: string[]) => execFileSync('git', args, {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
+    }).trim();
+    if (!isWithin(physicalPath(path.join(this.coordDb.coordDir, 'worktrees')), root)
+      || !layout.isLinkedWorktree || layout.checkoutRoot !== root
+      || layout.commonGitDir !== owner.commonGitDir || !agent.branch
+      || git('symbolic-ref', '--short', 'HEAD') !== agent.branch
+      || !this.worktrees.listWorktrees().some(w => physicalPath(w.path) === root && w.branch === agent.branch)
+      || this.fencing.listAgents(true).some(a => a.id !== agentId && a.worktree_path && physicalPath(a.worktree_path) === root)) {
+      throw new Error('Saved worktree identity or ownership changed; inspect and preserve it before claiming another task.');
+    }
+    if (git('status', '--porcelain', '--untracked-files=normal')) {
+      throw new Error('Saved worktree has unfinished changes; preserve or finish them before claiming another task.');
+    }
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], {cwd: this.coordDb.repoRoot, encoding: 'utf8'}).trim();
+    if (git('rev-parse', 'HEAD') !== head) {
+      throw new Error('Saved worktree is ahead or behind the current checkout; integrate or replace it explicitly before claiming another task.');
+    }
+    return { agentId, worktreePath: root, branch: agent.branch, hydrationMethod: 'none' as const, hydratedDirs: [] as string[], durationMs: 0 };
   }
 
   public async claimNextTaskWhenAvailable(params: {

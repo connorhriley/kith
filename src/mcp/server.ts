@@ -161,6 +161,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
         publishedContracts: contracts,
         linkedContracts: intentRes.linkedContracts,
         crossRepoWarnings: intentRes.crossRepoWarnings,
+        crossRepoComplete: intentRes.crossRepoComplete,
       });
     }
   );
