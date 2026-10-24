@@ -48,7 +48,7 @@ test('VS Code registration uses the bundled server and observations create no pr
   assert.equal(f.events.registered.length,1);const r=f.events.registered[0];assert.equal(r.id,'kith.editor');
   const [d]=await r.provider.provideMcpServerDefinitions();assert.equal(d.command,fs.realpathSync(process.execPath));assert.deepEqual(d.args,[path.join(base,'server/launch.cjs'),'mcp']);
   assert.equal(f.api.getSnapshot().complete,true);assert.equal(fs.existsSync(path.join(f.root,'.coord/state.db')),false);
-  assert.match(f.events.output,/No Kith session/);assert.doesNotMatch(f.events.output,/Zero Conflicts/);
+  assert.match(f.events.output,/Watching only — no active Kith tasks/);assert.doesNotMatch(f.events.output,/Zero Conflicts/);
  }finally{await f.close();}
 });
 test('Cursor uses its native API, never writes MCP files, and removes only its own registration',async()=>{
@@ -77,7 +77,8 @@ test('preserves workspace-file MCP entries and refuses registration over malform
 });
 test('reports real differing worktree copies and clears resolved observations',async()=>{
  const f=await fixture({overlap:true});try{
-  assert.equal(f.api.getSnapshot().overlaps,1);assert.match(f.events.output,/Ownership unavailable/);assert.match(f.events.output,/not proven merge conflicts/);
+  assert.equal(f.api.getSnapshot().overlaps,1);assert.match(f.events.output,/Status unavailable or partial/);assert.match(f.events.output,/do not establish a merge conflict/);
+  assert.match(f.api.getSnapshot().details,/Ownership unavailable/);
   for(const root of [f.root,f.events.peer])fs.writeFileSync(path.join(root,'work.mjs'),'export const base = true;\n');
   await f.api.refresh();assert.equal(f.api.getSnapshot().overlaps,0);
  }finally{await f.close();}

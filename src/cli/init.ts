@@ -160,35 +160,7 @@ export function initializeKithRepository(
       json('.cursor/hooks.json', { ...config, version: 1, hooks });
     }
   }
-  if (selected.has('agents')) {
-    const file = path.join(absRoot, 'AGENTS.md');
-    let content = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '# Repository Agent Instructions\n';
-    const block = `<!-- KITH:START -->
-## Parallel Agent Coordination (kith)
-
-Instruction protocol: ${KITH_PROTOCOL_VERSION}.
-
-Use Kith MCP to claim work, isolate changes in worktrees, share local resources and verify integration. Keep one isolated worktree per parallel agent and keep the owning MCP connection open.
-
-1. Select the absolute Git repository path for this task. Include \`repository\` on calls from a global desktop connection; a pinned connection must stay in its configured checkout. Call \`kith_begin_work\` with a unique \`agentId\`, an explicit \`scopeGlobs\` array and \`isolateWorktree: true\`.
-2. Edit only the returned \`worktree.worktreePath\`. Report changed files through \`kith_record_file_edit\` on that connection.
-3. Run serialized commands with \`kith_run_with_mutex\`: pass a literal executable/argument array. Its cwd defaults to the registered worktree. Commands run with server permissions and require client approval.
-4. Renew idle sessions with \`kith_heartbeat\` before their lease expires (every two minutes for the default five-minute lease; sooner for a shorter lease). Inspect \`kith_get_status\`.
-5. Complete with \`kith_complete_work\` and a project-specific \`verificationCmd\`. Failed verification keeps the integration target unchanged. Successful worktrees are retained for inspection.
-
-The MCP connection retains its capability; omit \`sessionToken\` on subsequent calls on that connection. Initial grant/resume replies contain the token, so keep client transcripts private. Do not copy tokens into shell commands or public reports. A new connection needs a valid capability to resume an existing ID. Locks coordinate cooperating writers; hooks are not an OS security sandbox.
-
-If Claude/Cursor edit hooks or CLI commands are also enabled, launch the client from a persistent shell after \`eval "$(kith session start --agent <id> --owner-pid "$$" --shell)"\`. CLI, hooks and MCP must inherit the same KITH_AGENT_ID/KITH_SESSION_TOKEN and use the same agent ID. Separate stateless shell calls do not preserve these exports or the owning shell. MCP-only setup skips new native edit hooks and preserves existing ones.
-<!-- KITH:END -->`;
-    if (content.includes('<!-- KITH:START -->') !== content.includes('<!-- KITH:END -->')) {
-      throw new Error('AGENTS.md has an incomplete Kith block. Repair it before running init.');
-    }
-    content = content.includes('<!-- KITH:START -->')
-      ? content.replace(/<!-- KITH:START -->[\s\S]*?<!-- KITH:END -->/, () => block)
-      : content.trimEnd() + '\n\n' + block + '\n';
-    add('AGENTS.md', content);
-    add('.agent/skills/kith/SKILL.md', '---\nname: kith\ndescription: Coordinate parallel coding work through Kith MCP and isolated worktrees.\n---\n\nPrefer the Kith MCP tools on one persistent connection. Begin with kith_begin_work using a unique agentId, explicit scopeGlobs and isolateWorktree:true. Edit the returned worktreePath, report files with kith_record_file_edit, run literal command arrays with kith_run_with_mutex, heartbeat before expiry and finish with kith_complete_work plus a project verificationCmd. Inspect kith_get_status. Keep capabilities private. If CLI or native hooks are enabled, first launch the client from a persistent shell with the same KITH_AGENT_ID/KITH_SESSION_TOKEN and --owner-pid "$$". Stateless shell calls cannot retain that setup. For global desktop connections, include the absolute Git repository in each call; never guess from the server startup directory. Configured tools do not establish ownership until begin-work succeeds. Locks require cooperating clients.\n');
-  }
+  if (selected.has('agents')) for (const [name, value] of agentGuidance(absRoot)) add(name, value.content);
   if (selected.has('git')) {
     try {
       const hooksDir = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-path', 'hooks'], {
@@ -248,4 +220,42 @@ esac
     engine.close();
   }
   return report;
+}
+
+export function agentGuidance(repoRoot: string): Map<string, { content: string; mode?: number }> {
+  const absRoot = repoRoot, plan = new Map<string, { content: string; mode?: number }>();
+  const add = (name: string, content: string) => {
+    const file = path.join(absRoot, name);
+    if (physicalPath(file) !== file) throw new Error(`Agent guidance is redirected: ${file}`);
+    if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== content) plan.set(name, { content });
+  };
+    const file = path.join(absRoot, 'AGENTS.md');
+    let content = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '# Repository Agent Instructions\n';
+    const block = `<!-- KITH:START -->
+## Parallel Agent Coordination (kith)
+
+Instruction protocol: ${KITH_PROTOCOL_VERSION}.
+
+Use Kith MCP to claim work, isolate changes in worktrees, share local resources and verify integration. Keep one isolated worktree per parallel agent and keep the owning MCP connection open.
+
+1. Select the absolute Git repository path for this task. Include \`repository\` on calls from a global desktop connection; a pinned connection must stay in its configured checkout. Call \`kith_begin_work\` with a unique \`agentId\`, an explicit \`scopeGlobs\` array and \`isolateWorktree: true\`.
+2. Edit only the returned \`worktree.worktreePath\`. Report changed files through \`kith_record_file_edit\` on that connection.
+3. Run serialized commands with \`kith_run_with_mutex\`: pass a literal executable/argument array. Its cwd defaults to the registered worktree. Commands run with server permissions and require client approval.
+4. Renew idle sessions with \`kith_heartbeat\` before their lease expires (every two minutes for the default five-minute lease; sooner for a shorter lease). Inspect \`kith_get_status\`.
+5. Complete with \`kith_complete_work\` and a project-specific \`verificationCmd\`. Failed verification keeps the integration target unchanged. Successful worktrees are retained for inspection.
+
+The MCP connection retains its capability; omit \`sessionToken\` on subsequent calls on that connection. Initial grant/resume replies contain the token, so keep client transcripts private. Do not copy tokens into shell commands or public reports. A new connection needs a valid capability to resume an existing ID. Locks coordinate cooperating writers; hooks are not an OS security sandbox.
+
+If Claude/Cursor edit hooks or CLI commands are also enabled, launch the client from a persistent shell after \`eval "$(kith session start --agent <id> --owner-pid "$$" --shell)"\`. CLI, hooks and MCP must inherit the same KITH_AGENT_ID/KITH_SESSION_TOKEN and use the same agent ID. Separate stateless shell calls do not preserve these exports or the owning shell. MCP-only setup skips new native edit hooks and preserves existing ones.
+<!-- KITH:END -->`;
+    if (content.includes('<!-- KITH:START -->') !== content.includes('<!-- KITH:END -->')) {
+      throw new Error('AGENTS.md has an incomplete Kith block. Repair it before running init.');
+    }
+    content = content.includes('<!-- KITH:START -->')
+      ? content.replace(/<!-- KITH:START -->[\s\S]*?<!-- KITH:END -->/, () => block)
+      : content.trimEnd() + '\n\n' + block + '\n';
+    add('AGENTS.md', content);
+    add('.agent/skills/kith/SKILL.md', '---\nname: kith\ndescription: Coordinate parallel coding work through Kith MCP and isolated worktrees.\n---\n\nPrefer the Kith MCP tools on one persistent connection. Begin with kith_begin_work using a unique agentId, explicit scopeGlobs and isolateWorktree:true. Edit the returned worktreePath, report files with kith_record_file_edit, run literal command arrays with kith_run_with_mutex, heartbeat before expiry and finish with kith_complete_work plus a project verificationCmd. Inspect kith_get_status. Keep capabilities private. If CLI or native hooks are enabled, first launch the client from a persistent shell with the same KITH_AGENT_ID/KITH_SESSION_TOKEN and --owner-pid "$$". Stateless shell calls cannot retain that setup. For global desktop connections, include the absolute Git repository in each call; never guess from the server startup directory. Configured tools do not establish ownership until begin-work succeeds. Locks require cooperating clients.\n');
+
+  return plan;
 }

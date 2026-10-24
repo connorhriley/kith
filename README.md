@@ -70,24 +70,17 @@ The [extension guide](extensions/editor/README.md) covers settings and existing 
 
 ### CLI and other MCP clients
 
-Install the release:
+**On main, for the next release:** one command from your Git checkout configures supported detected clients and adds project instructions:
 
 ```sh
-npm install --global kith-coord@0.1.6
+npx --yes --package kith-coord kith setup
 ```
 
-Choose the setup scope your client needs:
+The durable-setup behavior described here is not in published **0.1.6**. For that release, install `kith-coord@0.1.6` globally first, then run `kith setup` in the project. [Client setup](docs/integrations.md#configure-detected-local-clients) covers configuration scope and advanced options.
 
-- **Global desktop/CLI connection:** run `kith setup --dry-run`, then `kith setup`. Restart/reconnect the configured client. A desktop agent supplies the absolute Git `repository` on each tool call; no whole-Mac ownership database is created.
-- **Project configuration and agent instructions:** run the following inside the checkout. This is the default for project-scoped clients. Existing global connections need not be registered again; use `kith init --only agents` when only project guidance is needed.
+Setup retains an exact self-contained runtime outside npx's cache, checks its MCP discovery, and backs up changes before writing them. Existing custom Kith launchers, peer servers, hooks and permissions are preserved. From outside a Git checkout it configures global connections; pass a project path to add that project's guidance. Reconnect the client and approve its MCP server through the client's normal controls.
 
-```sh
-cd /path/to/your/project
-kith init --dry-run
-kith init
-```
-
-Setup preserves peer configurations, hooks and permissions. A written configuration is not a confirmed connection: check Kith's server status in the client, then ask it to begin an isolated task. `kith doctor /absolute/checkout` checks global and project launcher files without starting clients or creating project state. See [client setup](docs/integrations.md#configure-detected-local-clients).
+Ask your agent to do the task using Kith. The view says **Watching only** until a task is actually recorded. A configured server is not a running task. `kith setup --dry-run` previews without writes; `kith doctor /absolute/checkout` diagnoses configuration.
 
 For source installation and the disposable demo, use the pinned **pnpm 10.20.0**:
 
@@ -120,25 +113,17 @@ Two real MCP clients completed work in separate worktrees. Disposable example pa
 
 The implementation is in [examples/two-agents.mjs](examples/two-agents.mjs). This demonstrates the coordination protocol; [native-client validation](docs/client-validation.md) separately exercises installed coding clients.
 
-### Connect your client
+### Client support
 
-After the npm quick start above, restart your coding client in that project and approve its Kith MCP connection. Generated configuration uses the installed `kith` executable; no source checkout or `pnpm link` is needed. Review and commit the generated files before asking agents to integrate work.
-
-Default setup installs MCP configuration for Claude, Codex and Cursor plus agent instructions, without adding hooks or package-manager shims. Review and commit the generated configuration before starting work; integration requires a clean target checkout. Restart your client with `kith` on its `PATH`. To select clients, use `--mcp-only --only claude,codex,agents`. Existing hooks are preserved; review warnings if they require an inherited session. See [hook setup](docs/integrations.md) if you need them.
+The editor extension bundles the server and offers it through native MCP registration; no global npm install is needed. Installing an extension or writing configuration does not enforce claims on writers that do not use Kith. Existing custom Kith entries retain precedence.
 
 | Client | Setup and validation |
 | --- | --- |
-| VS Code | Marketplace extension; signed-in Copilot parallel task completed on VS Code 1.143.0 |
-| Cursor | Marketplace extension and native MCP registration checked on 3.24.18; signed-in task's final retry pending after client usage limit; native CLI workflow separately validated |
-| Claude Code | MCP; optional edit hooks need shared session setup; recorded native CLI runs |
-| Codex | Project MCP configuration; recorded native CLI runs with configuration overrides |
+| VS Code / Cursor | One-click marketplace extension; native MCP controls retain approval and trust |
+| Claude Code / Claude Desktop / Codex | Detected client configuration through `kith setup` |
 | Other MCP clients | stdio server via `kith mcp`; client-specific validation required |
 
-The [editor extension](extensions/editor/README.md) offers a bundled MCP server and a small read-only status indicator. Existing custom Kith entries take precedence, so review their launcher if a connection fails. The editor retains control of server approval and tool permissions.
-
-Native checks are version-specific; the recorded GUI task used published extension 0.1.4. Later client or extension releases need their own checks. See [integration setup](docs/integrations.md), [recorded validation](docs/client-validation.md), and [session ownership](docs/sessions-and-mutexes.md) before mixing hooks, CLI commands, and MCP clients.
-
-The npm package is **`kith-coord`**, with the command name **`kith`**. For a pinned npx MCP launcher, see [registry setup](docs/integrations.md#registry-installation). The unrelated npm package `kith` is not this project.
+Native evidence is version-specific. See [client validation](docs/client-validation.md), [advanced integration setup](docs/integrations.md) and [session ownership](docs/sessions-and-mutexes.md). The npm package is **`kith-coord`** and the command is **`kith`**; the unrelated npm package `kith` is not this project.
 
 ## Dev servers and shared config
 
@@ -159,9 +144,9 @@ kith watch /path/to/workspace --once --json
 kith menubar /path/to/workspace  # macOS 12+, Intel or Apple Silicon
 ```
 
-The watcher compares uncommitted paths across linked worktrees of each repository; a workspace directory can contain several repositories. The editor and macOS menu show paths to review, checkout details and recorded active versus retained sessions. Retained work may still be unfinished: keep it until reviewed.
+The menu and editor lead with recorded tasks, current file claims, shared-resource waits and integrations that need inspection. A registered session without a task is shown separately. Saved checkouts and path comparisons stay in details; nothing is automatically deleted. The menu's default view omits the file-timestamp feed.
 
-These are observations, not proof of a merge conflict or the identity of a process writing a file. Unavailable scans stay unavailable. Claims, resource coordination and verified integration remain the MCP/CLI workflow. See [observation limits](docs/usage.md#optional-read-only-worktree-observations).
+**Watching only** means no active Kith task is recorded. Shared dirty paths are files to review before integration, not a proven merge conflict. **Status unavailable** remains explicit when state cannot be inspected safely. Reads use private snapshots without renewing owners or migrating the original database. See [observation limits](docs/usage.md#optional-read-only-worktree-observations).
 
 ## How a task moves through Kith
 

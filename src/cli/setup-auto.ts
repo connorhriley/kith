@@ -6,6 +6,8 @@ import { discoverRepository, physicalPath, isWithin } from '../core/repository.j
 import { KithEngine } from '../core/engine.js';
 import { applySetupPlan } from './setup-ledger.js';
 import { installedCliPath } from './runtime.js';
+import { agentGuidance } from './init.js';
+import { readCoordinationState } from '../core/observation.js';
 
 export interface ClientDetectionResult {
   clientName: string;
@@ -34,13 +36,16 @@ function ownedLauncher(value: Record<string, any>): boolean {
 }
 
 /** Preflight all clients first. Reuse private setup ledgers; never change hooks or permissions. */
-export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = os.homedir(), options: { dryRun?: boolean } = {}): ClientDetectionResult[] {
+export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = os.homedir(), options: { dryRun?: boolean; cliPath?: string; guidance?: boolean } = {}): ClientDetectionResult[] {
   const target = physicalPath(targetWorkspace);
   const layout = target === path.parse(target).root ? undefined : discoverRepository(target);
   const workspace = layout?.checkoutRoot ?? target;
   home = physicalPath(home);
-  const server = { command: process.execPath, args: [installedCliPath(), 'mcp'] };
+  const server = { command: process.execPath, args: [options.cliPath ?? installedCliPath(), 'mcp'] };
   const projectServer = { ...server, args: [...server.args, '--repo', workspace] };
+  const executable = (name: string) => (process.env.PATH ?? '').split(path.delimiter).some(dir =>
+    [name, ...(process.platform === 'win32' ? [name+'.exe', name+'.cmd'] : [])].some(file => fs.existsSync(path.join(dir, file))));
+  const macApp = (name: string) => process.platform === 'darwin' && ['/Applications', path.join(home, 'Applications')].some(dir=>fs.existsSync(path.join(dir,name+'.app')));
   const results: ClientDetectionResult[] = [];
   const groups = new Map<string, { coordDir: string; plan: Map<string, { content: string; mode?: number }> }>();
   const warnings: string[] = [];
@@ -75,12 +80,12 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
     ? path.join(process.env.APPDATA ?? path.join(home, 'AppData/Roaming'), 'Claude/claude_desktop_config.json')
     : process.platform === 'darwin' ? path.join(home, 'Library/Application Support/Claude/claude_desktop_config.json')
     : path.join(home, '.config/Claude/claude_desktop_config.json');
-  jsonClient('Claude Desktop App', desktop, home, fs.existsSync(desktop));
+  jsonClient('Claude Desktop App', desktop, home, fs.existsSync(desktop) || fs.existsSync(path.dirname(desktop)) || macApp('Claude'));
   jsonClient('Claude Code CLI', path.join(home, '.claude.json'), home,
-    fs.existsSync(path.join(home, '.claude.json')) || fs.existsSync(path.join(home, '.claude')));
+    fs.existsSync(path.join(home, '.claude.json')) || fs.existsSync(path.join(home, '.claude')) || executable('claude'));
 
   const codex = path.join(home, '.codex/config.toml');
-  if (fs.existsSync(path.dirname(codex))) {
+  if (fs.existsSync(path.dirname(codex)) || executable('codex')) {
     safePath(codex);
     const original = fs.existsSync(codex) ? fs.readFileSync(codex, 'utf8') : '';
     const cfg = parseToml(original), servers = object(cfg.mcp_servers ?? {}, 'Codex MCP servers');
@@ -106,9 +111,15 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
     results.push({ clientName: 'Codex', found: true, configPath: codex, configured,
       notes: configured ? `${options.dryRun ? 'Would configure' : 'Configured'} Kith for per-task repository selection; other TOML preserved` : 'Custom Kith server preserved; review its repository and launcher manually' });
   }
-  jsonClient('Cursor', path.join(workspace, '.cursor/mcp.json'), workspace, Boolean(layout?.commonGitDir), true);
+  if (layout?.commonGitDir) jsonClient('Cursor', path.join(workspace, '.cursor/mcp.json'), workspace, true, true);
+  else jsonClient('Cursor', path.join(home, '.cursor/mcp.json'), home, fs.existsSync(path.join(home, '.cursor')) || executable('cursor') || macApp('Cursor'));
   const antigravity = path.join(home, '.gemini/config/mcp_config.json');
-  jsonClient('Antigravity', antigravity, home, fs.existsSync(path.dirname(antigravity)));
+  jsonClient('Antigravity', antigravity, home, fs.existsSync(path.dirname(antigravity)) || macApp('Antigravity'));
+
+  if (options.guidance && layout?.commonGitDir) {
+    for (const [name, entry] of agentGuidance(workspace)) queue(workspace, path.join(workspace, name), entry.content);
+    results.push({clientName: 'Project instructions', found: true, configured: true, configPath: path.join(workspace, 'AGENTS.md'), notes: 'Scoped claims, isolated worktrees and verification guidance prepared for agents'});
+  }
 
   // Keep private backup material out of Git, using the same retained ignore rule as init.
   for (const [root] of groups) {
@@ -123,7 +134,12 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
   // Every parse and path check above completes before any client writes. Backups precede
   // writes under each root's setup lock. An interrupted setup retains exact original bytes.
   if (!options.dryRun && groups.size) {
-    const engine = layout?.commonGitDir ? new KithEngine(workspace) : undefined; // Refuse damaged state before touching any client.
+    if (layout?.commonGitDir) {
+      const state = readCoordinationState(workspace);
+      if (state.state === 'unavailable') throw new Error(state.error);
+      if (state.state === 'ready' && state.schemaVersion !== 3) throw new Error('Stop all Kith coordinators and back up their stopped state before upgrading; no client configuration was written.');
+    }
+    const engine = layout?.commonGitDir ? new KithEngine(workspace) : undefined;
     try {
       for (const [root, group] of groups) {
         fs.mkdirSync(group.coordDir, { recursive: true, mode: 0o700 });

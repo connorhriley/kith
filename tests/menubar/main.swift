@@ -6,7 +6,7 @@ if args.count > 1 {
     case "--emit":
         // Both pipes exceed their buffers; a wait-before-read poll hangs here.
         FileHandle.standardError.write(Data(repeating: 120, count: 1048576))
-        let object: [String: Any] = ["complete": true, "ownershipComplete": true, "worktrees": [], "repos": [], "collisions": [], "recentEdits": [], "padding": String(repeating: "x", count: 1048576)]
+        let object: [String: Any] = ["complete": true, "ownershipComplete": true, "coordination": ["available": true], "worktrees": [], "repos": [], "collisions": [], "recentEdits": [], "padding": String(repeating: "x", count: 1048576)]
         FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: object))
     case "--partial": print("{\"complete\":false,\"repos\":[],\"collisions\":[],\"recentEdits\":[]}")
     case "--old-payload": print("{\"complete\":true,\"repos\":[],\"collisions\":[],\"recentEdits\":[]}")
@@ -42,3 +42,8 @@ precondition(sharedPathsLabel(0) == "0 shared paths")
 precondition(sharedPathsLabel(14) == "14 shared paths")
 precondition(recentEditsLabel(377) == "File mtimes within 5m: showing 6 of 377")
 precondition(recentEditsLabel(0) == "File mtimes within 5m: showing 0 of 0")
+
+precondition(coordinationHeadline(tasks: 0, sessions: 0).contains("Watching only"))
+precondition(coordinationHeadline(tasks: 0, sessions: 1).contains("no task started"))
+precondition(coordinationTitle(["available": true, "working": [["title": "Task"]]], available: true) == "Kith · 1 task")
+precondition(coordinationTitle(["available": true, "attention": [["message": "Check failed"]]], available: true) == "Kith · needs attention")
