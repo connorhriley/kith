@@ -13,13 +13,28 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
     var ownershipAvailable = false
     var coordination: [String: Any] = [:]
     var linkedContracts: [[String: Any]] = []
+    var recentWorkspaces: [String] = []
+
+    func registerWorkspace(_ path: String) {
+        let std = URL(fileURLWithPath: path).standardized.path
+        if !recentWorkspaces.contains(std) { recentWorkspaces.insert(std, at: 0) }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for candidate in ["\(home)/Projects/kith", "\(home)/Projects", "\(home)/Briefed"] {
+            if FileManager.default.fileExists(atPath: candidate) && !recentWorkspaces.contains(candidate) {
+                recentWorkspaces.append(candidate)
+            }
+        }
+        UserDefaults.standard.set(Array(recentWorkspaces.prefix(10)), forKey: "KithRecentWorkspaces")
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
         guard args.count == 4 else { NSApplication.shared.terminate(nil); return }
-        watchDir = args[1]
+        watchDir = URL(fileURLWithPath: args[1]).standardized.path
         kithCliPath = args[2]
         kithScriptPath = args[3]
+        recentWorkspaces = UserDefaults.standard.stringArray(forKey: "KithRecentWorkspaces") ?? []
+        registerWorkspace(watchDir)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
@@ -182,11 +197,43 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         copyWorker.target = self; actionsMenu.addItem(copyWorker)
         let copyArchitect = NSMenuItem(title: "Copy \"Plan Parallel Tasks (Architect)\" Prompt", action: #selector(copyArchitectPromptClicked), keyEquivalent: "")
         copyArchitect.target = self; actionsMenu.addItem(copyArchitect)
+        let wsMenu = section("Switch Workspace")
+        for ws in recentWorkspaces where FileManager.default.fileExists(atPath: ws) {
+            let label = "\(URL(fileURLWithPath: ws).lastPathComponent) (\(ws))"
+            let item = NSMenuItem(title: radarLabel(label), action: #selector(switchWorkspaceClicked(_:)), keyEquivalent: "")
+            item.target = self; item.representedObject = ws
+            item.state = (ws == watchDir) ? .on : .off
+            wsMenu.addItem(item)
+        }
+        wsMenu.addItem(NSMenuItem.separator())
+        let chooseWs = NSMenuItem(title: "Choose Folder…", action: #selector(chooseWorkspaceClicked), keyEquivalent: "")
+        chooseWs.target = self; wsMenu.addItem(chooseWs)
         let refresh = NSMenuItem(title: "Refresh", action: #selector(scanNowClicked), keyEquivalent: "r")
         refresh.target = self; menu.addItem(refresh)
         let quit = NSMenuItem(title: "Quit Kith", action: #selector(quitClicked), keyEquivalent: "q")
         quit.target = self; menu.addItem(quit)
         statusItem.menu = menu
+    }
+
+    @objc func switchWorkspaceClicked(_ sender: NSMenuItem) {
+        guard let target = sender.representedObject as? String else { return }
+        watchDir = URL(fileURLWithPath: target).standardized.path
+        registerWorkspace(watchDir)
+        pollRadar()
+    }
+
+    @objc func chooseWorkspaceClicked() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Watch Workspace"
+        if panel.runModal() == .OK, let url = panel.url {
+            watchDir = url.standardized.path
+            registerWorkspace(watchDir)
+            pollRadar()
+        }
     }
 
     @objc func copyWorkerPromptClicked() {
