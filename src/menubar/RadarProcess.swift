@@ -54,7 +54,7 @@ func runRadar(executable: String, arguments: [String], timeout: TimeInterval = 1
     guard process.terminationStatus == 0 else { throw RadarError.failed }
     guard let json = try JSONSerialization.jsonObject(with: output.result()) as? [String: Any],
           json["complete"] as? Bool == true,
-          json["ownershipComplete"] is Bool, json["worktrees"] is [[String: Any]],
+          json["ownershipComplete"] is Bool, json["coordination"] is [String: Any], json["worktrees"] is [[String: Any]],
           json["repos"] is [String], json["collisions"] is [[String: Any]], json["recentEdits"] is [[String: Any]] else { throw RadarError.invalid }
     return json
 }
@@ -78,3 +78,14 @@ let overlapExplanation = "Different/unverified dirty copies; merge not verified.
 
 func sharedPathsLabel(_ count: Int) -> String { return "\(count) shared paths" }
 func recentEditsLabel(_ count: Int) -> String { return "File mtimes within 5m: showing \(min(count, 6)) of \(count)" }
+
+func coordinationHeadline(tasks: Int, sessions: Int) -> String {
+    if tasks > 0 { return "Coordinating \(tasks) task\(tasks == 1 ? "" : "s")" }
+    return sessions > 0 ? "\(sessions) session\(sessions == 1 ? "" : "s") recorded; no task started" : "Watching only — no active Kith tasks"
+}
+func coordinationTitle(_ view: [String: Any], available: Bool) -> String {
+    guard available && view["available"] as? Bool == true else { return "Kith · unavailable" }
+    if !(view["attention"] as? [[String: Any]] ?? []).isEmpty { return "Kith · needs attention" }
+    let tasks = (view["working"] as? [[String: Any]] ?? []).count
+    return tasks > 0 ? "Kith · \(tasks) task\(tasks == 1 ? "" : "s")" : "Kith · watching"
+}

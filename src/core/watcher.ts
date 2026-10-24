@@ -5,6 +5,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { discoverRepository, physicalPath } from './repository.js';
 import { readCoordinationState } from './observation.js';
+import { coordinationView, type CoordinationView } from './coordination-view.js';
 
 const execFileAsync = promisify(execFile);
 export interface FileChangeEvent { filePath: string; repoPath: string; timestamp: number }
@@ -66,6 +67,7 @@ export class PassiveConflictWatcher {
   private errors: ScanIssue[] = [];
   private primaryRoots = new Map<string, string>();
   private worktrees: RadarWorktree[] = [];
+  private coordination: CoordinationView = {available:false,working:[],sessions:0,sessionKeys:[],waiting:[],using:[],attention:[]};
 
   constructor(public readonly rootDir: string, private readonly options: {
     intervalMs?: number;
@@ -210,7 +212,7 @@ export class PassiveConflictWatcher {
         sharedDirtyPaths: [...this.activeCollisions.values()].filter(alert => alert.repos.includes(repo)).length };
       try {
         let state = states.get(common);
-        if (!state) { state = readCoordinationState(primary ?? repo, { ownersOnly: true }); states.set(common, state); }
+        if (!state) { state = readCoordinationState(primary ?? repo, { coordinationOnly: true }); states.set(common, state); }
         if (state.state === 'unavailable') { row.detail += ` ${state.error}`; return row; }
         const owners = state.agents.filter(agent => agent.worktree_path ? physicalPath(agent.worktree_path) === repo : repo === primary);
         const active = owners.filter(agent => agent.status === 'active' && Number.isFinite(agent.lease_expires_at) && agent.lease_expires_at > state.observedAt);
@@ -222,6 +224,10 @@ export class PassiveConflictWatcher {
       } catch (error) { row.detail += ` ${error instanceof Error ? error.message : String(error)}`; }
       return row;
     });
+    const views = [...states.values()].map(coordinationView);
+    this.coordination = {available: this.errors.length === 0 && views.every(v=>v.available),
+      sessions: views.reduce((n,v)=>n+v.sessions,0), sessionKeys: views.flatMap(v=>v.sessionKeys), working: views.flatMap(v=>v.working),
+      waiting: views.flatMap(v=>v.waiting), using: views.flatMap(v=>v.using), attention: views.flatMap(v=>v.attention)};
     if (this.errors.length) this.options.onScanError?.(this.errors);
     return this.getActiveCollisions();
   }
@@ -241,7 +247,7 @@ export class PassiveConflictWatcher {
     if (this.watchTimer) clearTimeout(this.watchTimer);
     this.watchTimer = null;
   }
-  public getScanState() { return { complete: this.errors.length === 0, errors: [...this.errors], repos: [...this.repositories.keys()], ownershipComplete: this.worktrees.every(row => row.activity !== 'unknown'), worktrees: this.worktrees.map(row => ({ ...row, agentIds: [...row.agentIds] })) }; }
+  public getScanState() { return { coordination: this.coordination, complete: this.errors.length === 0, errors: [...this.errors], repos: [...this.repositories.keys()], ownershipComplete: this.worktrees.every(row => row.activity !== 'unknown'), worktrees: this.worktrees.map(row => ({ ...row, agentIds: [...row.agentIds] })) }; }
   public getActiveCollisions(): CollisionAlert[] { return [...this.activeCollisions.values()]; }
   public getRecentEdits(): Array<{ key: string; repo: string; ageSec: number }> {
     const now = Date.now();

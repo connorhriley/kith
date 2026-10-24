@@ -43,10 +43,12 @@ try {
   const setupEnv = { ...env, HOME: setupHome };
   execFileSync(process.execPath, [cli, 'setup', install], {cwd: install, env: setupEnv, timeout: 15000});
   const globalConfig = JSON.parse(fs.readFileSync(path.join(setupHome, '.claude.json'), 'utf8')).mcpServers.kith;
-  assert.deepEqual(globalConfig.args, [fs.realpathSync(cli), 'mcp']);
+  assert.equal(globalConfig.args[1], 'mcp');
+  assert(globalConfig.args[0].startsWith(path.join(fs.realpathSync(setupHome), '.local/share/kith/runtimes')));
+  assert.equal(run(process.execPath, [globalConfig.args[0], '--version'], install).trim(), manifest.version);
   const configured = JSON.parse(fs.readFileSync(path.join(install, '.cursor/mcp.json'), 'utf8')).mcpServers.kith;
   assert.equal(configured.command, process.execPath);
-  assert.equal(configured.args[0], fs.realpathSync(cli));
+  assert.equal(configured.args[0], globalConfig.args[0]);
   assert.equal(configured.args[configured.args.length - 1], fs.realpathSync(install));
   assert.equal(run(process.execPath, [cli, 'mutex', '--agent', 'packaged-command', '--', process.execPath, '-e', 'process.stdout.write(process.argv[1])', 'literal ; argument'], install), 'literal ; argument');
   run(process.execPath, ['--input-type=module', '-e', `

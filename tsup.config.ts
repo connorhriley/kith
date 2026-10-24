@@ -13,5 +13,9 @@ export default defineConfig([
     clean: true,
     sourcemap: true,
     splitting: false,
+    // The setup command retains this exact runtime outside transient npx caches.
+    noExternal: [/.*/],
+    banner: { js: "import { createRequire as __kithRequire } from 'node:module'; const require = __kithRequire(import.meta.url);" },
+    onSuccess: 'node scripts/runtime-notices.mjs',
   },
 ]);

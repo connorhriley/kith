@@ -11,11 +11,11 @@ import { observeWorkspaces } from './workspace-observation.js';
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: typeof Database };
 
 /** Copies a consistent stopped-state set before opening SQLite, so even SHM reconstruction cannot touch original recovery files. */
-export function readCoordinationState(directory = process.cwd(), options: { ownersOnly?: boolean } = {}) {
+export function readCoordinationState(directory = process.cwd(), options: { ownersOnly?: boolean; coordinationOnly?: boolean } = {}) {
   const layout = discoverRepository(directory), observedAt = Date.now();
   const empty = { protocolVersion: KITH_PROTOCOL_VERSION, observedAt, repository: { root: layout.checkoutRoot, commonGitDir: layout.commonGitDir, coordDir: layout.coordDir },
     runtime: { node: process.version }, state: 'missing' as 'ready'|'missing'|'unavailable', error: undefined as string|undefined,
-    fencingEpoch: 0, agents: [] as AgentRecord[], tasks: [] as Record<string,unknown>[], locks: [] as Record<string,unknown>[],
+    sessionEpochs: {} as Record<string, number>, truncated: false, schemaVersion: 0, fencingEpoch: 0, agents: [] as AgentRecord[], tasks: [] as Record<string,unknown>[], locks: [] as Record<string,unknown>[],
     conflicts: [] as Record<string,unknown>[], contracts: [] as Record<string,unknown>[], resources: [] as Record<string,unknown>[],
     mergeQueue: [] as Record<string,unknown>[], quarantined: [] as Record<string,unknown>[], mutexWaiters: [] as Record<string,unknown>[],
     commandGuards: [] as Record<string,unknown>[], events: [] as Record<string,unknown>[], workspaces: [] as ReturnType<typeof observeWorkspaces> };
@@ -46,11 +46,24 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     if (JSON.stringify(before)!==JSON.stringify(files.map(identity))) throw new Error('Coordination state changed during snapshot; stop writers or retry');
     db = new DatabaseSync(path.join(scratch,'state.db'), {readOnly:true});
     db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000; BEGIN');
-    if (CoordDatabase.inspectSchema(db)<2) throw new Error('Offline observation requires schema 2 or newer; preserve state and upgrade with clients stopped');
+    const schemaVersion = CoordDatabase.inspectSchema(db);
+    if (schemaVersion<2) throw new Error('Offline observation requires schema 2 or newer; preserve state and upgrade with clients stopped');
     const all = <T=Record<string,unknown>>(sql:string) => db!.prepare(sql).all() as unknown as T[];
-    const agents=all<AgentRecord>('SELECT * FROM agents ORDER BY registered_at DESC');
-    if (options.ownersOnly) { db.exec('COMMIT'); return { ...empty, state: 'ready' as const, agents }; }
-    const state = { ...empty, state:'ready' as const,
+    const agents=all<AgentRecord>('SELECT * FROM agents ORDER BY registered_at DESC' + (options.coordinationOnly ? ' LIMIT 201' : ''));
+    if (options.coordinationOnly) {
+      const tasks = all("SELECT * FROM tasks WHERE status IN ('active','blocked') ORDER BY updated_at DESC LIMIT 201").map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))}));
+      const locks = all('SELECT * FROM locks WHERE expires_at > '+observedAt+' ORDER BY acquired_at DESC LIMIT 501');
+      const resources = all('SELECT * FROM resources ORDER BY acquired_at DESC LIMIT 201');
+      const mutexWaiters = all('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket LIMIT 201');
+      const commandGuards = all('SELECT mutex_name,owner_agent_id,session_epoch,fencing_token FROM mutex_runs LIMIT 201');
+      const mergeQueue = all('SELECT agent_id,branch,worktree_path,status,fencing_token,created_at,updated_at FROM merge_queue WHERE rowid IN (SELECT MAX(rowid) FROM merge_queue GROUP BY agent_id,branch) ORDER BY created_at DESC LIMIT 201');
+      const sessionEpochs = Object.fromEntries(all<{agent_id:string;epoch:number}>('SELECT s.agent_id,s.epoch FROM agent_sessions s JOIN agents a ON s.agent_id=a.id ORDER BY a.registered_at DESC LIMIT 201').map(r=>[r.agent_id,r.epoch]));
+      db.exec('COMMIT');
+      return {...empty,state:'ready' as const,schemaVersion,agents,sessionEpochs,tasks,locks,resources,mutexWaiters,commandGuards,mergeQueue,
+        truncated:[agents,tasks,resources,mutexWaiters,commandGuards,mergeQueue].some(rows=>rows.length>200)||locks.length>500};
+    }
+    if (options.ownersOnly) { db.exec('COMMIT'); return { ...empty, state: 'ready' as const, schemaVersion, agents }; }
+    const state = { ...empty, state:'ready' as const, schemaVersion,
       fencingEpoch:Number((db.prepare("SELECT value FROM meta WHERE key='fencing_epoch'").get() as {value:string}).value), agents,
       tasks:all('SELECT * FROM tasks ORDER BY priority DESC,created_at').map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))})),
       locks:all('SELECT * FROM locks ORDER BY acquired_at'),
@@ -61,7 +74,7 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
       mutexWaiters:all('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket'),
       commandGuards:all('SELECT mutex_name,owner_agent_id,worker_pid,supervisor_pid FROM mutex_runs ORDER BY mutex_name'),
       events:all('SELECT * FROM events ORDER BY id DESC LIMIT 100').map(({payload_json,...r})=>({...r,payload:JSON.parse(String(payload_json))})),
-      workspaces:observeWorkspaces(layout.checkoutRoot,agents,observedAt),
+      workspaces:options.coordinationOnly ? [] : observeWorkspaces(layout.checkoutRoot,agents,observedAt),
     };
     db.exec('COMMIT'); return state;
   } catch(error) { return {...empty,state:'unavailable' as const,error:error instanceof Error ? error.message : String(error)}; }

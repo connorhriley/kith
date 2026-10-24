@@ -108,6 +108,10 @@
 
 ## Unreleased
 
+- One-command setup retains a self-contained runtime outside transient npx caches, checks MCP discovery and installs marked project guidance alongside detected client configuration. Repeat/interrupted setup retains recovery material and existing custom launchers; older live project schemas require the stopped-upgrade procedure.
+- Read-only menu and editor views show current recorded tasks/claims, resource waits and failed integrations with next steps. Saved work and review paths move into details; the default menu omits file timestamps. Missing/partial state stays explicit. No new coordination database, model calls or automatic cleanup.
+
+
 ### Session ownership, supervision, and client validation
 
 - Add random session capabilities, hashed storage, fixed process anchors, generation checks, and exact fencing-token checks. ID-only renewal, completion, lock release, and mutation are rejected across engines/connections.

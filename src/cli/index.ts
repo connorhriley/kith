@@ -15,6 +15,9 @@ import { INTEGRATIONS, Integration, initializeKithRepository } from './init.js';
 import { PassiveConflictWatcher } from '../core/watcher.js';
 import { autoConfigureAllClients } from './setup-auto.js';
 import { installedCliPath } from './runtime.js';
+import { setupRuntime, verifySetupRuntime } from './setup-runtime.js';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 function parseFlags(argv: string[]): {
   positional: string[];
@@ -108,14 +111,27 @@ async function main(): Promise<void> {
 
   if (cmd === 'setup' || cmd === 'auto-detect') {
     const targetDir = positional[1] ? path.resolve(positional[1]) : repoRoot;
-    const results = autoConfigureAllClients(targetDir, undefined, { dryRun: Boolean(flags['dry-run']) });
+    const gitVersion = execFileSync('git', ['--version'], {encoding:'utf8',stdio:'pipe',timeout:4000}).match(/(\d+)\.(\d+)/);
+    if (!gitVersion || Number(gitVersion[1]) < 2 || Number(gitVersion[1]) === 2 && Number(gitVersion[2]) < 38) throw new Error('Install Git 2.38 or newer before Kith setup; no configuration was written.');
+    const home = os.homedir(), dryRun = Boolean(flags['dry-run']);
+    // Preflight every config and guidance file before retaining runtime or changing clients.
+    autoConfigureAllClients(targetDir, home, {dryRun: true, guidance: true});
+    const cliPath = setupRuntime(home, dryRun);
+    if (!dryRun) await verifySetupRuntime(cliPath);
+    const results = autoConfigureAllClients(targetDir, home, {dryRun, guidance: true, cliPath});
     console.log(`\n✨ Kith Auto-Detect & Setup for ${targetDir}\n`);
     for (const r of results) {
       const statusIcon = r.configured ? '✓' : r.found ? '!' : '✗';
       console.log(`  ${statusIcon} ${r.clientName.padEnd(24)} -> ${r.notes}`);
     }
     if (results.some(r => r.found && !r.configured)) process.exitCode = 1;
-    console.log('\nExisting hooks and permissions are unchanged. Restart configured clients; review any skipped entries.\n');
+    console.log(`\n${dryRun ? 'Would retain' : 'Runtime retained at'}: ${cliPath}`);
+    if (!dryRun) console.log('Retained server: MCP discovery passed. Client connection is checked in your client.');
+    if (!results.some(r=>r.clientName==='Project instructions')) console.log('For project guidance, run setup with the Git checkout path.');
+    console.log('Restart/reconnect configured clients and approve Kith in their MCP controls.');
+    console.log('Then ask your agent: Use Kith for this task; claim its files, use an isolated worktree and verify before integrating.');
+    console.log('Setup does not claim work. The coordination view shows a task only after the agent begins it.');
+    console.log('Existing hooks, permissions and custom launchers are preserved. Review skipped entries.\n');
     return;
   }
 

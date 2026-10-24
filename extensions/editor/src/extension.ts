@@ -12,7 +12,8 @@ export function activate(context:vscode.ExtensionContext) {
   const launcher=context.asAbsolutePath('server/launch.cjs');
   let runtime:Promise<string>|undefined,registration:vscode.Disposable|undefined;
   let registered='Not offered yet',busy=false,generation=0,timer:ReturnType<typeof setInterval>|undefined;
-  let snapshot={complete:false,overlaps:0,roots:0,text:'Waiting for a trusted local workspace.'};
+  let detailsMode=false;
+  let snapshot={tasks:0,attention:0,details:'',complete:false,overlaps:0,roots:0,text:'Waiting for a trusted local workspace.'};
   const folders=()=>(vscode.workspace.workspaceFolders??[]).filter(f=>f.uri.scheme==='file');
   const node=()=>runtime??=resolveNode(vscode.workspace.getConfiguration('kith').inspect<string>('nodePath')?.globalValue??'',context.extensionPath);
   const cursorApi=()=>(vscode as typeof vscode&{cursor?:{mcp?:CursorMcp}}).cursor?.mcp;
@@ -49,14 +50,25 @@ export function activate(context:vscode.ExtensionContext) {
     try {
       const roots=folders();
       if(!vscode.workspace.isTrusted||!roots.length){
-        snapshot={complete:false,overlaps:0,roots:0,text:'Open a trusted local workspace. Kith has not run a repository process.'};
+        snapshot={tasks:0,attention:0,details:'',complete:false,overlaps:0,roots:0,text:'Open a trusted local workspace. Kith has not run a repository process.'};
       }else{
         const executable=await node();let complete=true;
         const lines=[`Kith — read-only observations (${new Date().toLocaleString()})`,registered,'',
           'Overlaps are different or unverified dirty copies, not proven merge conflicts. File writers cannot be identified from these observations.',''];
-        const inspected=new Set<string>(),overlaps=new Set<string>();
+        const inspected=new Set<string>(),overlaps=new Set<string>(),sessions=new Set<string>(),taskIds=new Set<string>();
+        const working:string[]=[],waiting:string[]=[],attention:string[]=[],resources:string[]=[],saved=new Set<string>();
         for(const folder of roots){
           const result=await runJson(executable,launcher,['watch',folder.uri.fsPath,'--once','--raw'],stopped.signal);
+          const coordination=result.coordination;
+          if(!coordination?.available)complete=false;
+          for(const key of coordination?.sessionKeys??[])sessions.add(key);
+          for(const task of coordination?.working??[]){
+            const key=JSON.stringify([task.checkout,task.taskId]);if(taskIds.has(key))continue;taskIds.add(key);
+            working.push(`${task.agentId}: ${task.title}`,`  ${task.checkout}`,`  Claimed: ${task.scopes.length?task.scopes.join(', '):'no current file claims'}`);
+          }
+          for(const row of coordination?.waiting??[])waiting.push(`${row.agentId} → ${row.resource}; held by ${row.holder??'not recorded'} (queue ${row.position})`);
+          for(const row of coordination?.attention??[])attention.push(`${row.message}. ${row.nextStep}`);
+          for(const row of coordination?.using??[])resources.push(`${row.agentId}: ${row.resource} — ${row.detail}`);
           lines.push(folder.uri.fsPath);
           if(!result.complete){complete=false;lines.push('  Scan unavailable; no clean verdict.');}
           const alerts=(result.collisions??[]).filter((a:{id:string})=>!overlaps.has(a.id));
@@ -68,20 +80,32 @@ export function activate(context:vscode.ExtensionContext) {
           if(result.ownershipComplete!==true)complete=false;
           for(const row of result.worktrees??[]){
             if(inspected.has(row.path))continue;inspected.add(row.path);
+            if(row.activity==='retained')saved.add(row.path);
             const activity=({active:'Active Kith lease',retained:'Retained',unregistered:'No Kith session',unknown:'Ownership unavailable'} as Record<string,string>)[row.activity]??'Ownership unavailable';
             lines.push(`  ${row.label} — ${activity}; ${row.dirtyFiles??'unknown'} Git changes; ${row.sharedDirtyPaths} shared dirty paths`,
               `    ${row.path}${row.agentIds?.length?` (${row.agentIds.join(', ')})`:''}`,`    ${row.detail}`);
           }
           lines.push('');
         }
-        snapshot={complete,overlaps:overlaps.size,roots:roots.length,text:lines.join('\n')};
+        const summary=[`Kith — ${new Date().toLocaleString()}`,registered,''];
+        if(!complete)summary.push('Status unavailable or partial. Inspect details before acting.');
+        if(attention.length)summary.push('Needs attention',...new Set(attention),'');
+        summary.push(taskIds.size?`Coordinating ${taskIds.size} task(s)`:sessions.size?`${sessions.size} session(s) recorded; no task started`:'Watching only — no active Kith tasks');
+        if(!taskIds.size)summary.push('Ask your agent: Use Kith for this task; claim its files, work in an isolated worktree and verify before integrating.');
+        summary.push(...working,'');
+        if(waiting.length)summary.push('Waiting',...new Set(waiting),'');
+        if(resources.length)summary.push('Shared resources',...new Set(resources),'');
+        if(overlaps.size)summary.push(`Review before integration: ${overlaps.size} shared files. Different copies do not establish a merge conflict.`,'');
+        if(saved.size)summary.push(`Saved work: ${saved.size} checkout(s). Preserved for inspection; no cleanup performed.`);
+        summary.push('Details: Kith: Show Coordination Details. Writes outside Kith are not attributed.');
+        snapshot={tasks:taskIds.size,attention:attention.length,details:lines.join('\n'),complete,overlaps:overlaps.size,roots:roots.length,text:summary.join('\n')};
       }
-      bar.text=!snapshot.complete?'$(question) Kith':snapshot.overlaps?`Kith: ${snapshot.overlaps} paths`:'$(organization) Kith';
-      bar.tooltip=`${snapshot.complete?'Read-only observations available':'Observation unavailable'} — click for details. No compatibility verdict.`;
-      output.replace(snapshot.text+'\n');
+      bar.text=!snapshot.complete?'$(question) Kith':snapshot.attention?'$(warning) Kith':snapshot.tasks?`Kith: ${snapshot.tasks} task(s)`:'Kith: watching';
+      bar.tooltip=`${snapshot.complete?'Recorded coordination':'Status unavailable'} — click to see tasks, waits and next steps.`;
+      output.replace((detailsMode?snapshot.details:snapshot.text)+'\n');
     }catch(error){
       snapshot={...snapshot,complete:false,text:`Kith observation unavailable.\n${registered}\n${error instanceof Error?error.message:String(error)}`};
-      bar.text='$(question) Kith';output.replace(snapshot.text+'\n');
+      bar.text='$(question) Kith';output.replace((detailsMode?snapshot.details:snapshot.text)+'\n');
     }finally{busy=false;}
     return snapshot;
   }
@@ -91,8 +115,9 @@ export function activate(context:vscode.ExtensionContext) {
     timer=setInterval(()=>{void refresh();},Math.max(5,Math.min(300,seconds))*1000);
   }
   context.subscriptions.push(output,bar,changed,
-    vscode.commands.registerCommand('kith.showStatus',async()=>{await refresh();output.show(true);return snapshot;}),
+    vscode.commands.registerCommand('kith.showStatus',async()=>{detailsMode=false;await refresh();output.show(true);return snapshot;}),
     vscode.commands.registerCommand('kith.refresh',refresh),
+    vscode.commands.registerCommand('kith.showDetails',async()=>{detailsMode=true;await refresh();output.show(true);return snapshot;}),
     vscode.workspace.onDidChangeWorkspaceFolders(()=>{void connectMcp().then(refresh);}),
     vscode.workspace.onDidGrantWorkspaceTrust(()=>{void connectMcp().then(refresh);}),
     vscode.workspace.onDidChangeConfiguration(event=>{

@@ -23,6 +23,8 @@ The extension offers Kith through the editor's native MCP API. The editor still 
 
 Tell the agent which repository contains the task. The same connection supports multiple repositories through Kith's `repository` argument; ownership stays scoped to each repository. Follow the returned worktree path and retain your normal verification and merge gates.
 
+On main for the next release, the default view shows recorded tasks and claims, resource waits, integration failures with next steps, and a saved-work count. It says **Watching only** when no task has begun. Detailed checkout and path observations are available through **Kith: Show Coordination Details**; no files are cleaned up.
+
 Click **Kith** in the status bar or run **Kith: Show Workspace Status**. It observes linked-worktree dirty paths and reads existing coordination state offline, distinguishing recorded active leases, retained sessions and unavailable ownership. Retained work is preserved for review. It does not initialize a project database, attribute writes to processes, enforce non-cooperating editors, or certify that changes merge. An unavailable scan stays unavailable. No telemetry or model calls are added.
 
 ## Development

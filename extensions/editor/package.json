@@ -57,6 +57,10 @@
       {
         "command": "kith.refresh",
         "title": "Kith: Refresh Workspace Status"
+      },
+      {
+        "command": "kith.showDetails",
+        "title": "Kith: Show Coordination Details"
       }
     ],
     "mcpServerDefinitionProviders": [
