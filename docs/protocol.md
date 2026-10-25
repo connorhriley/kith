@@ -52,6 +52,12 @@ Linked-module replies retain every symbol supplied by the already bounded core i
 
 `kith_get_status` defaults to current/pending tasks and reports `completedTaskCount` and `historyIncluded:false`. It also omits successful integration logs by default, reporting `completedIntegrationCount`. Its optional `includeHistory:true` returns completed tasks and successful integration records with their original logs. Queued/testing/failed integrations and their diagnostics remain visible in both modes. All lock records retain their identity, fencing and lease/expiry fields in both modes. `includeContracts:true` continues to return full unmodified registry records. No new tool, dependency or storage migration is introduced.
 
+### Unreleased: lean owned-call receipts
+
+Owned MCP replies add `session:{agentId,leaseExpiresAt}` after the existing authorization/renewal, so agents can schedule an idle heartbeat without a status query. The deadline is Unix milliseconds. Session grants also keep their existing `agent.lease_expires_at`. No autonomous renewal, extended lease, new tool or storage change is added. Failed authorization/expired sessions do not receive a live receipt. Keyed replays retain the original deadline and `operation.replayed:true`; that historical receipt never establishes current ownership.
+
+Begin/queued-claim already creates the session and claims files; edit reports already publish extracted signatures; completion runs verification. Extra start/lock/publish/check calls for those same actions are unnecessary. Existing sibling event cursors still deliver new events once; conflict details are not suppressed or summarized away.
+
 ## Protocol 1.4: keyed retries and operational failures (0.1.6)
 
 These additions ship in `kith-coord` 0.1.6. Existing callers can omit the new fields and retain the same ownership requirements.

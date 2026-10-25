@@ -3,7 +3,7 @@
   "tools": [
     {
       "name": "kith_start_session",
-      "description": "Create a capability-owned session or resume one with its token.",
+      "description": "Create/resume a session without claiming work; begin_work and claim_next_task already start sessions.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -20,11 +20,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -36,7 +36,7 @@
     },
     {
       "name": "kith_heartbeat",
-      "description": "Renew an active, owned session. Expired sessions cannot be revived.",
+      "description": "Renew an idle owned session before its deadline; other owned calls already renew it. Never revives expired sessions.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -48,7 +48,7 @@
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -104,11 +104,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -150,11 +150,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -205,11 +205,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -256,11 +256,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -293,11 +293,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -348,11 +348,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -388,11 +388,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -456,11 +456,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -523,11 +523,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -561,7 +561,7 @@
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "additionalProperties": false,
@@ -582,7 +582,7 @@
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [
@@ -622,11 +622,11 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128,
-            "description": "Unique client-generated key for this exact mutation. Reuse only to recover its result; never an ownership credential. Retried failures are snapshots; use a new key after repair or backoff."
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
           },
           "repository": {
             "type": "string",
-            "description": "Absolute Git checkout path. Required on global connections without project context. Always use the same original checkout for a task."
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
           }
         },
         "required": [

@@ -4,18 +4,18 @@
 
 Connect through the [MCP-only client setup](integrations.md). Each parallel agent uses its own MCP connection and worktree. No shell exports are needed when using only MCP. Omit `sessionToken` on subsequent calls on the same connection; the initial grant reply still contains it, so keep client transcripts private. The connection retains its granted capability; another connection needs that capability to resume the same ID.
 
-Call these tools on the same connection:
+For a new task, begin directly on one connection; `kith_begin_work` creates the session and claims its scope. A separate session-start, status poll, lock acquisition or manual contract publication is not needed for the same work:
 
 ```text
 kith_begin_work      {"agentId":"auth-worker","title":"Refresh authentication","scopeGlobs":["src/auth/**"],"isolateWorktree":true}
 # Edit files under the returned worktree.worktreePath.
 kith_record_file_edit {"agentId":"auth-worker","filePath":"src/auth/middleware.ts"}
-kith_run_with_mutex  {"agentId":"auth-worker","mutexName":"project-checks","command":["pnpm","typecheck"]}
-kith_heartbeat       {"agentId":"auth-worker"}
 kith_complete_work   {"agentId":"auth-worker","verificationCmd":"pnpm typecheck"}
 ```
 
-Use a different ID and nonoverlapping scope for another agent. An overlapping exclusive scope returns a tool error. Commands run with the MCP server permissions and require client approval; their working directory defaults to the registered worktree. Keep the connection open and heartbeat before the default five-minute session expiry. See the runnable [two-client example](../examples/two-agents.mjs).
+Use a different ID and nonoverlapping scope for another agent. An overlapping exclusive scope returns a tool error. Commands run with the MCP server permissions and require client approval; their working directory defaults to the registered worktree. Keep the connection open. Owned calls already renew the lease; in the next release their replies include `session.leaseExpiresAt` (Unix milliseconds), with `agent.lease_expires_at` on session grants. Heartbeat only during idle periods before that deadline; an expired claim cannot be used or revived. A replayed operation contains the original historical deadline and does not renew ownership. Use status for a blocker, changed coordination or recovery rather than polling between edits.
+
+Use `kith_run_with_mutex` with literal argv when commands share mutable resources, such as a package installation or shared test database. Ordinary worktree reads need no mutex. `kith_complete_work` runs the integration verification command: avoid immediately running it twice unless diagnosis or project policy requires it. Keep all required project checks and review/merge gates. File-edit reports already publish extracted signatures; `kith_publish_contract` remains available for explicit/planned contracts. See the runnable [two-client example](../examples/two-agents.mjs).
 
 ## Launch a dev server on its allocated port
 

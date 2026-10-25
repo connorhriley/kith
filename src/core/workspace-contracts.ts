@@ -54,8 +54,8 @@ export function buildSwarmPrompts(repoRoot: string): SwarmPrompts {
     worker: `Use Kith on repository ${cleanRoot} to claim and execute the next queued task:
 1. Call kith_claim_next_task with a unique agentId, repository "${cleanRoot}", and isolateWorktree: true.
 2. Edit only inside the returned worktree.worktreePath and within the task's locked scopeGlobs, respecting publishedContracts and linkedContracts.
-3. After each file edit, call kith_record_file_edit to check contract blast radius and live dirty-tree conflicts.
-4. Commit your changes in the worktree and call kith_complete_work with a read-only verificationCmd to verify and merge.`,
+3. Report changed files with kith_record_file_edit for contract/conflict checks; it publishes extracted signatures. Owned calls renew the lease; heartbeat only while idle before session.leaseExpiresAt. Use status for blockers/recovery, not routine polling.
+4. Commit your changes in the worktree and call kith_complete_work with a read-only verificationCmd to verify and merge. Avoid rerunning that check immediately beforehand unless diagnosis or project policy requires it.`,
   };
 }
 
