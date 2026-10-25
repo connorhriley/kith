@@ -3,6 +3,27 @@ import Darwin
 
 enum RadarError: Error { case launch, timeout, outputLimit, failed, invalid }
 
+// One view per login, shared across retained runtime versions. Kernel locks release on
+// exit/crash; never delete the inode or use a stale PID to terminate another process.
+final class RadarInstance {
+    private let descriptor: Int32
+    init?(path: String) throws {
+        let fd = open(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        guard fd >= 0 else { throw RadarError.launch }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_uid == getuid(), info.st_nlink == 1,
+              info.st_mode & S_IFMT == S_IFREG else { close(fd); throw RadarError.launch }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            let busy = errno == EWOULDBLOCK
+            close(fd)
+            if busy { return nil }
+            throw RadarError.launch
+        }
+        descriptor = fd
+    }
+    deinit { close(descriptor) }
+}
+
 private final class Capture {
     private let lock = NSLock()
     private var bytes = Data()

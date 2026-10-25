@@ -129,7 +129,7 @@ try {
  const cursorFile=path.join(root,'.cursor/mcp.json');
  const originalCursor=JSON.stringify({mcpServers:{peer:{command:'peer',args:['retain']}},custom:true});
  fs.writeFileSync(cursorFile,originalCursor);
- execFileSync(process.execPath,[cli,'setup',root],{cwd:root,env:setupEnv,encoding:'utf8'});
+ execFileSync(process.execPath,[cli,'setup',root,'--no-radar'],{cwd:root,env:setupEnv,encoding:'utf8'});
  const autoConfig=JSON.parse(fs.readFileSync(cursorFile,'utf8'));
  assert.equal(autoConfig.custom,true);assert.equal(autoConfig.mcpServers.peer.command,'peer');
  assert.equal(autoConfig.mcpServers.kith.command,process.execPath);assert.equal(fs.realpathSync.native(autoConfig.mcpServers.kith.args.at(-1)),fs.realpathSync.native(root));

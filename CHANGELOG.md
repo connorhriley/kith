@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Open read-only Radar as part of macOS setup, using the retained runtime and an acknowledged native launch. Repeat setup keeps the existing view/workspace; a kernel-held instance lock prevents duplicate new views and releases on exit/crash. Add `--no-radar` for headless setup; dry runs and other platforms never launch it. No login item, model calls, dependency or ownership change.
+- Make generated guidance use status checks for blockers, changed coordination and recovery instead of routine polling; retain heartbeat and edit-reporting safeguards. Default status replies omit successful integration logs with an explicit count; the existing `includeHistory:true` restores them. Failed/current integration diagnostics remain visible.
+
 ## 0.1.7 — 2026-10-24
 
 - Retain the bundled setup runtime outside temporary npx caches, verify MCP discovery, and preserve existing client settings, custom launchers and original-byte recovery backups. Clarify actual tasks, claims, resource waits and verification results in the read-only coordination view.

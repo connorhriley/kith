@@ -370,7 +370,7 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean) {
     {
       agentId: z.string().optional(),
       sessionToken: z.string().optional(),
-      includeHistory: z.boolean().optional().describe('Include completed task history; default false returns current/pending tasks plus completedTaskCount. Lock lease details are always preserved.'),
+      includeHistory: z.boolean().optional().describe('Include completed tasks and successful integration logs. Default returns current/pending tasks and unresolved integrations, with completedTaskCount/completedIntegrationCount. Lock leases and failed integration diagnostics are always preserved.'),
       includeContracts: z.boolean().optional().describe('Include the full contract registry. Default false keeps frequent status polls compact; contractCount always reports its size.'),
     },
     async (args, extra, { engine, register, authorize, formatReply }) => {

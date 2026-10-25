@@ -41,7 +41,7 @@ try {
   const setupHome = path.join(temp, 'synthetic home');
   fs.mkdirSync(path.join(setupHome, '.claude'), {recursive: true});
   const setupEnv = { ...env, HOME: setupHome };
-  execFileSync(process.execPath, [cli, 'setup', install], {cwd: install, env: setupEnv, timeout: 15000});
+  execFileSync(process.execPath, [cli, 'setup', install, '--no-radar'], {cwd: install, env: setupEnv, timeout: 15000});
   const globalConfig = JSON.parse(fs.readFileSync(path.join(setupHome, '.claude.json'), 'utf8')).mcpServers.kith;
   assert.equal(globalConfig.args[1], 'mcp');
   assert(globalConfig.args[0].startsWith(path.join(fs.realpathSync(setupHome), '.local/share/kith/runtimes')));

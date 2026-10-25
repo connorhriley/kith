@@ -13,6 +13,11 @@ if args.count > 1 {
     case "--invalid": print("not JSON")
     case "--failure": exit(1)
     case "--hang": Thread.sleep(forTimeInterval: 30)
+    case "--lock":
+        let owner = try RadarInstance(path: args[2])
+        precondition(owner != nil)
+        FileHandle.standardOutput.write(Data("1".utf8))
+        withExtendedLifetime(owner) { Thread.sleep(forTimeInterval: 30) }
     default: exit(2)
     }
     exit(0)
@@ -58,3 +63,25 @@ precondition(selection.accepts(current))
 selection.select("/tmp/project-a")
 precondition(!selection.accepts(old), "Returning to A must not accept its old scan")
 print("Workspace selection rejects late completions, including A -> B -> A.")
+
+let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+defer { try? FileManager.default.removeItem(at: folder) }
+let lockPath = folder.appendingPathComponent("radar.lock").path
+let holder = Process(), ready = Pipe()
+holder.executableURL = URL(fileURLWithPath: executable)
+holder.arguments = ["--lock", lockPath]; holder.standardOutput = ready
+try holder.run()
+precondition(ready.fileHandleForReading.readData(ofLength: 1) == Data("1".utf8))
+let duplicate = try RadarInstance(path: lockPath)
+precondition(duplicate == nil, "Repeat setup must not open another view")
+kill(holder.processIdentifier, SIGKILL); holder.waitUntilExit()
+let recovered = try RadarInstance(path: lockPath)
+precondition(recovered != nil, "A crashed view must not leave a stale instance lock")
+let link = folder.appendingPathComponent("redirect.lock").path
+try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: lockPath)
+var redirected = false
+do { _ = try RadarInstance(path: link) } catch { redirected = true }
+precondition(redirected, "Redirected locks must be refused without altering their target")
+withExtendedLifetime(recovered) {}
+print("Radar instance checks passed: duplicate launch, crash recovery and symlink refusal.")

@@ -553,7 +553,7 @@
           },
           "includeHistory": {
             "type": "boolean",
-            "description": "Include completed task history; default false returns current/pending tasks plus completedTaskCount. Lock lease details are always preserved."
+            "description": "Include completed tasks and successful integration logs. Default returns current/pending tasks and unresolved integrations, with completedTaskCount/completedIntegrationCount. Lock leases and failed integration diagnostics are always preserved."
           },
           "includeContracts": {
             "type": "boolean",

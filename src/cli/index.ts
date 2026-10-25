@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { KITH_VERSION } from '../version.js';
 
 import { uninstallKith } from './setup-ledger.js';
@@ -16,6 +15,7 @@ import { PassiveConflictWatcher } from '../core/watcher.js';
 import { autoConfigureAllClients } from './setup-auto.js';
 import { installedCliPath } from './runtime.js';
 import { setupRuntime, verifySetupRuntime } from './setup-runtime.js';
+import { startRadar } from './radar.js';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 
@@ -40,7 +40,7 @@ function parseFlags(argv: string[]): {
       } else {
         const key = arg.slice(2);
         const next = mainArgs[i + 1];
-        if (!['worktree', 'wait', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify'].includes(key) && next && !next.startsWith('--')) {
+        if (!['worktree', 'wait', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify', 'no-radar'].includes(key) && next && !next.startsWith('--')) {
           flags[key] = next;
           i++;
         } else {
@@ -136,6 +136,18 @@ async function main(): Promise<void> {
     console.log(`\n${dryRun ? 'Would retain' : 'Runtime retained at'}: ${cliPath}`);
     if (!dryRun) console.log('Retained server: MCP discovery passed. Client connection is checked in your client.');
     if (!results.some(r=>r.clientName==='Project instructions')) console.log('For project guidance, run setup with the Git checkout path.');
+    if (process.platform === 'darwin' && !flags['no-radar']) {
+      if (dryRun) console.log('Radar: would open the read-only menu-bar view.');
+      else if (!process.exitCode) {
+        try {
+          const state = await startRadar(targetDir, cliPath);
+          console.log(state === 'started' ? `Radar: opened for ${targetDir} (read-only; no model calls).` : 'Radar: already open; existing workspace kept. Use Switch Workspace in its menu if needed.');
+        } catch (error) {
+          console.error(`Radar did not open: ${(error as Error).message} Client configuration is retained. Retry setup, or use --no-radar for MCP-only setup.`);
+          process.exitCode = 1;
+        }
+      } else console.log('Radar: not opened; resolve the setup entries above first.');
+    }
     console.log('Restart/reconnect configured clients and approve Kith in their MCP controls.');
     console.log('Then ask your agent: Use Kith for this task; claim its files, use an isolated worktree and verify before integrating.');
     console.log('Setup does not claim work. The coordination view shows a task only after the agent begins it.');
@@ -146,14 +158,8 @@ async function main(): Promise<void> {
   if (cmd === 'menubar' || cmd === 'bar' || cmd === 'tray') {
     const targetDir = positional[1] ? path.resolve(positional[1]) : repoRoot;
     if (process.platform !== 'darwin') throw new Error('The menu-bar view requires macOS. Use kith watch on this platform.');
-    const menubarBin = path.resolve(path.dirname(installedCliPath()), '../../bin/kith-menubar');
-    if (!fs.existsSync(menubarBin)) throw new Error('Menu-bar binary is missing; reinstall the package or run pnpm build:menubar in the source checkout.');
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(menubarBin, [fs.realpathSync(targetDir), process.execPath, installedCliPath()], { detached: true, stdio: 'ignore' });
-      child.once('error', reject);
-      child.once('spawn', () => { child.unref(); resolve(); });
-    });
-    console.log(`Kith menu-bar view launched for ${targetDir}.`);
+    const state = await startRadar(targetDir, installedCliPath());
+    console.log(state === 'started' ? `Kith Radar opened for ${targetDir}.` : 'Kith Radar is already open; existing workspace kept. Use Switch Workspace in its menu if needed.');
     return;
   }
 
@@ -570,7 +576,7 @@ Usage:
   kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure MCP clients (--dry-run, --only, --mcp-only)
   kith heartbeat --agent <id>                   Refresh the owned session lease
   kith status [--offline]                         Output JSON state and workspaces; offline never migrates or reaps\n  kith uninstall [--dry-run]                      Restore unchanged tracked setup files; retain work and recovery state\n  kith doctor                                     Check runtime, PATH, configuration, sessions and worktree health without writes\n  kith recover                                    Inspect retained work, expired claims and recovery records offline
-  kith setup [checkout] [--dry-run]                Configure detected clients; preserve hooks and custom settings
+  kith setup [checkout] [--no-radar] [--dry-run]    Configure clients and open macOS Radar; preserve custom settings
   kith watch [checkout] [--once --json]            Observe linked-worktree path overlaps without enforcement
   kith menubar [checkout]                         Optional read-only macOS view
   kith mcp --repo <checkout>                      Start stdio MCP server bound to a project

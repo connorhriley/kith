@@ -33,7 +33,7 @@ it('one setup command survives deletion of its transient package and preserves/r
   const agents='Existing team instructions\n';fs.writeFileSync(path.join(root,'AGENTS.md'),agents);
   const env={...process.env,HOME:home,USERPROFILE:home};
   const cli=path.join(transient,'dist/cli/index.js');
-  const run=(...args:string[])=>execFileSync(process.execPath,[cli,'setup',root,...args],{env,cwd:root,encoding:'utf8',timeout:20000});
+  const run=(...args:string[])=>execFileSync(process.execPath,[cli,'setup',root,'--no-radar',...args],{env,cwd:root,encoding:'utf8',timeout:20000});
   run('--dry-run');expect(fs.existsSync(path.join(home,'.local'))).toBe(false);expect(fs.readFileSync(path.join(root,'AGENTS.md'),'utf8')).toBe(agents);
   run();
   const cfg=JSON.parse(fs.readFileSync(path.join(home,'.claude.json'),'utf8'));

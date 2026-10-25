@@ -140,7 +140,7 @@ export function compactFileEditResult(res: PostFileEditHookResult): Record<strin
 
 /**
  * Compacts `kith_get_status` by omitting historical `"status": "done"` tasks
- * unless `includeHistory: true` is requested. Keep complete lock lease records
+ * and successful integration logs unless `includeHistory: true` is requested. Keep complete lock lease records
  * and the full registry when includeContracts is explicitly requested.
  */
 export function compactStatusResult(
@@ -158,6 +158,8 @@ export function compactStatusResult(
     ...state,
     tasks: activeOrPendingTasks,
     completedTaskCount,
+    mergeQueue: includeHistory ? state.mergeQueue : state.mergeQueue.filter(entry => entry.status !== 'merged'),
+    completedIntegrationCount: state.mergeQueue.filter(entry => entry.status === 'merged').length,
     historyIncluded: includeHistory,
     contracts: includeContracts ? state.contracts : [],
     contractCount: state.contracts.length,

@@ -92,6 +92,8 @@ Version 0.1.1 generates MCP configuration using the current absolute Node execut
 
 From 0.1.7, `npx --yes --package kith-coord@0.1.7 kith setup /absolute/checkout` is the single setup path. Versions through 0.1.6 need a persistent npm installation first. Setup retains the exact bundled runtime under `~/.local/share/kith/runtimes/`, validates actual MCP discovery without selecting a repository, configures supported detected clients and adds marked project guidance. Clearing the original npx cache does not break its launcher. Repeat setup reuses identical content; upgrades retain prior runtimes so existing processes and configuration backups remain usable. A damaged selected runtime is refused rather than overwritten. Custom launchers remain custom.
 
+**Next release:** macOS setup also opens read-only Radar for the selected checkout/workspace from that retained runtime. Repeating setup keeps an existing view and its selected workspace; use its **Switch Workspace** menu to change projects. `--no-radar` skips launching it; `--dry-run` previews without launching. Linux and Windows skip it. No login item is installed, and Radar makes no model calls. Startup failures are reported with a nonzero exit while preserving completed client setup; rerun setup after resolving the error.
+
 Retained runtimes are not automatically deleted by uninstall because existing or edited client configurations may still reference them. Global setup outside a Git checkout does not create one whole-machine coordination database. Project guidance joins the existing original-byte setup ledger. An older project schema is refused before changing clients: stop all coordinators and follow the upgrade procedure first.
 
 

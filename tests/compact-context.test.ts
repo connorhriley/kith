@@ -106,15 +106,26 @@ it('preserves each downstream owner/distance and reconstructs a grouped footer w
 
 it('retrieves completed history through the advertised MCP option and retains live lock lease records', async () => {
   const c = await connect();
-  await call(c, 'kith_begin_work', {agentId: 'past', title: 'Completed', scopeGlobs: ['src/past.ts']});
-  await call(c, 'kith_complete_work', {agentId: 'past'});
+  const past = await call(c, 'kith_begin_work', {agentId: 'past', title: 'Completed', scopeGlobs: ['past.js'], isolateWorktree: true});
+  const checkout = past.worktree.worktreePath;
+  fs.writeFileSync(path.join(checkout, 'past.js'), 'export const done = true;\n');
+  for (const args of [['add', 'past.js'], ['commit', '-qm', 'Complete task']]) execFileSync('git', args, {cwd: checkout, stdio: 'ignore'});
+  const failed = await c.callTool({name: 'kith_complete_work', arguments: {agentId: 'past', verificationCmd: 'node -e "process.exit(17)"'}});
+  expect(failed.isError).toBe(true); expect(failed.structuredContent?.ok).toBe(false);
+  const needsRepair = await call(c, 'kith_get_status');
+  expect(needsRepair.mergeQueue.some((entry: any) => entry.status === 'failed' && entry.diagnostics_output)).toBe(true);
+  expect((await call(c, 'kith_complete_work', {agentId: 'past', verificationCmd: 'node --check past.js'})).ok).toBe(true);
   const current = await call(c, 'kith_begin_work', {agentId: 'current', title: 'Current', scopeGlobs: ['src/current.ts']});
   const normal = await call(c, 'kith_get_status');
   expect(normal.tasks).toHaveLength(1); expect(normal.completedTaskCount).toBe(1); expect(normal.historyIncluded).toBe(false);
   expect(normal.locks[0]).toEqual(current.locks[0]); expect(normal.locks[0].expires_at).toBeGreaterThan(Date.now());
+  expect(normal.completedIntegrationCount).toBe(1);
+  expect(normal.mergeQueue.some((entry: any) => entry.status === 'merged')).toBe(false);
+  expect(normal.mergeQueue.filter((entry: any) => entry.status === 'failed')).toEqual(needsRepair.mergeQueue);
   const full = await call(c, 'kith_get_status', {includeHistory: true});
   expect(full.tasks).toHaveLength(2); expect(full.historyIncluded).toBe(true);
   expect(full.tasks.some((t: any) => t.title === 'Completed' && t.status === 'done')).toBe(true);
+  expect(full.mergeQueue.some((entry: any) => entry.status === 'merged' && entry.diagnostics_output)).toBe(true);
   const tools = (await c.listTools()).tools;
   expect((tools.find(t => t.name === 'kith_get_status')!.inputSchema.properties as any).includeHistory).toBeDefined();
 });

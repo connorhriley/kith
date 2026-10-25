@@ -78,7 +78,7 @@ npx --yes --package kith-coord@0.1.7 kith setup
 
 Durable setup starts with **0.1.7**. Earlier versions need a persistent global npm installation before setup. [Client setup](docs/integrations.md#configure-detected-local-clients) covers configuration scope and advanced options.
 
-Setup retains an exact self-contained runtime outside npx's cache, checks its MCP discovery, and backs up changes before writing them. Existing custom Kith launchers, peer servers, hooks and permissions are preserved. From outside a Git checkout it configures global connections; pass a project path to add that project's guidance. Reconnect the client and approve its MCP server through the client's normal controls.
+Setup retains an exact self-contained runtime outside npx's cache, checks its MCP discovery, and backs up changes before writing them. **On macOS, the next release also opens read-only Radar automatically**; use `--no-radar` for MCP-only setup. Existing custom Kith launchers, peer servers, hooks and permissions are preserved. From outside a Git checkout it configures global connections; pass a project path to add that project's guidance. Reconnect the client and approve its MCP server through the client's normal controls.
 
 Ask your agent to do the task using Kith. The view says **Watching only** until a task is actually recorded. A configured server is not a running task. `kith setup --dry-run` previews without writes; `kith doctor /absolute/checkout` diagnoses configuration.
 
@@ -137,7 +137,11 @@ kith lock acquire --agent worker-1 --scope package.json --wait --wait-ms 30000
 
 See [dev-server launch and waiting claims](docs/usage.md#launch-a-dev-server-on-its-allocated-port) for framework flags, session setup, cancellation, and MCP usage.
 
-## Optional read-only monitoring
+## Read-only Radar
+
+In the next release, macOS setup opens Radar in the menu bar for the selected checkout or workspace. It uses the retained installation, so clearing the npx cache does not break it. Repeat setup keeps an existing Radar workspace selected. Use **Switch Workspace** in its menu to change it.
+
+`kith setup --no-radar` configures MCP without opening Radar (useful on headless machines); `--dry-run` never launches it. Linux and Windows skip the menu-bar view. Setup does not add a login item; after quitting, reopen with:
 
 ```sh
 kith watch /path/to/workspace --once --json

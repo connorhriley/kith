@@ -16,6 +16,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
     var linkedContracts: [[String: Any]] = []
     var contractWarnings: [String] = []
     var recentWorkspaces: [String] = []
+    var instance: RadarInstance?
 
     func registerWorkspace(_ path: String) {
         let canonical = URL(fileURLWithPath: path).standardized.path
@@ -27,7 +28,23 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let args = CommandLine.arguments
-        guard args.count == 4 else { NSApplication.shared.terminate(nil); return }
+        guard args.count == 4 || args.count == 5 && args[4] == "--ready" else { exit(1) }
+        func acknowledge(_ state: String) {
+            if args.count == 5 { FileHandle.standardOutput.write(Data((state + "\n").utf8)) }
+        }
+        do {
+            let lockPath = FileManager.default.temporaryDirectory.appendingPathComponent("kith-radar-\(getuid()).lock").path
+            instance = try RadarInstance(path: lockPath)
+            guard instance != nil else { acknowledge("KITH_RADAR_RUNNING"); exit(0) }
+        } catch {
+            FileHandle.standardError.write(Data("Could not acquire the private Radar instance lock.\n".utf8)); exit(1)
+        }
+        // Older releases did not hold the instance lock. Leave an existing view
+        // and its selected workspace alone during upgrade, too.
+        let executableName = URL(fileURLWithPath: args[0]).lastPathComponent
+        if NSWorkspace.shared.runningApplications.contains(where: {
+            $0.processIdentifier != getpid() && $0.isFinishedLaunching && !$0.isTerminated && $0.executableURL?.lastPathComponent == executableName
+        }) { acknowledge("KITH_RADAR_RUNNING"); exit(0) }
         selection.select(args[1])
         kithCliPath = args[2]
         kithScriptPath = args[3]
@@ -40,6 +57,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         }
 
         buildMenu(collisions: [], recentEdits: [], repos: [])
+        acknowledge("KITH_RADAR_STARTED")
 
         // Poll every 3 seconds
         timer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
