@@ -135,7 +135,7 @@ async function main(): Promise<void> {
     try { brief = readBrief(repoRoot, { scopeGlobs: scope }); }
     catch (error) {
       brief = { repository: repoRoot, mode: 'worktrees' as const, state: 'unavailable' as const, error: error instanceof Error ? error.message : String(error), observedAt: Date.now(),
-        active: [], blockers: [], queued: { count: 0, next: [] }, handoffs: [], conflicts: [], empty: true, notice: '' };
+        active: [], blockers: [], queued: { count: 0, stale: 0, next: [] }, handoffs: [], conflicts: [], empty: true, notice: '' };
     }
     if (flags.json) console.log(JSON.stringify(brief, null, 2));
     else { const text = formatBrief(brief, { quiet: Boolean(flags.quiet) }); if (text) console.log(text); }

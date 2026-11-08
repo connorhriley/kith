@@ -98,7 +98,7 @@ export class KithEngine {
   public brief(options: { scopeGlobs?: string[] } = {}): Brief {
     return buildBrief({
       repository: this.coordDb.repoRoot, mode: this.workflowMode(), observedAt: Date.now(), available: true,
-      agents: this.fencing.listAgents(true), tasks: this.intents.listTasks(), locks: this.locks.listLocks(),
+      agents: this.fencing.listAgents(true), tasks: this.intents.listTasks().map(task => ({ ...task, updated_at: task.updated_at })), locks: this.locks.listLocks(),
       conflicts: this.shadowGit.listConflicts(), handoffs: this.handoffs.recent(30 * 24 * 3600 * 1000),
     }, {
       scopeGlobs: options.scopeGlobs?.map(glob => { try { return LockEngine.normalizePattern(this.coordDb.repoRoot, glob); } catch { return glob; } }),

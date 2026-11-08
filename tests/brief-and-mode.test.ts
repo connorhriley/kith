@@ -77,6 +77,22 @@ describe('the brief', () => {
     expect(text).toContain('kith handoff list --task t1');
   });
 
+  it('counts long-untouched queued work instead of listing it, unless a note refers to it', () => {
+    const old = (id: string, title: string, over: object = {}) => ({ id, title, status: 'queued', owner_agent_id: null, scope_globs: ['a/**', 'b/**', 'c/**', 'd/**'], priority: 10, updated_at: 1_000_000 - 30 * 24 * 3600_000, ...over });
+    const brief = buildBrief(input({ tasks: [old('q1', 'ancient'), old('q2', 'also ancient'), old('q3', 'recent', { updated_at: 1_000_000 - 3600_000 }), old('q4', 'ancient but noted')],
+      handoffs: [note({ task_id: 'q4', task_status: 'queued' })] }));
+    expect(brief.queued.count).toBe(2);
+    expect(brief.queued.stale).toBe(2);
+    expect(brief.queued.next.map(task => task.title)).toEqual(['recent', 'ancient but noted']);
+    const text = formatBrief(brief);
+    expect(text).toContain('Queued (2 recent, 2 untouched for over two weeks)');
+    expect(text).toContain('a/**, b/**, c/** (+1 more)');
+    // Only stale work queued: it is still reported, as a count.
+    const onlyStale = buildBrief(input({ tasks: [old('q1', 'ancient')], handoffs: [], agents: [], conflicts: [], locks: [] }));
+    expect(onlyStale.empty).toBe(false);
+    expect(formatBrief(onlyStale)).toContain('Queued (none recent, 1 untouched for over two weeks)');
+  });
+
   it('narrows to a scope and lists the claims that would block you', () => {
     const brief = buildBrief(input(), { scopeGlobs: ['src/auth/session.ts'] });
     expect(brief.active.map(agent => agent.agentId)).toEqual(['alpha']);

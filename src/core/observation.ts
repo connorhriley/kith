@@ -102,7 +102,7 @@ export function readBrief(directory = process.cwd(), options: { scopeGlobs?: str
     available: state.state === 'ready', error: state.state === 'unavailable' ? state.error : undefined,
     agents: state.agents,
     tasks: (state.tasks as Array<Record<string, any>>).map(task => ({ id: String(task.id), title: String(task.title), status: String(task.status),
-      owner_agent_id: (task.owner_agent_id as string | null) ?? null, scope_globs: (task.scope_globs as string[]) ?? [], priority: Number(task.priority) })),
+      owner_agent_id: (task.owner_agent_id as string | null) ?? null, scope_globs: (task.scope_globs as string[]) ?? [], priority: Number(task.priority), updated_at: Number(task.updated_at) })),
     locks: (state.locks as Array<Record<string, any>>).map(lock => ({ owner_agent_id: String(lock.owner_agent_id), pattern: String(lock.pattern), mode: String(lock.mode), expires_at: Number(lock.expires_at) })),
     conflicts: (state.conflicts as Array<Record<string, any>>).map(conflict => ({ agent_a: String(conflict.agent_a), agent_b: String(conflict.agent_b), file_path: String(conflict.file_path), severity: String(conflict.severity) })),
     handoffs: state.handoffs,

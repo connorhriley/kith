@@ -180,7 +180,8 @@ export function captureAbandoned(coordDb: CoordDatabase, agentId: string, reason
       summary: `Session '${agentId}' ended because ${REASONS[reason] ?? reason} while working on "${task.title}". It wrote no handoff note; this record lists only what Kith observed.`,
       remaining: [
         'The task was returned to the queue and is unfinished.',
-        ...(agent?.worktree_path ? [`Inspect the previous worktree (branch ${agent.branch ?? 'unknown'}) for uncommitted or unintegrated work before starting over.`] : []),
+        ...(agent?.branch ? [`Inspect branch ${agent.branch} (and its worktree, if it still exists) for uncommitted or unintegrated work before starting over.`]
+          : agent?.worktree_path ? ['Inspect the previous worktree for uncommitted or unintegrated work before starting over.'] : []),
       ],
       failed, files, scope: parseList(task.scope_globs_json),
       branch: agent?.branch, worktreePath: agent?.worktree_path,
