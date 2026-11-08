@@ -29,6 +29,7 @@ Kith gives cooperating agents shared local state: who owns a task, which files a
 | Give agents separate working files | Git worktrees with an explicit integration step |
 | Check work before integration | Your project's verification command |
 | Share local tools | Port reservations and supervised command mutexes |
+| Keep what an agent learned | Handoff notes that survive a session boundary and reach whoever works the same scope next |
 | See what is happening | Session/task state through CLI/MCP; optional read-only editor and worktree views |
 
 Kith fits workflows where you already launch multiple coding agents and want them to coordinate. It does not choose models, write prompts, or launch a fleet for you. Worktrees separate files; Kith adds shared ownership and resource coordination.
@@ -157,7 +158,8 @@ The menu and editor lead with recorded tasks, current file claims, shared-resour
 1. **Begin through MCP.** Call `kith_begin_work` with a unique `agentId`, explicit `scopeGlobs`, and `isolateWorktree: true`. The connection retains session ownership; no shell exports are needed for this MCP-only workflow.
 2. **Claim a scope.** Cooperating clients receive a conflict when an exclusive claim overlaps another claim.
 3. **Do the work.** Edit the returned `worktree.worktreePath`, report edits with `kith_record_file_edit`, and use `kith_run_with_mutex` for serialized commands. Heartbeat before expiry and keep the owning connection open.
-4. **Verify and complete.** For a worktree, Kith checkpoints changes and integrates through a separate staging worktree. The target must be clean. Supply a verification command to check more than Git mergeability.
+4. **Leave a handoff.** When you finish, get blocked or must stop, call `kith_write_handoff` with what is done, what remains, what failed and what you learned. `releaseTask` hands the task back to the queue. If a session ends without a note, Kith records what it observed. The next agent on the same scope receives these notes from `kith_begin_work` or `kith_claim_next_task`, labelled as untrusted information to verify.
+5. **Verify and complete.** For a worktree, Kith checkpoints changes and integrates through a separate staging worktree. The target may hold unrelated uncommitted work, but not edits to files the integration changes. Supply a verification command to check more than Git mergeability.
 
 Failed verification leaves the target unchanged and keeps the worktree for repair. Successful integration also retains the worktree until explicit cleanup. External Git writers must still coordinate.
 

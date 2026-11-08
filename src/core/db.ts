@@ -327,6 +327,20 @@ export class CoordDatabase {
           result_json TEXT, created_at INTEGER NOT NULL
         );
       `);
+      // Optional and additive: older binaries ignore the table and schema stays 3, so mixed-version clients
+      // sharing one repository keep working. Readers must tolerate its absence in older snapshots.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS handoffs (
+          id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT NOT NULL, client TEXT NOT NULL DEFAULT '',
+          kind TEXT NOT NULL, source TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+          done_json TEXT NOT NULL DEFAULT '[]', remaining_json TEXT NOT NULL DEFAULT '[]',
+          learned_json TEXT NOT NULL DEFAULT '[]', failed_json TEXT NOT NULL DEFAULT '[]',
+          files_json TEXT NOT NULL DEFAULT '[]', scope_json TEXT NOT NULL DEFAULT '[]',
+          branch TEXT, worktree_path TEXT, transcript_ref TEXT, created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_handoffs_task ON handoffs(task_id);
+        CREATE INDEX IF NOT EXISTS idx_handoffs_created ON handoffs(created_at DESC);
+      `);
       if (version < 2) {
         // Legacy sessions have no capability. Invalidate coordination ownership, never files.
         this.db.exec(`

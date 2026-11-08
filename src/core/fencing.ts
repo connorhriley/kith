@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CoordDatabase } from './db.js';
+import { captureAbandoned } from './handoff-store.js';
 
 export interface AgentRecord {
   id: string;
@@ -230,6 +231,8 @@ export class FencingAndAgentManager {
   private reclaim(agentId: string, status: 'dead' | 'completed', reason: string): void {
     const epoch = this.coordDb.nextFencingToken();
     const now = Date.now();
+    // Record what was in flight before the claims that describe it are released. Never let this block reclaim.
+    if (status === 'dead') { try { captureAbandoned(this.coordDb, agentId, reason); } catch { /* Best effort. */ } }
     this.coordDb.db.prepare('UPDATE agents SET status=?, last_heartbeat_at=? WHERE id=?').run(status, now, agentId);
     this.coordDb.db.prepare('DELETE FROM locks WHERE owner_agent_id=?').run(agentId);
     this.coordDb.db.prepare('DELETE FROM resources WHERE owner_agent_id=?').run(agentId);

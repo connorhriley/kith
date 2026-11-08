@@ -16,6 +16,7 @@ import {
 } from './dep-graph.js';
 import { FencingAndAgentManager } from './fencing.js';
 import { IntentAndTaskEngine } from './intents.js';
+import { HandoffEngine, handoffBlock } from './handoffs.js';
 import { LockEngine } from './locks.js';
 import { SpeculativeMergeTrain } from './merge-train.js';
 import { ConflictRecord, ShadowGitEngine } from './shadow-git.js';
@@ -54,6 +55,7 @@ export class KithEngine {
   public readonly mergeTrain: SpeculativeMergeTrain;
   public readonly bashGuard: BashMerkleGuard;
   public readonly broker: ResourceBroker;
+  public readonly handoffs: HandoffEngine;
 
   constructor(repoRoot = process.cwd(), customDbPath?: string) {
     this.coordDb = new CoordDatabase(repoRoot, customDbPath);
@@ -72,6 +74,7 @@ export class KithEngine {
       this.shadowGit
     );
     this.broker = new ResourceBroker(this.coordDb, this.fencing);
+    this.handoffs = new HandoffEngine(this.coordDb, this.fencing);
   }
 
   /**
@@ -182,6 +185,7 @@ export class KithEngine {
         ev.event_type === 'contracts_updated' ||
         ev.event_type === 'contract_published' ||
         ev.event_type === 'contract_breaking_change' ||
+        ev.event_type === 'handoff_written' ||
         ev.event_type === 'intent_declared'
       ) {
         lines.push(`• [${ev.event_type}] by ${ev.agent_id ?? 'system'}: ${JSON.stringify(ev.payload)}`);
@@ -221,6 +225,7 @@ export class KithEngine {
       crossRepoComplete: workspaceContracts.complete,
       resources: this.broker.listResources(),
       mergeQueue: this.mergeTrain.listQueue(), quarantined: this.bashGuard.listQuarantined(),
+      handoffs: handoffBlock(this.handoffs.unresolved(10), { summaryMax: 300, filesMax: 5 }),
       mutexWaiters: this.coordDb.db.prepare('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket').all(),
       commandGuards: this.coordDb.db.prepare('SELECT mutex_name,owner_agent_id,worker_pid,supervisor_pid FROM mutex_runs ORDER BY mutex_name').all(),
       workspaces: observeWorkspaces(this.coordDb.repoRoot, agents),
@@ -246,6 +251,8 @@ export class KithEngine {
     return {
       ...intent,
       worktree,
+      handoffs: handoffBlock(intent.ok && intent.task
+        ? this.handoffs.relevantTo({ taskId: intent.task.id, scopeGlobs: intent.task.scope_globs }) : []),
       linkedContracts: workspaceContracts.linkedContracts,
       crossRepoWarnings: workspaceContracts.warnings,
       crossRepoComplete: workspaceContracts.complete,
@@ -269,6 +276,8 @@ export class KithEngine {
     return {
       ...claimedRes,
       worktree,
+      handoffs: handoffBlock(claimedRes.claimed && claimedRes.task
+        ? this.handoffs.relevantTo({ taskId: claimedRes.task.id, scopeGlobs: claimedRes.task.scope_globs }) : []),
       publishedContracts,
       linkedContracts: workspaceContracts.linkedContracts,
       crossRepoWarnings: workspaceContracts.warnings,

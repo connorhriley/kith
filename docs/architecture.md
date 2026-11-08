@@ -15,6 +15,7 @@ Kith runs locally. There is no coordination server: CLI and MCP clients share `.
 | `shadow-git.ts` | Per-agent indexes, synthetic commits, dirty-tree merge probes |
 | `worktree-cow.ts` | Isolated worktree creation and dependency hydration |
 | `merge-train.ts` | Serialized integration through a disposable staging worktree |
+| `handoffs.ts`, `handoff-store.ts` | Notes that survive a session boundary: written by agents, recorded by Kith when a session ends without one, delivered by task and scope overlap; storage is DB-only so it is safe inside reclaim and completion transactions |
 | `bash-guard.ts` | Best-effort snapshots and quarantine recovery |
 | `broker.ts` | Port reservations, FIFO mutex tickets, renewable command leases and process-group guards |
 

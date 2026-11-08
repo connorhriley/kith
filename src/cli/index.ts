@@ -10,6 +10,7 @@ import { SessionOwnershipError } from '../core/fencing.js';
 import { buildSwarmPrompts, KithEngine } from '../core/engine.js';
 import { runKithMcpStdioServer } from '../mcp/server.js';
 import { enforcementMode, HookHandler } from './hook-handler.js';
+import { AGENT_HANDOFF_KINDS, handoffBlock, type WriteHandoffParams } from '../core/handoffs.js';
 import { INTEGRATIONS, Integration, initializeKithRepository } from './init.js';
 import { PassiveConflictWatcher } from '../core/watcher.js';
 import { autoConfigureAllClients } from './setup-auto.js';
@@ -40,7 +41,7 @@ function parseFlags(argv: string[]): {
       } else {
         const key = arg.slice(2);
         const next = mainArgs[i + 1];
-        if (!['worktree', 'wait', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify', 'no-radar', 'require-session'].includes(key) && next && !next.startsWith('--')) {
+        if (!['worktree', 'wait', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify', 'no-radar', 'require-session', 'release', 'all'].includes(key) && next && !next.startsWith('--')) {
           flags[key] = next;
           i++;
         } else {
@@ -246,13 +247,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  const commands = ['session', 'status', 'begin', 'complete', 'heartbeat', 'task', 'lock', 'contract', 'worktree', 'port', 'dev', 'mutex', 'hook'];
+  const commands = ['session', 'status', 'begin', 'complete', 'heartbeat', 'task', 'lock', 'contract', 'worktree', 'port', 'dev', 'mutex', 'hook', 'handoff'];
   if (!commands.includes(cmd)) throw new Error(`Unknown command '${cmd}'. Run kith help.`);
   const subcommands: Record<string, string[]> = {
     session: ['start', 'end'],
     task: ['add', 'claim', 'list'], lock: ['acquire', 'release', 'list'],
     contract: ['publish', 'list'], worktree: ['spawn', 'remove', 'list', 'preview'],
-    hook: ['pre', 'post', 'pre-commit'],
+    hook: ['pre', 'post', 'pre-commit'], handoff: ['write', 'list'],
   };
   if (subcommands[cmd] && (!subCmd || !subcommands[cmd].includes(subCmd))) {
     throw new Error(`Expected kith ${cmd} ${subcommands[cmd].join('|')}`);
@@ -298,6 +299,28 @@ async function main(): Promise<void> {
       authorize();
       if (!engine.fencing.heartbeat(agentId)) throw new Error('Active --agent <id> required');
       console.log(JSON.stringify({ ok: true, agent: engine.fencing.getAgent(agentId) }, null, 2));
+      return;
+    }
+
+    if (cmd === 'handoff') {
+      const text = (value: string | boolean | undefined) => typeof value === 'string' ? value : undefined;
+      if (subCmd === 'list') {
+        const limit = text(flags.limit) === undefined ? undefined : Number(flags.limit);
+        const records = engine.handoffs.list({ taskId: text(flags.task), agentId: text(flags.from), includeResolved: Boolean(flags.all), limit });
+        console.log(JSON.stringify(handoffBlock(records, { summaryMax: 4000, filesMax: 100 }), null, 2));
+        return;
+      }
+      authorize();
+      // List values are separated with semicolons so a sentence can contain commas.
+      const items = (value: string | boolean | undefined) => (text(value) ?? '').split(';').map(item => item.trim()).filter(Boolean);
+      const kind = (text(flags.kind) ?? 'progress') as WriteHandoffParams['kind'];
+      if (!AGENT_HANDOFF_KINDS.includes(kind)) throw new Error(`--kind must be one of ${AGENT_HANDOFF_KINDS.join(', ')}.`);
+      const written = engine.handoffs.write({
+        agentId, taskId: text(flags.task), kind, summary: text(flags.summary) ?? '',
+        done: items(flags.done), remaining: items(flags.remaining), learned: items(flags.learned), failed: items(flags.failed),
+        files: items(flags.files), transcriptRef: text(flags['transcript-ref']), releaseTask: Boolean(flags.release),
+      });
+      console.log(JSON.stringify({ ok: true, released: written.released, handoffId: written.handoff.id, taskId: written.handoff.task_id, filesRecorded: written.handoff.files.length }, null, 2));
       return;
     }
 
@@ -613,6 +636,8 @@ Usage:
   kith begin/lock acquire ... --wait --wait-ms 60000  Wait for a scope claim (bounded, cancellable)
   kith mutex --agent <id> --name <m> -- <cmd>     Serialize commands via mutex
   kith hook pre|post|pre-commit                   Tool & git hook handlers
+  kith handoff write --summary <text> [--kind progress|blocked|done] [--remaining a;b] [--failed a;b] [--release]
+  kith handoff list [--task <id>] [--from <agent>] [--all]   Notes left for the next agent
 `);
 }
 

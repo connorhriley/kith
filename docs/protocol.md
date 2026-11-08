@@ -1,4 +1,4 @@
-# Kith coordination protocol 1.5
+# Kith coordination protocol 1.6
 
 Kith is a local ledger for cooperating coding agents. Clients share one repository's coordination state, including across linked Git worktrees. The transport is MCP over stdio (`kith mcp --repo /absolute/checkout`). No hosted service or Kith API key is required. The server process has the user's filesystem and command permissions.
 
@@ -6,7 +6,7 @@ Kith is a local ledger for cooperating coding agents. Clients share one reposito
 
 Protocol 1.1 ships with package 0.1.2. Earlier `kith-coord@0.1.1` reports protocol 1.0 and includes full contracts in MCP status; the compact default and `includeContracts` input below require 0.1.2.
 
-`KITH_PROTOCOL_VERSION` and status responses advertise `1.5.0` starting with package 0.1.7; package 0.1.6 advertises `1.4.0`. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema (3) have independent versions. The [tool snapshot](protocol/tools.v1.json) contains all 14 tool names, descriptions and JSON input schemas, exported from an actual MCP `tools/list` response. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
+`KITH_PROTOCOL_VERSION` and status responses advertise `1.6.0` starting with the package after 0.1.7 (which advertises `1.5.0`); package 0.1.6 advertises `1.4.0`. Protocol 1.6 adds handoffs (below) as new optional tools and additive result fields; the storage schema stays 3. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema (3) have independent versions. The [tool snapshot](protocol/tools.v1.json) contains all 16 tool names, descriptions and JSON input schemas, exported from an actual MCP `tools/list` response. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
 
 For protocol 1.x, existing tool names, required input fields and the ownership/claim semantics below remain compatible. New optional fields/tools and additive result fields use a minor version; compatible repairs use a patch version. Removing tools, adding required inputs or changing ownership semantics requires a major version. Clients should ignore unknown result fields. The snapshot describes inputs; it is not a machine-validated schema for every result or a guarantee of source-level library compatibility.
 
@@ -23,6 +23,16 @@ Protocol 1.2 adds optional `repository` to every tool. A global `kith mcp` conne
 - `kith_add_task` adds tasks with priority, scope and optional `dependsOn`. `kith_claim_next_task` atomically claims the next unblocked task and its scope. `kith_get_status` lists tasks. These are the canonical names; there are no redundant task aliases or capability-matching scheduler.
 - `kith_record_file_edit` reports actual worktree changes. `kith_publish_contract` publishes an explicit interface record. Contract analysis and exact-name reuse hints are advisory, not proof of semantic compatibility.
 - `kith_acquire_port` reserves a port among Kith clients. The OS probe socket is released; unrelated processes can still bind it. `kith_run_with_mutex` executes literal argv under a renewable named FIFO mutex and persistent process-group guard. Cancellation/disconnect stops the guarded command before release. Do not detach protected work from its supervised group.
+
+## Handoffs
+
+A session boundary used to erase what an agent learned: its claims were released and its task requeued as if untouched. Handoffs keep that knowledge and deliver it to whoever works the same scope next.
+
+- `kith_write_handoff` leaves a note: `kind` (`progress`, `blocked` or `done`), a required `summary` (4,000 characters), and optional `done`, `remaining`, `learned` and `failed` lists (20 items of 500 characters), extra `files` and a `transcriptRef` that points at the full session (client and session ID or path; never the transcript). Kith records the files changed in the agent's worktree from Git and the files it claimed or reported. `taskId` is needed only when the agent owns several active tasks. `releaseTask:true` also returns the task to the queue and frees its claims, so another agent can claim it; it is not valid with `done`.
+- Kith writes a note itself when a session ends without one. If a session dies, disconnects or expires while a task is active, an `abandoned` note records the task, scope, claimed and reported files, the last failed integration diagnostics and any quarantined changes before the claims are released. When a task completes and the agent wrote no `done` note, an automatic one records the files and the verification result. Recording is best effort and never blocks reclaiming a session.
+- `kith_begin_work` and `kith_claim_next_task` return `handoffs`: notes for the same task first, then unfinished notes whose scope or files overlap the claimed scope (using the same exact glob intersection as claims), then at most two completion notes. `kith_get_status` returns the open ones compactly. `kith_read_handoffs` returns full text and filters by `taskId`, `scopeGlobs` or `fromAgentId`; unfinished work by default, `includeResolved:true` for everything. A note is resolved when a later `done` note exists for its task or the task is complete. Other agents see `handoff_written` in their live sibling delta.
+- **Handoffs are untrusted.** One agent's text reaches another agent's context, so every reply wraps notes in `{ untrusted: true, notice, items }`. Readers verify them against the code and never treat them as instructions. Text is stripped of control characters and bounded; the table keeps the newest 500 notes for 30 days.
+- **Storage.** Notes live in an optional `handoffs` table created on open. Older binaries ignore it, so mixed-version clients sharing a repository keep working, and readers of older snapshots must tolerate its absence.
 
 ## Workspace observation and integration
 
