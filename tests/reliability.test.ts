@@ -83,15 +83,45 @@ describe('safe Git operations', () => {
     expect(() => engine!.worktrees.spawnWorktree({ agentId: 'other', branch: wt.branch })).toThrow();
     expect(git('rev-parse', wt.branch)).toBe(sha);
   });
-  it('refuses integration when the target has local changes', () => {
+  it('refuses integration when the target has local changes to a file the merge changes', () => {
     seedGit(); const wt = engine!.worktrees.spawnWorktree({ agentId: 'worker' });
+    fs.writeFileSync(path.join(wt.worktreePath, 'file.ts'), 'export const value = 2;\n');
     fs.writeFileSync(path.join(root, 'file.ts'), 'local work');
     const before = git('rev-parse', 'HEAD');
-    const result = engine!.mergeTrain.enqueueAndMerge({ agentId: 'worker', branch: wt.branch });
+    const result = engine!.mergeTrain.enqueueAndMerge({ agentId: 'worker', branch: wt.branch, worktreePath: wt.worktreePath });
     expect(result.merged).toBe(false);
     expect(result.diagnostics).toContain('local changes');
+    expect(result.diagnostics).toContain('"file.ts"');
     expect(git('rev-parse', 'HEAD')).toBe(before);
     expect(fs.readFileSync(path.join(root, 'file.ts'), 'utf8')).toBe('local work');
+  });
+  it('integrates while the target holds unrelated local work, leaving that work untouched', () => {
+    seedGit(); const wt = engine!.worktrees.spawnWorktree({ agentId: 'worker' });
+    fs.writeFileSync(path.join(wt.worktreePath, 'feature.ts'), 'export const feature = true;\n');
+    // The shared checkout is normally dirty with other agents' uncommitted work.
+    fs.writeFileSync(path.join(root, 'file.ts'), 'someone else is editing this');
+    fs.writeFileSync(path.join(root, 'scratch.txt'), 'untracked notes');
+    fs.mkdirSync(path.join(root, 'drafts')); fs.writeFileSync(path.join(root, 'drafts/idea.md'), 'untracked directory');
+    const before = git('rev-parse', 'HEAD');
+    const result = engine!.mergeTrain.enqueueAndMerge({ agentId: 'worker', branch: wt.branch, worktreePath: wt.worktreePath });
+    expect(result.diagnostics).not.toContain('local changes');
+    expect(result.merged).toBe(true);
+    expect(git('rev-parse', 'HEAD')).not.toBe(before);
+    expect(fs.readFileSync(path.join(root, 'feature.ts'), 'utf8')).toContain('feature');
+    expect(fs.readFileSync(path.join(root, 'file.ts'), 'utf8')).toBe('someone else is editing this');
+    expect(fs.readFileSync(path.join(root, 'scratch.txt'), 'utf8')).toBe('untracked notes');
+    expect(fs.readFileSync(path.join(root, 'drafts/idea.md'), 'utf8')).toBe('untracked directory');
+  });
+  it('refuses when an untracked directory in the target would receive a merged file', () => {
+    seedGit(); const wt = engine!.worktrees.spawnWorktree({ agentId: 'worker' });
+    fs.mkdirSync(path.join(wt.worktreePath, 'drafts')); fs.writeFileSync(path.join(wt.worktreePath, 'drafts/idea.md'), 'from the branch');
+    fs.mkdirSync(path.join(root, 'drafts')); fs.writeFileSync(path.join(root, 'drafts/idea.md'), 'untracked local version');
+    const before = git('rev-parse', 'HEAD');
+    const result = engine!.mergeTrain.enqueueAndMerge({ agentId: 'worker', branch: wt.branch, worktreePath: wt.worktreePath });
+    expect(result.merged).toBe(false);
+    expect(result.diagnostics).toContain('drafts/idea.md');
+    expect(git('rev-parse', 'HEAD')).toBe(before);
+    expect(fs.readFileSync(path.join(root, 'drafts/idea.md'), 'utf8')).toBe('untracked local version');
   });
   it('refuses a second merge without touching another runner’s stage or lock', () => {
     seedGit();
@@ -179,11 +209,12 @@ it('can explicitly restore a snapshot in a caller-controlled workspace', () => {
 it('does not integrate when verification overlaps external target edits', () => {
   seedGit();
   const wt = engine!.worktrees.spawnWorktree({ agentId: 'worker' });
+  fs.writeFileSync(path.join(wt.worktreePath, 'file.ts'), 'export const value = 2;\n');
   const target = path.join(root, 'file.ts');
   const before = git('rev-parse', 'HEAD');
   const edit = `require('node:fs').writeFileSync(${JSON.stringify(target)}, 'external edit')`;
   const result = engine!.mergeTrain.enqueueAndMerge({
-    agentId: 'worker', branch: wt.branch,
+    agentId: 'worker', branch: wt.branch, worktreePath: wt.worktreePath,
     verificationCmd: `node -e ${"'" + edit.replace(/'/g, "'\\''") + "'"}`,
   });
   expect(result.merged).toBe(false);

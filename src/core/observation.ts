@@ -2,13 +2,11 @@ import { KITH_PROTOCOL_VERSION } from '../version.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import type { DatabaseSync as Database } from 'node:sqlite';
-import { CoordDatabase } from './db.js';
+import { CoordDatabase, sqliteDatabase } from './db.js';
 import { discoverRepository, isWithin, physicalPath } from './repository.js';
 import type { AgentRecord } from './fencing.js';
 import { observeWorkspaces } from './workspace-observation.js';
-const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as { DatabaseSync: typeof Database };
 
 /** Copies a consistent stopped-state set before opening SQLite, so even SHM reconstruction cannot touch original recovery files. */
 export function readCoordinationState(directory = process.cwd(), options: { ownersOnly?: boolean; coordinationOnly?: boolean } = {}) {
@@ -44,7 +42,7 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
       const target = path.join(scratch,path.basename(files[i])); fs.copyFileSync(files[i],target); fs.chmodSync(target,0o600);
     }
     if (JSON.stringify(before)!==JSON.stringify(files.map(identity))) throw new Error('Coordination state changed during snapshot; stop writers or retry');
-    db = new DatabaseSync(path.join(scratch,'state.db'), {readOnly:true});
+    db = new (sqliteDatabase())(path.join(scratch,'state.db'), {readOnly:true});
     db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000; BEGIN');
     const schemaVersion = CoordDatabase.inspectSchema(db);
     if (schemaVersion<2) throw new Error('Offline observation requires schema 2 or newer; preserve state and upgrade with clients stopped');

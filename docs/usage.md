@@ -82,7 +82,7 @@ For independent PRs, create each task's Git worktree from the intended PR base f
 
 Successful completion ends the session and retains its worktree. Run owned commands before completing, or start a fresh session for later maintenance. A refused claim can leave an active session without locks; it can retry on the same connection or expire normally. Status `conflicts` describes current detected file conflicts, not a history of refused scope claims.
 
-Integration refuses a target with uncommitted or untracked work to preserve it. Commit or preserve those files explicitly, use a clean integration checkout, or keep the existing PR workflow above. Do not blanket-ignore unknown files to silence the guard. The supervised command runner uses the server's permissions, including network access; it is not a sandbox. `verificationCmd` is an explicit shell string; mutex commands use literal argv.
+A shared checkout is normally dirty with other agents' uncommitted work, and integration does not require it to be clean. It refuses only when the target has uncommitted or untracked changes to a file the integration itself changes, and names those files; unrelated local work is left exactly as it was. Commit or preserve the named files, use a separate integration checkout, or keep the existing PR workflow above. Do not blanket-ignore unknown files to silence the guard. The supervised command runner uses the server's permissions, including network access; it is not a sandbox. `verificationCmd` is an explicit shell string; mutex commands use literal argv.
 
 ## CLI fallback: keep the owning shell alive
 
@@ -106,7 +106,7 @@ unset KITH_AGENT_ID KITH_SESSION_TOKEN
 
 Quote globs so the shell does not expand them. CLI scopes are comma-separated. Use `file:src/routes/[id]/page.tsx` for a literal filename containing glob syntax; see [scope grammar and discovery](path-and-scope-rules.md). An ID alone cannot resume another session. Dead or expired sessions release coordination resources when a mutating operation reaps them. Active supervised command guards survive expiry until shutdown is confirmed.
 
-Completion checkpoints uncommitted worktree changes and integrates into the branch currently checked out in the selected repository checkout (`--repo` when supplied). The target must be clean. A verification failure leaves the target unchanged and the worktree available for repair. Successful completion also keeps the worktree for inspection; removal is explicit and refuses dirty, untracked, or ignored work. Existing branches are never reset to create a worktree. Hydration tries filesystem clones and falls back to an independent copy; cost depends on the filesystem and dependency size.
+Completion checkpoints uncommitted worktree changes and integrates into the branch currently checked out in the selected repository checkout (`--repo` when supplied). The target may hold unrelated uncommitted work, but not edits to files the integration changes. A verification failure leaves the target unchanged and the worktree available for repair. Successful completion also keeps the worktree for inspection; removal is explicit and refuses dirty, untracked, or ignored work. Existing branches are never reset to create a worktree. Hydration tries filesystem clones and falls back to an independent copy; cost depends on the filesystem and dependency size.
 
 A verification command is optional. Without one, integration checks Git mergeability only. Choose a command that actually checks your project.
 
@@ -128,7 +128,7 @@ kith status
 kith status --offline
 kith recover
 kith doctor
-# Preview committed source/target trees; dirty inputs are refused
+# Preview committed source/target trees; a dirty source is refused, and a dirty target only when it overlaps the integration
 kith worktree preview --agent worker-1
 
 # Allocate a cooperating client's port; start your service promptly

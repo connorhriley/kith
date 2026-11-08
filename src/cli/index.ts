@@ -40,7 +40,7 @@ function parseFlags(argv: string[]): {
       } else {
         const key = arg.slice(2);
         const next = mainArgs[i + 1];
-        if (!['worktree', 'wait', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify', 'no-radar'].includes(key) && next && !next.startsWith('--')) {
+        if (!['worktree', 'wait', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify', 'no-radar', 'require-session'].includes(key) && next && !next.startsWith('--')) {
           flags[key] = next;
           i++;
         } else {
@@ -53,6 +53,20 @@ function parseFlags(argv: string[]): {
   }
 
   return { positional, flags, passthroughCmd };
+}
+
+/** True when the caller presented any Kith identity: an agent ID or session token by flag or environment. */
+function hasKithIdentity(flags: Record<string, string | boolean>): boolean {
+  return typeof flags.agent === 'string' || typeof flags['session-token'] === 'string'
+    || Boolean(process.env.KITH_AGENT_ID) || Boolean(process.env.KITH_SESSION_TOKEN);
+}
+
+/** Allow without touching shared state, in the output shape the calling client expects. */
+function passThroughHook(phase: string | undefined, client: string | boolean | undefined): void {
+  if (client === 'cursor') {
+    console.log(JSON.stringify(phase === 'pre' ? { permission: 'allow' } : { additional_context: '' }));
+  }
+  process.exitCode = 0;
 }
 
 async function interruptible<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> {
@@ -242,6 +256,14 @@ async function main(): Promise<void> {
   };
   if (subcommands[cmd] && (!subCmd || !subcommands[cmd].includes(subCmd))) {
     throw new Error(`Expected kith ${cmd} ${subcommands[cmd].join('|')}`);
+  }
+  // Hooks govern sessions that joined; they must be invisible to everything else. A process with no Kith
+  // identity (an editor, a plain terminal, a CI job, another agent client) cannot hold a claim, so there is
+  // nothing to enforce and nothing worth failing a tool call or a commit over. Return before opening the
+  // coordination database. `--require-session` (or KITH_REQUIRE_SESSION=1) restores strict fail-closed hooks.
+  if (cmd === 'hook' && !flags['require-session'] && !process.env.KITH_REQUIRE_SESSION && !hasKithIdentity(flags)) {
+    passThroughHook(subCmd, flags.client);
+    return;
   }
   const engine = new KithEngine(repoRoot);
   const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? `cli-${process.pid}`);

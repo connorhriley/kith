@@ -84,7 +84,6 @@ export class SpeculativeMergeTrain {
       const baseHead = this.gitHead(this.coordDb.repoRoot);
       const targetBranch = this.gitBranch(this.coordDb.repoRoot);
       if (!targetBranch) throw new Error('Merge target must be on a branch, not a detached HEAD.');
-      this.requireCleanTarget();
       // Validate ownership and repository/branch identity before staging any source bytes.
       if (params.worktreePath) {
         const registered = this.fencing.getAgent(params.agentId)?.worktree_path;
@@ -121,6 +120,9 @@ export class SpeculativeMergeTrain {
       const sourceSha = execFileSync('git', ['rev-parse', '--verify', '--end-of-options', `${params.branch}^{commit}`], {
         cwd: this.coordDb.repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
       }).trim();
+      // Fail fast, before staging or verification: local edits elsewhere in the target are fine (a shared
+      // checkout is normally dirty with other agents' work), but edits to files this merge changes are not.
+      this.requireNoTargetOverlap(this.pathsChangedBySource(sourceSha));
       // Clean up any previous staging worktree
       this.cleanupStageWorktree(stageDir);
 
@@ -196,7 +198,8 @@ export class SpeculativeMergeTrain {
         throw new Error('Merge target changed during verification. Retry against the new target.');
       }
       this.fencing.assertSession(params.agentId);
-      this.requireCleanTarget();
+      // Exact check against what the fast-forward will write; git itself also refuses to overwrite local edits.
+      this.requireNoTargetOverlap(this.pathsBetween(baseHead, verifiedSha));
       execFileSync('git', ['merge', '--ff-only', verifiedSha], {
         cwd: this.coordDb.repoRoot,
         stdio: 'ignore',
@@ -272,12 +275,57 @@ export class SpeculativeMergeTrain {
     }).trim();
   }
 
-  private requireCleanTarget(): void {
-    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=normal'], {
+  /** Paths with uncommitted changes in the target checkout. Untracked directories end in `/`. Kith's own state is excluded. */
+  private dirtyTargetPaths(): string[] {
+    const records = execFileSync('git', ['status', '--porcelain', '-z', '--untracked-files=normal'], {
       cwd: this.coordDb.repoRoot, encoding: 'utf8',
-    });
-    if (status.split(/\r?\n/).some((line) => line && line !== '?? .coord/')) {
-      throw new Error('Merge target has local changes. Commit or preserve them before integrating.');
+    }).split('\0').filter(Boolean);
+    const paths: string[] = [];
+    for (let i = 0; i < records.length; i++) {
+      const status = records[i].slice(0, 2), file = records[i].slice(3);
+      // With -z a rename or copy is followed by a record holding its origin path, which is also dirty.
+      if (/[RC]/.test(status)) paths.push(records[++i]);
+      if (file !== '.coord/' && !file.startsWith('.coord/')) paths.push(file);
+    }
+    return paths;
+  }
+
+  private diffNames(...refs: string[]): string[] {
+    return execFileSync('git', ['diff', '--name-only', '-z', '--no-renames', ...refs], {
+      cwd: this.coordDb.repoRoot, encoding: 'utf8',
+    }).split('\0').filter(Boolean);
+  }
+
+  /** Paths a merge of `sourceSha` will bring into the target: the source's own changes since the merge base. */
+  private pathsChangedBySource(sourceSha: string): string[] {
+    try {
+      const base = execFileSync('git', ['merge-base', 'HEAD', sourceSha], {
+        cwd: this.coordDb.repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      return this.diffNames(base, sourceSha);
+    } catch {
+      return this.diffNames('HEAD', sourceSha); // Unrelated histories: the conservative superset.
+    }
+  }
+
+  private pathsBetween(from: string, to: string): string[] {
+    return this.diffNames(from, to);
+  }
+
+  /** Refuse only when the target has uncommitted edits to a file the integration will write. */
+  private requireNoTargetOverlap(changed: string[]): void {
+    const dirty = this.dirtyTargetPaths();
+    if (!dirty.length) return;
+    const hits = new Set<string>();
+    for (const d of dirty) {
+      for (const c of changed) {
+        // Same file; an untracked directory containing a changed file; or a changed file replacing a directory.
+        if (c === d || (d.endsWith('/') && c.startsWith(d)) || d.startsWith(c + '/')) hits.add(c);
+      }
+    }
+    if (hits.size) {
+      const shown = [...hits].sort();
+      throw new Error(`Merge target has local changes to files this integration also changes: ${shown.slice(0, 10).map(file => JSON.stringify(file)).join(', ')}${shown.length > 10 ? `, and ${shown.length - 10} more` : ''}. Commit or preserve them before integrating.`);
     }
   }
 

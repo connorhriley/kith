@@ -29,10 +29,11 @@ it('previews setup and rejects an invalid integration without writes', () => {
   expect(fs.readdirSync(root)).toEqual([]);
 });
 it('returns blocking exit status when pre-tool processing fails', () => {
-  // A file in place of a repo root makes opening local state fail.
+  // A file in place of a repo root makes opening local state fail. A joined session fails closed;
+  // a process with no Kith identity is not governed and passes through (see non-participants.test.ts).
   fs.writeFileSync(path.join(root, 'blocked'), 'file');
-  const blocked = run('hook', 'pre', '--repo', path.join(root, 'blocked'));
-  expect(blocked.status).toBe(2);
+  expect(run('hook', 'pre', '--repo', path.join(root, 'blocked'), '--agent', 'worker').status).toBe(2);
+  expect(run('hook', 'pre', '--repo', path.join(root, 'blocked')).status).toBe(0);
 });
 it('preserves literal arguments in the distributed mutex CLI and returns command failures', () => {
   const value = 'spaces ; $(echo changed) "literal"';
@@ -56,10 +57,10 @@ it('package shims resolve the real executable without recursing and preserve arg
 
 
 it('blocks malformed hook input and edit payloads missing a file path', () => {
-  const bad = spawnSync(process.execPath, [cli, 'hook', 'pre'], { cwd: root, encoding: 'utf8', input: '{' });
+  const bad = spawnSync(process.execPath, [cli, 'hook', 'pre', '--agent', 'worker'], { cwd: root, encoding: 'utf8', input: '{' });
   expect(bad.status).toBe(2);
   expect(bad.stderr).toContain('hook input');
-  expect(run('hook', 'pre', '--tool', 'Edit').status).toBe(2);
+  expect(run('hook', 'pre', '--tool', 'Edit', '--agent', 'worker').status).toBe(2);
 });
 
 it('configures MCP without adding credential-dependent hooks or shims', () => {

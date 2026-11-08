@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Hooks govern only sessions that joined. A process with no Kith identity (an editor, a plain terminal, CI, another agent client) no longer has its tool calls and `git commit` rejected by a repository with Kith hooks: `kith hook pre|post|pre-commit` allows immediately, prints nothing, and never opens the coordination database. A named agent without a valid capability is still refused; `--require-session` or `KITH_REQUIRE_SESSION=1` restores fail-closed hooks for identity-less processes.
+- Integration no longer requires a clean target. A shared checkout is normally dirty with other agents' work; integration and preview now refuse only when the target has uncommitted or untracked changes to a file the merge itself changes, naming those files, and leave unrelated local work untouched.
+- `kith init` lists the machine-local client files it creates from nothing in `.git/info/exclude` instead of leaving them as untracked noise in every repository. Pre-existing and tracked files are never hidden; uninstall restores the exclude file.
+- Load `node:sqlite` on first use, so processes that never open a database (pass-through hooks, `kith help`) neither pay for the module nor print Node's experimental-feature warning.
+
 - Reduce repeated MCP discovery instructions while preserving repository/capability/retry boundaries. Owned replies report the existing lease deadline; guidance uses direct begin/claim, idle-only heartbeat, automatic edit publication and a single integration verification. No background renewal, event suppression, new tool or dependency.
 
 - Open read-only Radar as part of macOS setup, using the retained runtime and an acknowledged native launch. Repeat setup keeps the existing view/workspace; a kernel-held instance lock prevents duplicate new views and releases on exit/crash. Add `--no-radar` for headless setup; dry runs and other platforms never launch it. No login item, model calls, dependency or ownership change.

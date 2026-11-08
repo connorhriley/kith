@@ -5,9 +5,14 @@ import path from 'node:path';
 import { discoverRepository, isWithin, physicalPath } from './repository.js';
 
 const require = createRequire(import.meta.url);
-const { DatabaseSync } = require('node:sqlite') as {
-  DatabaseSync: typeof DatabaseSyncType;
-};
+let sqlite: { DatabaseSync: typeof DatabaseSyncType } | undefined;
+/**
+ * Load node:sqlite on first use. A process that never opens a database (a pass-through hook, `kith help`)
+ * then neither pays for the module nor prints Node's experimental-feature warning.
+ */
+export function sqliteDatabase(): typeof DatabaseSyncType {
+  return (sqlite ??= require('node:sqlite') as { DatabaseSync: typeof DatabaseSyncType }).DatabaseSync;
+}
 
 export interface CoordEvent {
   id: number;
@@ -53,7 +58,7 @@ export class CoordDatabase {
     }
     // Reject unknown state through a read-only connection before pragmas, checkpoints or setup writes.
     if (fs.existsSync(this.dbPath)) {
-      const probe = new DatabaseSync(this.dbPath, { readOnly: true });
+      const probe = new (sqliteDatabase())(this.dbPath, { readOnly: true });
       try {
         probe.exec('PRAGMA busy_timeout=10000; BEGIN');
         CoordDatabase.schemaVersion(probe, !recoveryFiles);
@@ -70,7 +75,7 @@ export class CoordDatabase {
       fs.mkdirSync(target, { recursive: true });
     }
 
-    this.db = new DatabaseSync(this.dbPath);
+    this.db = new (sqliteDatabase())(this.dbPath);
 
     try {
       this.configurePragmas(); this.migrate(!recoveryFiles);

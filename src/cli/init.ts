@@ -207,6 +207,29 @@ esac
 `, 0o755);
     }
   }
+  // Files Kith creates from nothing embed this machine's paths (CLI location, absolute checkout path), so they
+  // belong to this clone only. Hide them from `git status` and accidental commits with the repository-local exclude
+  // file; the shared .gitignore stays untouched. Pre-existing and tracked files are never hidden.
+  const machineLocal = ['.mcp.json', '.claude/settings.json', '.cursor/mcp.json', '.cursor/hooks.json', '.codex/config.toml', '.agent/skills/kith/SKILL.md']
+    .filter(name => plan.has(name) && !fs.existsSync(path.join(absRoot, name)));
+  if (machineLocal.length) {
+    try {
+      const exclude = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-path', 'info/exclude'], {
+        cwd: absRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      const existing = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
+      const known = new Set(existing.split(/\r?\n/).map(line => line.trim()));
+      const ignored = (name: string) => {
+        try { execFileSync('git', ['check-ignore', '-q', '--', name], { cwd: absRoot, stdio: 'ignore' }); return true; }
+        catch { return false; }
+      };
+      const lines = machineLocal.filter(name => !known.has('/' + name) && !ignored(name)).map(name => '/' + name);
+      // A linked checkout keeps its exclude file in the shared Git directory, outside this checkout: leave it alone.
+      if (lines.length && isWithin(absRoot, physicalPath(path.dirname(exclude)))) {
+        add(exclude, existing + (existing && !existing.endsWith('\n') ? '\n' : '') + '# Kith machine-local setup (added by `kith init`)\n' + lines.join('\n') + '\n');
+      }
+    } catch { /* Not a Git checkout: nothing to hide from. */ }
+  }
   const report: InitReport = {
     repoRoot: absRoot, indexedFiles: 0, configuredFiles: [...plan.keys()],
     dryRun: options.dryRun ?? false, warnings,

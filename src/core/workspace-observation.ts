@@ -74,9 +74,23 @@ export function previewIntegration(repoRoot: string, agent: AgentRecord) {
   const targetHead = git(repoRoot, 'rev-parse', '--verify', 'HEAD').trim();
   const dirtyFiles = worktreeChanges(agent.worktree_path);
   const targetDirtyFiles = worktreeChanges(repoRoot).filter(change => !(change.status === '??' && target.coordDir === target.checkoutRoot + '/.coord' && change.path.startsWith('.coord/')));
+  // The target may legitimately be dirty; what must not happen is for it to change while the preview runs.
+  const targetState = () => worktreeChanges(repoRoot)
+    .filter(change => !(change.status === '??' && target.coordDir === target.checkoutRoot + '/.coord' && change.path.startsWith('.coord/')))
+    .map(change => `${change.status} ${change.path}`).sort().join('\n');
+  const targetStateBefore = targetState();
   const sourceBranch=git(agent.worktree_path,'branch','--show-current').trim(), targetBranch=git(repoRoot,'branch','--show-current').trim();
   if(!targetBranch) throw new Error('Integration target must be on a branch');
-  if(targetDirtyFiles.length) return {ok:false,clean:null,sourceHead,targetHead,sourceBranch,targetBranch,conflicts:[],dirtyFiles,targetDirtyFiles,reason:'Integration target has local changes. Preserve or commit them before preview.'};
+  if (targetDirtyFiles.length) {
+    // A shared target is normally dirty with other work. Only edits to files this integration changes matter.
+    const names = (...refs: string[]) => git(repoRoot, 'diff', '--name-only', '-z', '--no-renames', ...refs).split('\0').filter(Boolean);
+    let changed: string[];
+    try { changed = names(git(repoRoot, 'merge-base', targetHead, sourceHead).trim(), sourceHead); }
+    catch { changed = names(targetHead, sourceHead); }
+    const dirtyPaths = targetDirtyFiles.flatMap(change => change.originalPath ? [change.path, change.originalPath] : [change.path]);
+    const overlapping = [...new Set(changed.filter(file => dirtyPaths.some(dirty => dirty === file || dirty.startsWith(file + '/'))))].sort();
+    if (overlapping.length) return {ok:false,clean:null,sourceHead,targetHead,sourceBranch,targetBranch,conflicts:[],dirtyFiles,targetDirtyFiles,reason:`Integration target has local changes to files this integration also changes: ${overlapping.slice(0, 10).join(', ')}${overlapping.length > 10 ? `, and ${overlapping.length - 10} more` : ''}. Preserve or commit them before preview.`};
+  }
   if (dirtyFiles.length) return { ok: false, clean: null, sourceHead, targetHead, sourceBranch, targetBranch, conflicts: [], dirtyFiles, targetDirtyFiles,
     reason: 'Commit or preserve source changes before preview. Uncommitted edits are not included in a committed-tree preview.' };
   const drivers = spawnSync('git', ['config', '--get-regexp', '^merge\\..*\\.driver$'], {
@@ -98,7 +112,7 @@ export function previewIntegration(repoRoot: string, agent: AgentRecord) {
   if (git(repoRoot,'rev-parse','HEAD').trim() !== targetHead || git(agent.worktree_path,'rev-parse','HEAD').trim() !== sourceHead
     || git(repoRoot,'branch','--show-current').trim() !== targetBranch
     || git(agent.worktree_path,'branch','--show-current').trim() !== sourceBranch
-    || worktreeChanges(repoRoot).some(change => !(change.status === '??' && target.coordDir === target.checkoutRoot + '/.coord' && change.path.startsWith('.coord/')))
+    || targetState() !== targetStateBefore
     || worktreeChanges(agent.worktree_path).length) throw new Error('Source or target changed during preview; retry');
   return { ok: true, clean: probe.status === 0, sourceHead, targetHead, sourceBranch, targetBranch, conflicts, dirtyFiles, targetDirtyFiles, verified: false };
 }
