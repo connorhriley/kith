@@ -75,8 +75,16 @@ export function doctorReport(directory=process.cwd(), home=os.homedir()) {
   const id=process.env.KITH_AGENT_ID, token=process.env.KITH_SESSION_TOKEN;
   if(id||token||nativeGuards) {
     const agent=state.agents.find(a=>a.id===id);
-    check('session-environment',Boolean(id&&token&&agent?.status==='active'&&agent.lease_expires_at>Date.now()),'Native hooks need a persistent owning shell with both inherited session variables and a current recorded lease. MCP-only workflows do not need these exports. Capability validity is checked on use');
+    // A shell that names a session must hold a live one. A shell that names none is simply not participating.
+    if(id||token) check('session-environment',Boolean(id&&token&&agent?.status==='active'&&agent.lease_expires_at>Date.now()),'This shell names a Kith session, so hooks enforce it: it needs both inherited session variables and a current recorded lease. Capability validity is checked on use');
+    else check('session-environment',true,'No Kith session in this shell, so Kith hooks allow everything. Start one (kith session start) only if you want claims enforced for this client; MCP-only workflows need none.');
   }
-  for(const workspace of state.workspaces) check(`workspace:${workspace.agentId}`,workspace.available && (!workspace.recordedBranch||workspace.recordedBranch===workspace.branch),workspace.error??`${workspace.path}; dirty files: ${workspace.dirtyFiles.length}`);
+  for(const workspace of state.workspaces) {
+    const name=`workspace:${workspace.agentId}`, gone=!workspace.available && !fs.existsSync(workspace.path);
+    // An ended session whose worktree was moved or removed is history, not a fault. Only a live session needs its worktree.
+    if(gone && workspace.status!=='active') check(name,true,`Retired: this ${workspace.status} session's worktree no longer exists (${workspace.path}). Nothing to do; Kith keeps the record for history.`);
+    else if(gone) check(name,false,`Worktree is missing: ${workspace.path}. The session is still active; restore the directory or end the session.`);
+    else check(name,workspace.available && (!workspace.recordedBranch||workspace.recordedBranch===workspace.branch),workspace.error??`${workspace.path}; dirty files: ${workspace.dirtyFiles.length}`);
+  }
   return {ok:checks.every(c=>c.ok),repository:state.repository,checks};
 }

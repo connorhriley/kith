@@ -117,8 +117,9 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
   jsonClient('Antigravity', antigravity, home, fs.existsSync(path.dirname(antigravity)) || macApp('Antigravity'));
 
   if (options.guidance && layout?.commonGitDir) {
-    for (const [name, entry] of agentGuidance(workspace)) queue(workspace, path.join(workspace, name), entry.content);
-    results.push({clientName: 'Project instructions', found: true, configured: true, configPath: path.join(workspace, 'AGENTS.md'), notes: 'Scoped claims, isolated worktrees and verification guidance prepared for agents'});
+    const guidanceWarnings: string[] = [];
+    for (const [name, entry] of agentGuidance(workspace, { warnings: guidanceWarnings })) queue(workspace, path.join(workspace, name), entry.content);
+    results.push({clientName: 'Project instructions', found: true, configured: true, configPath: path.join(workspace, 'AGENTS.md'), notes: ['Scoped claims, isolated worktrees and verification guidance prepared for agents', ...guidanceWarnings].join('; ')});
   }
 
   // Keep private backup material out of Git, using the same retained ignore rule as init.

@@ -41,7 +41,7 @@ function parseFlags(argv: string[]): {
       } else {
         const key = arg.slice(2);
         const next = mainArgs[i + 1];
-        if (!['worktree', 'wait', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify', 'no-radar', 'require-session', 'release', 'all'].includes(key) && next && !next.startsWith('--')) {
+        if (!['worktree', 'wait', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only', 'offline', 'once', 'json', 'quiet', 'no-notify', 'no-radar', 'require-session', 'release', 'all', 'refresh-guidance'].includes(key) && next && !next.startsWith('--')) {
           flags[key] = next;
           i++;
         } else {
@@ -104,7 +104,7 @@ async function main(): Promise<void> {
       throw new Error(`--only accepts: ${INTEGRATIONS.join(', ')}`);
     }
     const report = initializeKithRepository(repoRoot, 'kith', {
-      enforcement: enforcementMode(flags.enforcement), dryRun: Boolean(flags['dry-run']), mcpOnly: flags['mcp-only'] ? true : undefined, integrations: integrations as Integration[] | undefined,
+      enforcement: enforcementMode(flags.enforcement), dryRun: Boolean(flags['dry-run']), refreshGuidance: Boolean(flags['refresh-guidance']), mcpOnly: flags['mcp-only'] ? true : undefined, integrations: integrations as Integration[] | undefined,
     });
     console.log(JSON.stringify({ ok: true, ...report }, null, 2));
     return;
@@ -618,7 +618,7 @@ Claim work, isolate changes with worktrees, share local resources, and verify in
 No hosted service required.
 
 Usage:
-  kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure MCP clients (--dry-run, --only, --mcp-only)
+  kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure MCP clients (--dry-run, --only, --mcp-only, --refresh-guidance)
   kith heartbeat --agent <id>                   Refresh the owned session lease
   kith status [--offline]                         Output JSON state and workspaces; offline never migrates or reaps\n  kith uninstall [--dry-run]                      Restore unchanged tracked setup files; retain work and recovery state\n  kith doctor                                     Check runtime, PATH, configuration, sessions and worktree health without writes\n  kith recover                                    Inspect retained work, expired claims and recovery records offline
   kith setup [checkout] [--no-radar] [--dry-run]    Configure clients and open macOS Radar; preserve custom settings
