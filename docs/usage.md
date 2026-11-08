@@ -15,6 +15,25 @@ kith_complete_work   {"agentId":"auth-worker","verificationCmd":"pnpm typecheck"
 
 Use a different ID and nonoverlapping scope for another agent. An overlapping exclusive scope returns a tool error. Commands run with the MCP server permissions and require client approval; their working directory defaults to the registered worktree. Keep the connection open. Owned calls already renew the lease; in the next release their replies include `session.leaseExpiresAt` (Unix milliseconds), with `agent.lease_expires_at` on session grants. Heartbeat only during idle periods before that deadline; an expired claim cannot be used or revived. A replayed operation contains the original historical deadline and does not renew ownership. Use status for a blocker, changed coordination or recovery rather than polling between edits.
 
+## Before you start: the brief
+
+```
+kith brief --scope 'src/auth/**'      # who is active, claims that overlap, open handoffs, conflicts. Read-only; no session needed
+kith_brief  {"scopeGlobs":["src/auth/**"]}   # the same, over MCP
+```
+
+Run it before beginning work. With `kith init --only brief` Claude Code runs it for you at the start of every session.
+
+## Working in the main checkout
+
+Some teams work on the main branch with one checkout and treat worktrees as overhead. Say so once:
+
+```
+kith mode main          # or: kith init --mode main
+```
+
+Agents then call `kith_begin_work` with their scope as usual. No worktree is created (`isolateWorktree` is ignored, with a note), claims keep sessions off each other's files, and `kith_complete_work` releases the claims. There is no integration step, so run your project's checks before completing. `kith mode worktrees` switches back.
+
 ## Handoffs between sessions
 
 Claims say who owns what; they do not say what the owner learned. Leave a note when you finish, get blocked or must stop:

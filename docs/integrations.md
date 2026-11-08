@@ -8,6 +8,7 @@ For CLI-generated configuration, install Kith persistently or build and link the
 | `codex` | Appends a Kith MCP table to `.codex/config.toml`, forwarding session environment names; preserves existing TOML and custom Kith servers |
 | `cursor` | Merges `.cursor/mcp.json`; adds `.cursor/hooks.json` guards only when selected explicitly without `--mcp-only` |
 | `agents` | Updates only the marked Kith block in AGENTS.md and creates a generic `.agent/skills/kith/SKILL.md` |
+| `brief` | Adds a Claude Code `SessionStart` hook running `kith brief --quiet` (only when selected explicitly) |
 | `git` | Installs a pre-commit hook only when one does not exist; uses an in-repository Git hooks path and skips external hooks directories |
 | `shims` | Creates optional `.coord/bin/npm`, `pnpm`, and `yarn` wrappers |
 
@@ -29,6 +30,10 @@ kith init
 Default setup configures Claude, Codex, Cursor and agent instructions through MCP. To select clients use `--mcp-only --only claude,codex,agents`. Review and commit setup files, then restart the client. Begin directly with `kith_begin_work` (starts the session and claims files) and `isolateWorktree: true`; edit the returned worktree, report files through `kith_record_file_edit`, serialize commands sharing mutable resources with `kith_run_with_mutex`, and complete with a project verification command. The MCP connection retains its capability without shell exports. Keep that connection alive; owned calls renew leases, so heartbeat only while idle before expiry. Edit reports publish extracted signatures automatically. Completion runs integration verification; avoid duplicating it unless project policy or diagnosis requires it. See [runnable workflows](usage.md).
 
 Default setup and `--mcp-only` select client configurations and agent instructions; it does not install Claude/Cursor edit hooks, Git hooks or shims. It never removes existing hooks. If tool hooks already exist, init warns to review their session requirements. This option cannot be combined with `--only git` or `shims`. Existing integrations may need manual migration if created by the initial prototype.
+
+## Session-start brief and workflow mode
+
+`kith init --only brief` adds one Claude Code `SessionStart` hook that runs `kith brief --quiet`: read-only, no session, silent when there is nothing to report, and never able to fail a session. It merges with any hooks already present. `kith init --mode main|worktrees` records how the repository's agents share files and makes the generated guidance (`AGENTS.md` block and skill file) describe it; without `--mode`, init keeps the recorded mode. Guidance you have edited is still never overwritten (see `--refresh-guidance`).
 
 ## Optional hooks and CLI sharing
 

@@ -59,6 +59,7 @@ export function doctorReport(directory=process.cwd(), home=os.homedir()) {
     } catch(error) {check(`${client}-mcp`,false,`${target}: ${error instanceof Error ? error.message : String(error)}; configuration preserved`);}
   }
   check('mcp-configuration',configured>0,'Use global kith setup or project kith init for your client; configuration alone does not establish a connection');
+  if(state.state==='ready') check('workflow-mode',true,state.workflowMode==='main'?'main-checkout mode: agents share the main checkout and no worktrees are created (change with kith mode worktrees)':'worktree mode: each agent can work in an isolated worktree (change with kith mode main)');
   check('coordination-state',state.state!=='unavailable',state.state==='ready'?'Schema and counters validated on a private snapshot':state.error??'No project state yet; the first owned task initializes it. No state was created by doctor');
   let nativeGuards=false;
   for(const [file,event] of [['.claude/settings.json','PreToolUse'],['.cursor/hooks.json','preToolUse']] as const) {

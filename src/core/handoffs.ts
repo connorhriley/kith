@@ -95,22 +95,16 @@ export class HandoffEngine {
     });
   }
 
-  private recent(sinceMs = RELEVANT_WINDOW_MS): HandoffRecord[] {
+  public recent(sinceMs = RELEVANT_WINDOW_MS): HandoffRecord[] {
     return (this.coordDb.db.prepare(`${HANDOFF_SELECT} WHERE h.created_at > ? ORDER BY h.created_at DESC, h.id DESC LIMIT 300`)
       .all(Date.now() - sinceMs) as Array<Record<string, unknown>>).map(rowToHandoff);
   }
 
-  /** Not yet superseded by a later `done` note for the same task, and the task itself is not finished. */
-  private static resolver(rows: HandoffRecord[]) {
-    const doneAt = new Map<string, number>();
-    for (const row of rows) if (row.kind === 'done' && row.task_id) doneAt.set(row.task_id, Math.max(doneAt.get(row.task_id) ?? 0, row.created_at));
-    return (row: HandoffRecord) => row.kind !== 'done' && (row.task_status === 'done' || (row.task_id !== null && (doneAt.get(row.task_id) ?? 0) > row.created_at));
-  }
 
   /** Open handoffs, newest first: what a reader checking status should know is still unfinished. */
   public unresolved(limit = 10): HandoffRecord[] {
     const rows = this.recent();
-    const resolved = HandoffEngine.resolver(rows);
+    const resolved = handoffResolver(rows);
     return rows.filter(row => row.kind !== 'done' && !resolved(row)).slice(0, limit);
   }
 
@@ -121,7 +115,7 @@ export class HandoffEngine {
   public relevantTo(params: { taskId?: string | null; scopeGlobs: string[]; limit?: number }): HandoffRecord[] {
     const limit = params.limit ?? 5;
     const rows = this.recent();
-    const resolved = HandoffEngine.resolver(rows);
+    const resolved = handoffResolver(rows);
     const overlaps = (row: HandoffRecord) => params.scopeGlobs.some(want => [...row.scope, ...row.files].some(have => LockEngine.patternsOverlap(want, have)));
     const scored: Array<{ row: HandoffRecord; rank: number }> = [];
     for (const row of rows) {
@@ -138,13 +132,20 @@ export class HandoffEngine {
 
   public list(filter: { taskId?: string; agentId?: string; scopeGlobs?: string[]; includeResolved?: boolean; limit?: number } = {}): HandoffRecord[] {
     const rows = this.recent(30 * 24 * 3600 * 1000);
-    const resolved = HandoffEngine.resolver(rows);
+    const resolved = handoffResolver(rows);
     return rows.filter(row => (!filter.taskId || row.task_id === filter.taskId)
       && (!filter.agentId || row.agent_id === filter.agentId)
       && (!filter.scopeGlobs?.length || filter.scopeGlobs.some(want => [...row.scope, ...row.files].some(have => LockEngine.patternsOverlap(want, have))))
       // Default is open work: no completion notes, and nothing superseded by a later one.
       && (filter.includeResolved || (row.kind !== 'done' && !resolved(row)))).slice(0, filter.limit ?? 20);
   }
+}
+
+/** A note is resolved once its task is complete or a later `done` note exists for it. Pure: works on any set of records. */
+export function handoffResolver(rows: HandoffRecord[]) {
+  const doneAt = new Map<string, number>();
+  for (const row of rows) if (row.kind === 'done' && row.task_id) doneAt.set(row.task_id, Math.max(doneAt.get(row.task_id) ?? 0, row.created_at));
+  return (row: HandoffRecord) => row.kind !== 'done' && (row.task_status === 'done' || (row.task_id !== null && doneAt.has(row.task_id) && doneAt.get(row.task_id)! > row.created_at));
 }
 
 export interface CompactHandoff {

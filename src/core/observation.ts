@@ -7,6 +7,10 @@ import { CoordDatabase, sqliteDatabase } from './db.js';
 import { discoverRepository, isWithin, physicalPath } from './repository.js';
 import type { AgentRecord } from './fencing.js';
 import { observeWorkspaces } from './workspace-observation.js';
+import { LockEngine } from './locks.js';
+import { HANDOFF_SELECT, rowToHandoff, type HandoffRecord } from './handoff-store.js';
+import { workflowModeFrom, type WorkflowMode } from './mode.js';
+import { buildBrief, type Brief } from './brief.js';
 
 /** Copies a consistent stopped-state set before opening SQLite, so even SHM reconstruction cannot touch original recovery files. */
 export function readCoordinationState(directory = process.cwd(), options: { ownersOnly?: boolean; coordinationOnly?: boolean } = {}) {
@@ -16,7 +20,8 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     sessionEpochs: {} as Record<string, number>, truncated: false, schemaVersion: 0, fencingEpoch: 0, agents: [] as AgentRecord[], tasks: [] as Record<string,unknown>[], locks: [] as Record<string,unknown>[],
     conflicts: [] as Record<string,unknown>[], contracts: [] as Record<string,unknown>[], resources: [] as Record<string,unknown>[],
     mergeQueue: [] as Record<string,unknown>[], quarantined: [] as Record<string,unknown>[], mutexWaiters: [] as Record<string,unknown>[],
-    commandGuards: [] as Record<string,unknown>[], events: [] as Record<string,unknown>[], workspaces: [] as ReturnType<typeof observeWorkspaces> };
+    commandGuards: [] as Record<string,unknown>[], events: [] as Record<string,unknown>[], workspaces: [] as ReturnType<typeof observeWorkspaces>,
+    handoffs: [] as HandoffRecord[], workflowMode: 'worktrees' as WorkflowMode };
   let scratch: string | undefined, db: Database | undefined;
   try {
     const file = path.join(layout.coordDir,'state.db');
@@ -47,6 +52,11 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     const schemaVersion = CoordDatabase.inspectSchema(db);
     if (schemaVersion<2) throw new Error('Offline observation requires schema 2 or newer; preserve state and upgrade with clients stopped');
     const all = <T=Record<string,unknown>>(sql:string) => db!.prepare(sql).all() as unknown as T[];
+    // The handoffs table is optional (older binaries never created it), and the mode may never have been set.
+    const hasTable = (name: string) => Boolean(db!.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+    const handoffs = hasTable('handoffs')
+      ? all(`${HANDOFF_SELECT} WHERE h.created_at > ${observedAt - 30 * 24 * 3600 * 1000} ORDER BY h.created_at DESC, h.id DESC LIMIT 300`).map(rowToHandoff) : [];
+    const workflowMode = workflowModeFrom((db.prepare("SELECT value FROM meta WHERE key='workflow_mode'").get() as { value: string } | undefined)?.value);
     const agents=all<AgentRecord>('SELECT * FROM agents ORDER BY registered_at DESC' + (options.coordinationOnly ? ' LIMIT 201' : ''));
     if (options.coordinationOnly) {
       const tasks = all("SELECT * FROM tasks WHERE status IN ('active','blocked','queued') ORDER BY priority DESC, updated_at DESC LIMIT 201").map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))}));
@@ -56,12 +66,13 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
       const commandGuards = all('SELECT mutex_name,owner_agent_id,session_epoch,fencing_token FROM mutex_runs LIMIT 201');
       const mergeQueue = all('SELECT agent_id,branch,worktree_path,status,fencing_token,created_at,updated_at FROM merge_queue WHERE rowid IN (SELECT MAX(rowid) FROM merge_queue GROUP BY agent_id,branch) ORDER BY created_at DESC LIMIT 201');
       const sessionEpochs = Object.fromEntries(all<{agent_id:string;epoch:number}>('SELECT s.agent_id,s.epoch FROM agent_sessions s JOIN agents a ON s.agent_id=a.id ORDER BY a.registered_at DESC LIMIT 201').map(r=>[r.agent_id,r.epoch]));
+      const conflicts = all('SELECT * FROM conflicts ORDER BY detected_at DESC LIMIT 51').map(({details_json,...r})=>({...r,details:JSON.parse(String(details_json))}));
       db.exec('COMMIT');
-      return {...empty,state:'ready' as const,schemaVersion,agents,sessionEpochs,tasks,locks,resources,mutexWaiters,commandGuards,mergeQueue,
+      return {...empty,state:'ready' as const,schemaVersion,agents,sessionEpochs,tasks,locks,conflicts,handoffs,workflowMode,resources,mutexWaiters,commandGuards,mergeQueue,
         truncated:[agents,tasks,resources,mutexWaiters,commandGuards,mergeQueue].some(rows=>rows.length>200)||locks.length>500};
     }
     if (options.ownersOnly) { db.exec('COMMIT'); return { ...empty, state: 'ready' as const, schemaVersion, agents }; }
-    const state = { ...empty, state:'ready' as const, schemaVersion,
+    const state = { ...empty, state:'ready' as const, schemaVersion, handoffs, workflowMode,
       fencingEpoch:Number((db.prepare("SELECT value FROM meta WHERE key='fencing_epoch'").get() as {value:string}).value), agents,
       tasks:all('SELECT * FROM tasks ORDER BY priority DESC,created_at').map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))})),
       locks:all('SELECT * FROM locks ORDER BY acquired_at'),
@@ -77,6 +88,25 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     db.exec('COMMIT'); return state;
   } catch(error) { return {...empty,state:'unavailable' as const,error:error instanceof Error ? error.message : String(error)}; }
   finally { db?.close(); if(scratch) fs.rmSync(scratch,{recursive:true,force:true}); }
+}
+
+/**
+ * The brief, read from a private snapshot: it never creates state, migrates, reaps or writes, so it is safe to run from
+ * any shell, hook or agent whether or not that process ever joined Kith.
+ */
+export function readBrief(directory = process.cwd(), options: { scopeGlobs?: string[]; handoffLimit?: number } = {}): Brief {
+  const state = readCoordinationState(directory, { coordinationOnly: true });
+  const scopeGlobs = options.scopeGlobs?.map(glob => { try { return LockEngine.normalizePattern(state.repository.root, glob); } catch { return glob; } });
+  return buildBrief({
+    repository: state.repository.root, mode: state.workflowMode, observedAt: state.observedAt,
+    available: state.state === 'ready', error: state.state === 'unavailable' ? state.error : undefined,
+    agents: state.agents,
+    tasks: (state.tasks as Array<Record<string, any>>).map(task => ({ id: String(task.id), title: String(task.title), status: String(task.status),
+      owner_agent_id: (task.owner_agent_id as string | null) ?? null, scope_globs: (task.scope_globs as string[]) ?? [], priority: Number(task.priority) })),
+    locks: (state.locks as Array<Record<string, any>>).map(lock => ({ owner_agent_id: String(lock.owner_agent_id), pattern: String(lock.pattern), mode: String(lock.mode), expires_at: Number(lock.expires_at) })),
+    conflicts: (state.conflicts as Array<Record<string, any>>).map(conflict => ({ agent_a: String(conflict.agent_a), agent_b: String(conflict.agent_b), file_path: String(conflict.file_path), severity: String(conflict.severity) })),
+    handoffs: state.handoffs,
+  }, { ...options, scopeGlobs });
 }
 
 /** Recovery is an inspection report: it never clears guards, expires claims, deletes worktrees or restores files. */

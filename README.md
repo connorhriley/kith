@@ -29,6 +29,8 @@ Kith gives cooperating agents shared local state: who owns a task, which files a
 | Give agents separate working files | Git worktrees with an explicit integration step |
 | Check work before integration | Your project's verification command |
 | Share local tools | Port reservations and supervised command mutexes |
+| Know what is going on before you start | `kith brief`: who is active on what, overlapping claims, open handoffs and conflicts. Read-only, no session needed |
+| Work the way you do | Worktree isolation, or one shared checkout with scope claims (`kith mode main`) |
 | Keep what an agent learned | Handoff notes that survive a session boundary and reach whoever works the same scope next |
 | See what is happening | Session/task state through CLI/MCP; optional read-only editor and worktree views |
 
@@ -155,6 +157,7 @@ The menu and editor lead with recorded tasks, current file claims, shared-resour
 
 ## How a task moves through Kith
 
+0. **Look first.** `kith brief` (or `kith_brief`) shows who is active on what, claims that overlap your scope, open handoffs and conflicts. It is read-only and needs no session.
 1. **Begin through MCP.** Call `kith_begin_work` with a unique `agentId`, explicit `scopeGlobs`, and `isolateWorktree: true`. The connection retains session ownership; no shell exports are needed for this MCP-only workflow.
 2. **Claim a scope.** Cooperating clients receive a conflict when an exclusive claim overlaps another claim.
 3. **Do the work.** Edit the returned `worktree.worktreePath`, report edits with `kith_record_file_edit`, and use `kith_run_with_mutex` for serialized commands. Heartbeat before expiry and keep the owning connection open.

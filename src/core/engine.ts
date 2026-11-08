@@ -17,6 +17,8 @@ import {
 import { FencingAndAgentManager } from './fencing.js';
 import { IntentAndTaskEngine } from './intents.js';
 import { HandoffEngine, handoffBlock } from './handoffs.js';
+import { buildBrief, type Brief } from './brief.js';
+import { MAIN_MODE_NOTE, parseWorkflowMode, workflowModeFrom, type WorkflowMode } from './mode.js';
 import { LockEngine } from './locks.js';
 import { SpeculativeMergeTrain } from './merge-train.js';
 import { ConflictRecord, ShadowGitEngine } from './shadow-git.js';
@@ -75,6 +77,32 @@ export class KithEngine {
     );
     this.broker = new ResourceBroker(this.coordDb, this.fencing);
     this.handoffs = new HandoffEngine(this.coordDb, this.fencing);
+  }
+
+  /** The repository's workflow mode. Shared by every agent and worktree; `worktrees` unless someone chose `main`. */
+  public workflowMode(): WorkflowMode {
+    const row = this.coordDb.db.prepare("SELECT value FROM meta WHERE key='workflow_mode'").get() as { value: string } | undefined;
+    return workflowModeFrom(row?.value);
+  }
+
+  public setWorkflowMode(mode: WorkflowMode): WorkflowMode {
+    const next = parseWorkflowMode(mode);
+    this.coordDb.withTransaction(() => {
+      this.coordDb.db.prepare("INSERT INTO meta (key, value) VALUES ('workflow_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(next);
+      this.coordDb.logEvent(null, 'workflow_mode_changed', { mode: next });
+    });
+    return next;
+  }
+
+  /** Read-only situational summary from live state: who is active on what, open handoffs, conflicts, claims that overlap a scope. */
+  public brief(options: { scopeGlobs?: string[] } = {}): Brief {
+    return buildBrief({
+      repository: this.coordDb.repoRoot, mode: this.workflowMode(), observedAt: Date.now(), available: true,
+      agents: this.fencing.listAgents(true), tasks: this.intents.listTasks(), locks: this.locks.listLocks(),
+      conflicts: this.shadowGit.listConflicts(), handoffs: this.handoffs.recent(30 * 24 * 3600 * 1000),
+    }, {
+      scopeGlobs: options.scopeGlobs?.map(glob => { try { return LockEngine.normalizePattern(this.coordDb.repoRoot, glob); } catch { return glob; } }),
+    });
   }
 
   /**
@@ -224,6 +252,7 @@ export class KithEngine {
       crossRepoWarnings: workspaceContracts.warnings,
       crossRepoComplete: workspaceContracts.complete,
       resources: this.broker.listResources(),
+      workflowMode: this.workflowMode(),
       mergeQueue: this.mergeTrain.listQueue(), quarantined: this.bashGuard.listQuarantined(),
       handoffs: handoffBlock(this.handoffs.unresolved(10), { summaryMax: 300, filesMax: 5 }),
       mutexWaiters: this.coordDb.db.prepare('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket').all(),
@@ -238,9 +267,12 @@ export class KithEngine {
   }
 
   public beginWork(params: Parameters<IntentAndTaskEngine['declareIntent']>[0] & { isolateWorktree?: boolean }) {
+    // In main-checkout mode there are no worktrees: honour the repository's workflow, and say so, rather than the request.
+    const mode = this.workflowMode(), isolate = mode === 'main' ? false : params.isolateWorktree;
+    const notes = mode === 'main' && params.isolateWorktree ? [MAIN_MODE_NOTE] : [];
     const { intent, worktree } = this.coordDb.withTransaction(() => {
       const intent = this.intents.declareIntent(params);
-      const worktree = intent.ok && params.isolateWorktree
+      const worktree = intent.ok && isolate
         ? this.worktrees.spawnWorktree({ agentId: params.agentId }) : null;
       return { intent, worktree };
     });
@@ -251,6 +283,8 @@ export class KithEngine {
     return {
       ...intent,
       worktree,
+      workflowMode: mode,
+      notes,
       handoffs: handoffBlock(intent.ok && intent.task
         ? this.handoffs.relevantTo({ taskId: intent.task.id, scopeGlobs: intent.task.scope_globs }) : []),
       linkedContracts: workspaceContracts.linkedContracts,
@@ -260,11 +294,13 @@ export class KithEngine {
   }
 
   public claimNextTask(params: { agentId: string; isolateWorktree?: boolean }) {
+    const mode = this.workflowMode(), isolate = mode === 'main' ? false : params.isolateWorktree;
+    const notes = mode === 'main' && params.isolateWorktree ? [MAIN_MODE_NOTE] : [];
     // SQL ownership changes roll back if the filesystem handoff fails. Never remove
     // a partially created directory: it may contain recovery material or user work.
     const { claimedRes, worktree } = this.coordDb.withTransaction(() => {
       const claimedRes = this.intents.claimNextTask(params.agentId);
-      const worktree = claimedRes.claimed && params.isolateWorktree
+      const worktree = claimedRes.claimed && isolate
         ? this.claimWorktree(params.agentId) : null;
       return { claimedRes, worktree };
     });
@@ -276,6 +312,8 @@ export class KithEngine {
     return {
       ...claimedRes,
       worktree,
+      workflowMode: mode,
+      notes,
       handoffs: handoffBlock(claimedRes.claimed && claimedRes.task
         ? this.handoffs.relevantTo({ taskId: claimedRes.task.id, scopeGlobs: claimedRes.task.scope_globs }) : []),
       publishedContracts,

@@ -5,7 +5,9 @@ import { KITH_VERSION } from '../version.js';
 
 import { uninstallKith } from './setup-ledger.js';
 import { doctorReport } from './doctor.js';
-import { readCoordinationState, recoveryReport } from '../core/observation.js';
+import { readBrief, readCoordinationState, recoveryReport } from '../core/observation.js';
+import { formatBrief } from '../core/brief.js';
+import { parseWorkflowMode, WORKFLOW_MODES } from '../core/mode.js';
 import { SessionOwnershipError } from '../core/fencing.js';
 import { buildSwarmPrompts, KithEngine } from '../core/engine.js';
 import { runKithMcpStdioServer } from '../mcp/server.js';
@@ -84,6 +86,15 @@ async function interruptible<T>(run: (signal: AbortSignal) => Promise<T>): Promi
 }
 
 async function main(): Promise<void> {
+  // Kith's storage uses Node's SQLite, which prints a one-line experimental notice on first load. It is noise for a
+  // command people (and session hooks) run constantly, so drop exactly that notice; every other warning still shows.
+  const emitWarning = process.emitWarning.bind(process) as (...args: unknown[]) => void;
+  process.emitWarning = ((warning: unknown, ...rest: unknown[]) => {
+    const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] as { type?: string } | undefined)?.type;
+    const text = typeof warning === 'string' ? warning : (warning as Error | undefined)?.message ?? '';
+    if (type === 'ExperimentalWarning' && /SQLite/i.test(text)) return;
+    return emitWarning(warning, ...rest);
+  }) as typeof process.emitWarning;
   const { positional, flags, passthroughCmd } = parseFlags(process.argv.slice(2));
   const cmd = positional[0] ?? 'help';
   const subCmd = positional[1];
@@ -104,7 +115,7 @@ async function main(): Promise<void> {
       throw new Error(`--only accepts: ${INTEGRATIONS.join(', ')}`);
     }
     const report = initializeKithRepository(repoRoot, 'kith', {
-      enforcement: enforcementMode(flags.enforcement), dryRun: Boolean(flags['dry-run']), refreshGuidance: Boolean(flags['refresh-guidance']), mcpOnly: flags['mcp-only'] ? true : undefined, integrations: integrations as Integration[] | undefined,
+      enforcement: enforcementMode(flags.enforcement), dryRun: Boolean(flags['dry-run']), refreshGuidance: Boolean(flags['refresh-guidance']), mode: typeof flags.mode === 'string' ? parseWorkflowMode(flags.mode) : undefined, mcpOnly: flags['mcp-only'] ? true : undefined, integrations: integrations as Integration[] | undefined,
     });
     console.log(JSON.stringify({ ok: true, ...report }, null, 2));
     return;
@@ -116,6 +127,20 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'uninstall') { const report=uninstallKith(repoRoot,Boolean(flags['dry-run'])); console.log(JSON.stringify(report,null,2)); process.exitCode=report.ok?0:1; return; }
+
+  // Read-only and session-free: runs for any shell, hook or agent, never creates or changes state, and never fails the caller.
+  if (cmd === 'brief') {
+    const scope = typeof flags.scope === 'string' ? flags.scope.split(',').map(glob => glob.trim()).filter(Boolean) : undefined;
+    let brief;
+    try { brief = readBrief(repoRoot, { scopeGlobs: scope }); }
+    catch (error) {
+      brief = { repository: repoRoot, mode: 'worktrees' as const, state: 'unavailable' as const, error: error instanceof Error ? error.message : String(error), observedAt: Date.now(),
+        active: [], blockers: [], queued: { count: 0, next: [] }, handoffs: [], conflicts: [], empty: true, notice: '' };
+    }
+    if (flags.json) console.log(JSON.stringify(brief, null, 2));
+    else { const text = formatBrief(brief, { quiet: Boolean(flags.quiet) }); if (text) console.log(text); }
+    return;
+  }
 
   if (cmd === 'doctor') { const report=doctorReport(repoRoot); console.log(JSON.stringify(report,null,2)); process.exitCode=report.ok?0:1; return; }
 
@@ -247,7 +272,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const commands = ['session', 'status', 'begin', 'complete', 'heartbeat', 'task', 'lock', 'contract', 'worktree', 'port', 'dev', 'mutex', 'hook', 'handoff'];
+  const commands = ['session', 'status', 'begin', 'complete', 'heartbeat', 'task', 'lock', 'contract', 'worktree', 'port', 'dev', 'mutex', 'hook', 'handoff', 'mode'];
   if (!commands.includes(cmd)) throw new Error(`Unknown command '${cmd}'. Run kith help.`);
   const subcommands: Record<string, string[]> = {
     session: ['start', 'end'],
@@ -299,6 +324,12 @@ async function main(): Promise<void> {
       authorize();
       if (!engine.fencing.heartbeat(agentId)) throw new Error('Active --agent <id> required');
       console.log(JSON.stringify({ ok: true, agent: engine.fencing.getAgent(agentId) }, null, 2));
+      return;
+    }
+
+    if (cmd === 'mode') {
+      if (subCmd === undefined) { console.log(JSON.stringify({ ok: true, mode: engine.workflowMode(), modes: WORKFLOW_MODES }, null, 2)); return; }
+      console.log(JSON.stringify({ ok: true, mode: engine.setWorkflowMode(parseWorkflowMode(subCmd)) }, null, 2));
       return;
     }
 
@@ -618,7 +649,7 @@ Claim work, isolate changes with worktrees, share local resources, and verify in
 No hosted service required.
 
 Usage:
-  kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure MCP clients (--dry-run, --only, --mcp-only, --refresh-guidance)
+  kith session start --agent <id> --owner-pid <pid> [--shell]    Create or resume a capability-owned session\n  kith init                                       Configure MCP clients (--dry-run, --only, --mcp-only, --mode main|worktrees, --refresh-guidance)
   kith heartbeat --agent <id>                   Refresh the owned session lease
   kith status [--offline]                         Output JSON state and workspaces; offline never migrates or reaps\n  kith uninstall [--dry-run]                      Restore unchanged tracked setup files; retain work and recovery state\n  kith doctor                                     Check runtime, PATH, configuration, sessions and worktree health without writes\n  kith recover                                    Inspect retained work, expired claims and recovery records offline
   kith setup [checkout] [--no-radar] [--dry-run]    Configure clients and open macOS Radar; preserve custom settings
@@ -638,6 +669,8 @@ Usage:
   kith hook pre|post|pre-commit                   Tool & git hook handlers
   kith handoff write --summary <text> [--kind progress|blocked|done] [--remaining a;b] [--failed a;b] [--release]
   kith handoff list [--task <id>] [--from <agent>] [--all]   Notes left for the next agent
+  kith brief [--scope <globs>] [--json] [--quiet]   Read-only: who is active, open handoffs, conflicts. No session needed
+  kith mode [main|worktrees]                      Show or set how this repository's agents share files
 `);
 }
 

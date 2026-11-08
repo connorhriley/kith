@@ -118,7 +118,7 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
 
   if (options.guidance && layout?.commonGitDir) {
     const guidanceWarnings: string[] = [];
-    for (const [name, entry] of agentGuidance(workspace, { warnings: guidanceWarnings })) queue(workspace, path.join(workspace, name), entry.content);
+    for (const [name, entry] of agentGuidance(workspace, { warnings: guidanceWarnings, mode: readCoordinationState(workspace, { coordinationOnly: true }).workflowMode })) queue(workspace, path.join(workspace, name), entry.content);
     results.push({clientName: 'Project instructions', found: true, configured: true, configPath: path.join(workspace, 'AGENTS.md'), notes: ['Scoped claims, isolated worktrees and verification guidance prepared for agents', ...guidanceWarnings].join('; ')});
   }
 
