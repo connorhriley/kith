@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CoordDatabase } from './db.js';
 import { FencingAndAgentManager } from './fencing.js';
 import { LockEngine } from './locks.js';
+import { ignoredPaths } from './git-ignore.js';
 
 export interface ConflictRecord {
   id: string;
@@ -108,8 +109,10 @@ export class ShadowGitEngine {
         stdio: 'ignore',
       });
     } else if (params.modifiedFiles && params.modifiedFiles.length > 0) {
+      const ignored = ignoredPaths(targetDir, params.modifiedFiles.map(m => LockEngine.normalizeFile(targetDir, m.filePath)));
       for (const mod of params.modifiedFiles) {
         const relPath = LockEngine.normalizeFile(targetDir, mod.filePath);
+        if (ignored.has(relPath)) continue;
         const absPath = path.join(targetDir, relPath);
         const content =
           mod.content ??
@@ -282,8 +285,10 @@ export class ShadowGitEngine {
       }
       const conflicts: ConflictRecord[] = [];
       const now = Date.now();
+      const ignored = ignoredPaths(this.coordDb.repoRoot, [...stageBlobsByFile.keys()]);
 
       for (const [filePath, stages] of stageBlobsByFile.entries()) {
+        if (ignored.has(filePath)) continue;
         const severity = 'text_conflict' as const;
 
         const record: ConflictRecord = {
@@ -325,6 +330,7 @@ export class ShadowGitEngine {
       }
 
       this.fencing.assertSession(agentA);
+      if (!conflicts.length) return { clean: true, mergedTreeSha: null, conflicts };
       if (conflicts.length) {
         this.coordDb.logEvent(agentA, 'dirty_merge_conflict', {
           peerAgent: agentB,

@@ -5,6 +5,7 @@ import { scopeSegments, scopesOverlap } from './glob.js';
 import { caseSensitivePaths, isWithin, physicalPath, repositoryFile } from './repository.js';
 import { CoordDatabase } from './db.js';
 import { FencingAndAgentManager, StaleFencingTokenError } from './fencing.js';
+import { isIgnoredPath, ignoredPaths } from './git-ignore.js';
 
 export interface LockRecord {
   id: string;
@@ -162,9 +163,19 @@ export class LockEngine {
     const lockType = params.lockType ?? 'glob';
     const now = Date.now();
     const expiresAt = now + (params.leaseDurationMs ?? FencingAndAgentManager.DEFAULT_LEASE_MS);
-    const normalizedPatterns = Array.from(
-      new Set(params.patterns.map((p) => LockEngine.normalizePattern(this.rootForAgent(params.agentId), lockType === 'file' && !p.startsWith('file:') ? 'file:' + p : p)))
+    const lockRoot = this.rootForAgent(params.agentId);
+    let normalizedPatterns = Array.from(
+      new Set(params.patterns.map((p) => LockEngine.normalizePattern(lockRoot, lockType === 'file' && !p.startsWith('file:') ? 'file:' + p : p)))
     );
+    // Git-ignored files (logs, traces, build output) are never shared source: claim nothing on them.
+    if (lockType === 'file') {
+      const literal = (p: string) => p.startsWith('file:') ? p.slice(5) : p;
+      const ignored = ignoredPaths(lockRoot, normalizedPatterns.map(literal));
+      normalizedPatterns = normalizedPatterns.filter(p => !ignored.has(literal(p)));
+      if (!normalizedPatterns.length) {
+        return { ok: true, fencingToken: this.fencing.assertSession(params.agentId), locks: [], conflicts: [] };
+      }
+    }
 
     return this.coordDb.withTransaction(() => {
       this.fencing.assertSession(params.agentId);
@@ -302,6 +313,7 @@ export class LockEngine {
     this.fencing.reapDeadAgents();
     this.fencing.assertSession(params.agentId);
     const normPath = LockEngine.normalizeFile(this.rootForAgent(params.agentId), params.filePath);
+    if (isIgnoredPath(this.rootForAgent(params.agentId), normPath)) return { allowed: true };
     const requested = LockEngine.literalScope(normPath);
     const now = Date.now();
 

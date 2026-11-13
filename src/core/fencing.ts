@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CoordDatabase } from './db.js';
 import { captureAbandoned } from './handoff-store.js';
+import { ignoredPaths } from './git-ignore.js';
 
 export interface AgentRecord {
   id: string;
@@ -194,7 +195,34 @@ export class FencingAndAgentManager {
       : 'SELECT * FROM agents ORDER BY registered_at DESC').all() as unknown as AgentRecord[];
   }
 
+  private lastIgnoredPurge = 0;
+
+  /**
+   * Drop recorded conflicts and file claims on paths Git ignores (dev-server logs, traces). Older
+   * versions recorded them; they must neither block a session nor survive an upgrade.
+   */
+  public purgeIgnoredClaims(force = false): { conflicts: number; locks: number } {
+    const now = Date.now();
+    if (!force && now - this.lastIgnoredPurge < 30_000) return { conflicts: 0, locks: 0 };
+    this.lastIgnoredPurge = now;
+    const db = this.coordDb.db;
+    const conflictRows = db.prepare('SELECT id, file_path FROM conflicts').all() as Array<{ id: string; file_path: string }>;
+    const lockRows = db.prepare("SELECT id, pattern FROM locks WHERE lock_type = 'file'").all() as Array<{ id: string; pattern: string }>;
+    const lockFile = (pattern: string) => pattern.startsWith('file:') ? pattern.slice(5) : pattern;
+    const ignored = ignoredPaths(this.coordDb.repoRoot, [...conflictRows.map(r => r.file_path), ...lockRows.map(r => lockFile(r.pattern))]);
+    const conflicts = conflictRows.filter(r => ignored.has(r.file_path));
+    const locks = lockRows.filter(r => ignored.has(lockFile(r.pattern)));
+    if (conflicts.length || locks.length) {
+      this.coordDb.withTransaction(() => {
+        for (const r of conflicts) db.prepare('DELETE FROM conflicts WHERE id = ?').run(r.id);
+        for (const r of locks) db.prepare('DELETE FROM locks WHERE id = ?').run(r.id);
+      });
+    }
+    return { conflicts: conflicts.length, locks: locks.length };
+  }
+
   public reapDeadAgents(): string[] {
+    try { this.purgeIgnoredClaims(); } catch { /* Housekeeping must never block a session. */ }
     const agents = this.coordDb.db.prepare("SELECT * FROM agents WHERE status='active'").all() as unknown as AgentRecord[];
     const liveness = new Map<string, boolean>();
     const candidates = agents.filter((a) => {
@@ -215,6 +243,29 @@ export class FencingAndAgentManager {
         reaped.push(current.id);
       }
       return reaped;
+    });
+  }
+
+  /**
+   * Operator escape hatch: release an agent's claims and mark it dead without its session token.
+   * Used by `kith session clear` for an auto-session whose capability was lost or is stuck.
+   */
+  public forceReclaimAgent(agentId: string, reason = 'manual_clear'): boolean {
+    return this.coordDb.withTransaction(() => {
+      const agent = this.getAgent(agentId);
+      if (!agent || agent.status !== 'active') return false;
+      this.reclaim(agentId, 'dead', reason);
+      return true;
+    });
+  }
+
+  /** Delete recorded conflicts involving `agentId`, or every conflict when omitted. */
+  public clearConflicts(agentId?: string): number {
+    return this.coordDb.withTransaction(() => {
+      const r = agentId
+        ? this.coordDb.db.prepare('DELETE FROM conflicts WHERE agent_a=? OR agent_b=?').run(agentId, agentId)
+        : this.coordDb.db.prepare('DELETE FROM conflicts').run();
+      return Number(r.changes);
     });
   }
 
