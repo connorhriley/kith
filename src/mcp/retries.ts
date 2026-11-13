@@ -114,9 +114,12 @@ export class OperationJournal {
     const data = reply.structuredContent as Data;
     const { sessionToken, ...saved } = data;
     try {
-      const result = this.db.db.prepare('UPDATE mcp_operations SET result_json=? WHERE operation_key=? AND result_json IS NULL')
-        .run(JSON.stringify({ data: saved, grantsToken: typeof sessionToken === 'string' }), params.key);
-      if (Number(result.changes) !== 1) throw new Error('Operation result was not recorded');
+      const recorded = this.db.withTransaction(() => {
+        const result = this.db.db.prepare('UPDATE mcp_operations SET result_json=? WHERE operation_key=? AND result_json IS NULL')
+          .run(JSON.stringify({ data: saved, grantsToken: typeof sessionToken === 'string' }), params.key);
+        return Number(result.changes);
+      });
+      if (recorded !== 1) throw new Error('Operation result was not recorded');
     } catch {
       OperationJournal.undurable.add(localKey);
       return toolReply({ ...failureData(new RetryError('OPERATION_OUTCOME_UNKNOWN',

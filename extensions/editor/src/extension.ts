@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import path from 'node:path';
 import os from 'node:os';
-import {resolveNode, runJson, existingKith} from './runtime';
+import {resolveNode, runJson, existingKith, globalSetupSummary} from './runtime';
 
 type CursorMcp = {registerServer(config:{name:string;server:{command:string;args:string[];env:Record<string,string>}}):void;unregisterServer(name:string):void};
 export function activate(context:vscode.ExtensionContext) {
@@ -30,15 +30,17 @@ export function activate(context:vscode.ExtensionContext) {
       if(existing){registered=`Existing Kith configuration preserved: ${existing}`;return;}
       const executable=await node();
       if(stopped.signal.aborted||current!==generation)return;
+      const profile=vscode.workspace.getConfiguration('kith').get<string>('mcp.profile','compact');
+      const mcpArgs=profile==='full'?[launcher,'mcp']:[launcher,'mcp','--compact'];
       const cursor=cursorApi();
       if(cursor?.registerServer){
-        cursor.registerServer({name:'kith-editor',server:{command:executable,args:[launcher,'mcp'],env:{}}});
+        cursor.registerServer({name:'kith-editor',server:{command:executable,args:mcpArgs,env:{}}});
         registration=new vscode.Disposable(()=>cursor.unregisterServer('kith-editor'));
         registered='Bundled Kith offered through Cursor MCP. Cursor manages server approval and start status.';
       }else if(vscode.lm?.registerMcpServerDefinitionProvider){
         registration=vscode.lm.registerMcpServerDefinitionProvider('kith.editor',{
           onDidChangeMcpServerDefinitions:changed.event,
-          provideMcpServerDefinitions:()=>[new vscode.McpStdioServerDefinition('Kith',executable,[launcher,'mcp'],{},context.extension.packageJSON.version)],
+          provideMcpServerDefinitions:()=>[new vscode.McpStdioServerDefinition('Kith',executable,mcpArgs,{},context.extension.packageJSON.version)],
         });
         registered='Bundled Kith offered through VS Code MCP. VS Code manages server approval and start status.';
       }else registered='Update this editor to use native MCP registration. No configuration was changed.';
@@ -53,7 +55,12 @@ export function activate(context:vscode.ExtensionContext) {
         snapshot={tasks:0,attention:0,details:'',complete:false,overlaps:0,roots:0,text:'Open a trusted local workspace. Kith has not run a repository process.'};
       }else{
         const executable=await node();let complete=true;
-        const lines=[`Kith — read-only observations (${new Date().toLocaleString()})`,registered,'',
+        const setup=globalSetupSummary();
+        const activeSetup=[setup.claudeHooks?'Claude hooks':'',setup.cursorHooks?'Cursor hooks':'',setup.autostart?'macOS autostart':''].filter(Boolean);
+        const setupNote=activeSetup.length
+          ? `Background hooks: ${activeSetup.join(', ')} active.`
+          : 'Background hooks: not installed (run "Kith: Install Global Hooks & Autostart" or `npx kith-coord install` for cross-session hooks).';
+        const lines=[`Kith — read-only observations (${new Date().toLocaleString()})`,registered,setupNote,'',
           'Overlaps are different or unverified dirty copies, not proven merge conflicts. File writers cannot be identified from these observations.',''];
         const inspected=new Set<string>(),overlaps=new Set<string>(),sessions=new Set<string>(),taskIds=new Set<string>();
         const working:string[]=[],waiting:string[]=[],attention:string[]=[],resources:string[]=[],saved=new Set<string>();
@@ -87,7 +94,7 @@ export function activate(context:vscode.ExtensionContext) {
           }
           lines.push('');
         }
-        const summary=[`Kith — ${new Date().toLocaleString()}`,registered,''];
+        const summary=[`Kith — ${new Date().toLocaleString()}`,registered,setupNote,''];
         if(!complete)summary.push('Status unavailable or partial. Inspect details before acting.');
         if(attention.length)summary.push('Needs attention',...new Set(attention),'');
         summary.push(taskIds.size?`Coordinating ${taskIds.size} task(s)`:sessions.size?`${sessions.size} session(s) recorded; no task started`:'Watching only — no active Kith tasks');
@@ -118,10 +125,20 @@ export function activate(context:vscode.ExtensionContext) {
     vscode.commands.registerCommand('kith.showStatus',async()=>{detailsMode=false;await refresh();output.show(true);return snapshot;}),
     vscode.commands.registerCommand('kith.refresh',refresh),
     vscode.commands.registerCommand('kith.showDetails',async()=>{detailsMode=true;await refresh();output.show(true);return snapshot;}),
+    vscode.commands.registerCommand('kith.installGlobal',async()=>{
+      if(!vscode.workspace.isTrusted){void vscode.window.showWarningMessage?.('Open a trusted local workspace before running Kith install.');return false;}
+      const target=folders()[0]?.uri.fsPath??os.homedir();
+      const executable=await node();
+      const terminal=vscode.window.createTerminal?.({name:'Kith Install',shellPath:executable,shellArgs:[launcher,'install',target,'--human']});
+      if(terminal){terminal.show(true);return true;}
+      await runJson(executable,launcher,['install',target,'--json'],stopped.signal);
+      await refresh();
+      return true;
+    }),
     vscode.workspace.onDidChangeWorkspaceFolders(()=>{void connectMcp().then(refresh);}),
     vscode.workspace.onDidGrantWorkspaceTrust(()=>{void connectMcp().then(refresh);}),
     vscode.workspace.onDidChangeConfiguration(event=>{
-      if(event.affectsConfiguration('kith.nodePath')||event.affectsConfiguration('kith.mcp.enabled')){runtime=undefined;void connectMcp().then(refresh);}
+      if(event.affectsConfiguration('kith.nodePath')||event.affectsConfiguration('kith.mcp.enabled')||event.affectsConfiguration('kith.mcp.profile')){runtime=undefined;void connectMcp().then(refresh);}
       if(event.affectsConfiguration('kith.statusIntervalSeconds'))schedule();
     }),
     new vscode.Disposable(()=>{stopped.abort();if(timer)clearInterval(timer);registration?.dispose();}),

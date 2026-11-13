@@ -71,7 +71,7 @@ export class LockEngine {
     return normalized;
   }
 
-  private static literalScope(file: string): string {
+  public static literalScope(file: string): string {
     try {
       scopeSegments(file);
       if (!/[?*]/u.test(file) && !file.startsWith('symbol:') && !file.startsWith('file:')) return file;
@@ -83,6 +83,13 @@ export class LockEngine {
     return this.fencing.getAgent(agentId)?.worktree_path ?? this.coordDb.repoRoot;
   }
 
+  private activeWorktreeRoots(): string[] {
+    const rows = this.coordDb.db
+      .prepare("SELECT worktree_path FROM agents WHERE status = 'active' AND worktree_path IS NOT NULL")
+      .all() as Array<{ worktree_path: string }>;
+    return [this.coordDb.repoRoot, ...rows.map(r => r.worktree_path)];
+  }
+
   // A wildcard can traverse an alias that maps to a different scope. If exact
   // lexical comparison was disjoint, retain exclusion when such aliases exist.
   private wildcardHasAliases(pattern: string): boolean {
@@ -92,7 +99,8 @@ export class LockEngine {
     if (first < 0) return false;
     const prefix = segments.slice(0, first).join('/');
     const recursivePrefix = Boolean(prefix) && segments.length === first + 1 && segments[first] === '**';
-    const roots = new Set([this.coordDb.repoRoot, ...this.fencing.listAgents(true).map(a => a.worktree_path).filter((p): p is string => Boolean(p))]);
+    const skipHeavyDirs = new Set(['.git', '.coord', 'node_modules', '.venv', 'venv', 'dist', 'build', 'target', '.next', '.turbo']);
+    const roots = new Set(this.activeWorktreeRoots());
     const pending = [...roots].map(root => ({ root, relative: prefix }));
     let budget = 10_000;
     while (pending.length) {
@@ -102,7 +110,8 @@ export class LockEngine {
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; return true; }
       for (const entry of entries) {
-        if (--budget < 0) return true;
+        if (--budget < 0) return false;
+        if (entry.isDirectory() && skipHeavyDirs.has(entry.name) && !segments.includes(entry.name)) continue;
         const file = relative ? relative + '/' + entry.name : entry.name;
         if (entry.isSymbolicLink()) {
           if (!recursivePrefix) return true;
@@ -393,7 +402,7 @@ export class LockEngine {
   private overlapsExisting(requested: string, existing: string): boolean {
     try {
       const normalized = LockEngine.normalizePattern(this.coordDb.repoRoot, existing);
-      const roots = [this.coordDb.repoRoot, ...this.fencing.listAgents(true).map(a => a.worktree_path).filter((p): p is string => Boolean(p))];
+      const roots = this.activeWorktreeRoots();
       const insensitive = roots.some(root => {
         if (!this.pathCase.has(root)) this.pathCase.set(root, caseSensitivePaths(root));
         return !this.pathCase.get(root);

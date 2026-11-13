@@ -21,7 +21,7 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     conflicts: [] as Record<string,unknown>[], contracts: [] as Record<string,unknown>[], resources: [] as Record<string,unknown>[],
     mergeQueue: [] as Record<string,unknown>[], quarantined: [] as Record<string,unknown>[], mutexWaiters: [] as Record<string,unknown>[],
     commandGuards: [] as Record<string,unknown>[], events: [] as Record<string,unknown>[], workspaces: [] as ReturnType<typeof observeWorkspaces>,
-    handoffs: [] as HandoffRecord[], workflowMode: 'worktrees' as WorkflowMode };
+    handoffs: [] as HandoffRecord[], workflowMode: 'worktrees' as WorkflowMode, workflowModeConfigured: false };
   let scratch: string | undefined, db: Database | undefined;
   try {
     const file = path.join(layout.coordDir,'state.db');
@@ -56,7 +56,9 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     const hasTable = (name: string) => Boolean(db!.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
     const handoffs = hasTable('handoffs')
       ? all(`${HANDOFF_SELECT} WHERE h.created_at > ${observedAt - 30 * 24 * 3600 * 1000} ORDER BY h.created_at DESC, h.id DESC LIMIT 300`).map(rowToHandoff) : [];
-    const workflowMode = workflowModeFrom((db.prepare("SELECT value FROM meta WHERE key='workflow_mode'").get() as { value: string } | undefined)?.value);
+    const rawMode = (db.prepare("SELECT value FROM meta WHERE key='workflow_mode'").get() as { value: string } | undefined)?.value;
+    const workflowModeConfigured = rawMode === 'main' || rawMode === 'worktrees';
+    const workflowMode = workflowModeFrom(rawMode);
     const agents=all<AgentRecord>('SELECT * FROM agents ORDER BY registered_at DESC' + (options.coordinationOnly ? ' LIMIT 201' : ''));
     if (options.coordinationOnly) {
       const tasks = all("SELECT * FROM tasks WHERE status IN ('active','blocked','queued') ORDER BY priority DESC, updated_at DESC LIMIT 201").map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))}));
@@ -68,11 +70,11 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
       const sessionEpochs = Object.fromEntries(all<{agent_id:string;epoch:number}>('SELECT s.agent_id,s.epoch FROM agent_sessions s JOIN agents a ON s.agent_id=a.id ORDER BY a.registered_at DESC LIMIT 201').map(r=>[r.agent_id,r.epoch]));
       const conflicts = all('SELECT * FROM conflicts ORDER BY detected_at DESC LIMIT 51').map(({details_json,...r})=>({...r,details:JSON.parse(String(details_json))}));
       db.exec('COMMIT');
-      return {...empty,state:'ready' as const,schemaVersion,agents,sessionEpochs,tasks,locks,conflicts,handoffs,workflowMode,resources,mutexWaiters,commandGuards,mergeQueue,
+      return {...empty,state:'ready' as const,schemaVersion,agents,sessionEpochs,tasks,locks,conflicts,handoffs,workflowMode,workflowModeConfigured,resources,mutexWaiters,commandGuards,mergeQueue,
         truncated:[agents,tasks,resources,mutexWaiters,commandGuards,mergeQueue].some(rows=>rows.length>200)||locks.length>500};
     }
     if (options.ownersOnly) { db.exec('COMMIT'); return { ...empty, state: 'ready' as const, schemaVersion, agents }; }
-    const state = { ...empty, state:'ready' as const, schemaVersion, handoffs, workflowMode,
+    const state = { ...empty, state:'ready' as const, schemaVersion, handoffs, workflowMode, workflowModeConfigured,
       fencingEpoch:Number((db.prepare("SELECT value FROM meta WHERE key='fencing_epoch'").get() as {value:string}).value), agents,
       tasks:all('SELECT * FROM tasks ORDER BY priority DESC,created_at').map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))})),
       locks:all('SELECT * FROM locks ORDER BY acquired_at'),

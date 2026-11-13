@@ -19,7 +19,7 @@ async function fixture(options={}){
  const events={registered:[],unregistered:[],output:'',commands:new Map()};
  class Disposable{constructor(fn=()=>{}){this.fn=fn;}dispose(){this.fn();}}
  class Emitter{event=()=>new Disposable();dispose(){}}
- const config={get:(key,fallback)=>key==='mcp.enabled'?true:fallback,inspect:()=>({globalValue:options.badNode?path.join(temp,'missing-node'):process.execPath})};
+ const config={get:(key,fallback)=>key==='mcp.enabled'?true:key==='mcp.profile'?(options.profile??'compact'):fallback,inspect:()=>({globalValue:options.badNode?path.join(temp,'missing-node'):process.execPath})};
  const vscode={Disposable,EventEmitter:Emitter,StatusBarAlignment:{Left:1},
   window:{createOutputChannel:()=>({replace:t=>events.output=t,show(){},dispose(){}}),createStatusBarItem:()=>({show(){},dispose(){}})},
   workspace:{isTrusted:options.trusted!==false,workspaceFolders:[{uri:{scheme:'file',fsPath:root}}],getConfiguration:()=>config,
@@ -46,9 +46,18 @@ async function fixture(options={}){
 test('VS Code registration uses the bundled server and observations create no project database',async()=>{
  const f=await fixture();try{
   assert.equal(f.events.registered.length,1);const r=f.events.registered[0];assert.equal(r.id,'kith.editor');
-  const [d]=await r.provider.provideMcpServerDefinitions();assert.equal(d.command,fs.realpathSync(process.execPath));assert.deepEqual(d.args,[path.join(base,'server/launch.cjs'),'mcp']);
+  const [d]=await r.provider.provideMcpServerDefinitions();assert.equal(d.command,fs.realpathSync(process.execPath));assert.deepEqual(d.args,[path.join(base,'server/launch.cjs'),'mcp','--compact']);
   assert.equal(f.api.getSnapshot().complete,true);assert.equal(fs.existsSync(path.join(f.root,'.coord/state.db')),false);
   assert.match(f.events.output,/Watching only — no active Kith tasks/);assert.doesNotMatch(f.events.output,/Zero Conflicts/);
+  assert.match(f.events.output,/Background hooks: not installed/);
+  assert.equal(f.events.commands.has('kith.installGlobal'),true);
+ }finally{await f.close();}
+});
+test('VS Code registration honors full MCP profile setting when configured',async()=>{
+ const f=await fixture({profile:'full'});try{
+  const r=f.events.registered[0];
+  const [d]=await r.provider.provideMcpServerDefinitions();
+  assert.deepEqual(d.args,[path.join(base,'server/launch.cjs'),'mcp']);
  }finally{await f.close();}
 });
 test('Cursor uses its native API, never writes MCP files, and removes only its own registration',async()=>{

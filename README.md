@@ -59,7 +59,7 @@ cursor --install-extension kith-coord.kith@0.1.7
 
 Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](extensions/editor/README.md#install) also links the published 0.1.7 VSIX.
 
-Open a trusted local Git checkout and approve Kith's MCP server through the editor. The extension bundles the coordination server, detects Node, and preserves existing MCP entries, hooks and tool permissions. **No global npm install is needed.** Each agent still needs to use Kith's tools; installing the extension does not enforce claims on other writers.
+Open a trusted local Git checkout and approve Kith's MCP server through the editor. The extension bundles the coordination server, detects Node, and preserves existing MCP entries, hooks and tool permissions. **No global npm install is needed.** On `main` (next release), it registers the compact tool profile (`kith.mcp.profile`, `compact` default vs `full`), displays a read-only global hook status note in Output, and adds **Kith: Install Global Hooks & Autostart** (`kith.installGlobal`) to configure client hooks without leaving the editor (the bundled extension skips macOS menu-bar autostart; run `kith install` from the CLI on macOS for Radar login autostart). Each agent still needs to use Kith's tools; installing the extension alone does not enforce claims on other writers.
 
 Start with a scoped task:
 
@@ -73,17 +73,24 @@ The [extension guide](extensions/editor/README.md) covers settings and existing 
 
 ### CLI and other MCP clients
 
-One command from your Git checkout configures supported detected clients and adds project instructions:
+Published **0.1.7** configures detected clients and adds project instructions with:
 
 ```sh
 npx --yes --package kith-coord@0.1.7 kith setup
 ```
 
-Durable setup starts with **0.1.7**. Earlier versions need a persistent global npm installation before setup. [Client setup](docs/integrations.md#configure-detected-local-clients) covers configuration scope and advanced options.
+On `main` (next release), **`kith install`** replaces `kith setup` as the recommended one-command onboarding (`kith setup` remains as a compatible alias):
 
-Setup retains an exact self-contained runtime outside npx's cache, checks its MCP discovery, and backs up changes before writing them. **On macOS, the next release also opens read-only Radar automatically**; use `--no-radar` for MCP-only setup. Existing custom Kith launchers, peer servers, hooks and permissions are preserved. From outside a Git checkout it configures global connections; pass a project path to add that project's guidance. Reconnect the client and approve its MCP server through the client's normal controls.
+- Configures global MCP servers with the concise **`--compact`** tool profile by default (`kith mcp --compact`, or `--full` for the complete surface).
+- Installs global silent-solo `--auto` hooks for **Claude Code** (`~/.claude/settings.json`) and **Cursor** (`~/.cursor/hooks.json`). Solo work stays zero-write (`Watching only`); when concurrent activity overlaps, hooks auto-join Kith and isolate writers into worktrees/leases.
+- On **macOS**, installs and starts a login `LaunchAgent` (`dev.kith.radar`) for background menu-bar Radar (`--no-autostart` / `--no-radar` to skip).
+- **`kith uninstall`** cleanly removes the macOS `LaunchAgent`, global Kith hooks, global MCP entries, retained runtimes, and launcher symlinks.
 
-Ask your agent to do the task using Kith. The view says **Watching only** until a task is actually recorded. A configured server is not a running task. `kith setup --dry-run` previews without writes; `kith doctor /absolute/checkout` diagnoses configuration.
+Note the platform and client boundaries: **Codex CLI** does not expose native pre/post tool hooks, so it coordinates through `--compact` MCP tools and Radar/watcher observations rather than automatic hook interception. **Linux and Windows** skip macOS menu-bar autostart and use `kith watch` for passive supervision.
+
+Durable setup starts with **0.1.7** (retaining an exact self-contained runtime outside npx's cache, verifying MCP discovery, and backing up modified files). Existing custom Kith launchers, peer servers, hooks and permissions are preserved. Reconnect the client and approve its MCP server through the client's normal controls.
+
+Day-to-day on `main`: run `kith` (read-only status overview in a terminal), `kith status`, `kith run`, `kith gc`, `kith doctor [path]` (diagnoses clients, hooks, and autostart), or `kith help --all`. The view says **Watching only** until a task or concurrent overlap is recorded; `kith install --dry-run` / `kith setup --dry-run` previews without writes.
 
 For source installation and the disposable demo, use the pinned **pnpm 10.20.0**:
 
@@ -118,13 +125,15 @@ The implementation is in [examples/two-agents.mjs](examples/two-agents.mjs). Thi
 
 ### Client support
 
-The editor extension bundles the server and offers it through native MCP registration; no global npm install is needed. Installing an extension or writing configuration does not enforce claims on writers that do not use Kith. Existing custom Kith entries retain precedence.
+The editor extension bundles the server and offers it through native MCP registration; no global npm install is needed. Installing an extension or writing MCP configuration alone does not enforce claims on writers that do not call Kith tools unless global `--auto` hooks are installed for that client. Existing custom Kith entries retain precedence.
 
-| Client | Setup and validation |
+| Client | Setup and behavior |
 | --- | --- |
-| VS Code / Cursor | One-click marketplace extension; native MCP controls retain approval and trust |
-| Claude Code / Claude Desktop / Codex | Detected client configuration through `kith setup` |
-| Other MCP clients | stdio server via `kith mcp`; client-specific validation required |
+| VS Code / Cursor | One-click marketplace extension (`kith.mcp.profile` `compact` on `main`); **Kith: Install Global Hooks & Autostart** runs `kith install` for global client hooks without leaving the editor |
+| Claude Code & Cursor | Detected client configuration via `kith install` (next release) / `kith setup`; supports silent-solo -> overlap `--auto` global hooks (`SessionStart` / `PreToolUse` / `PostToolUse`) |
+| Codex CLI | Detected global MCP configuration (`--compact` on `main`); no native tool hooks exist in Codex CLI, so coordination happens via MCP tools and Radar/watcher |
+| Claude Desktop | Detected MCP configuration via `kith install` / `kith setup` |
+| Other MCP clients | stdio server via `kith mcp` (`--compact` or `--full`); client-specific validation required |
 
 Native evidence is version-specific. See [client validation](docs/client-validation.md), [advanced integration setup](docs/integrations.md) and [session ownership](docs/sessions-and-mutexes.md). The npm package is **`kith-coord`** and the command is **`kith`**; the unrelated npm package `kith` is not this project.
 
@@ -142,9 +151,9 @@ See [dev-server launch and waiting claims](docs/usage.md#launch-a-dev-server-on-
 
 ## Read-only Radar
 
-In the next release, macOS setup opens Radar in the menu bar for the selected checkout or workspace. It uses the retained installation, so clearing the npx cache does not break it. Repeat setup keeps an existing Radar workspace selected. Use **Switch Workspace** in its menu to change it.
+On `main` (next release), macOS `kith install` (and `kith setup`) installs and loads a `LaunchAgent` (`dev.kith.radar`) so menu-bar Radar runs in the background and restarts automatically across logins for the selected checkout or workspace. It uses the retained installation, so clearing the npx cache does not break it. Repeat runs keep an existing Radar workspace selected; use **Switch Workspace** in its menu to change it.
 
-`kith setup --no-radar` configures MCP without opening Radar (useful on headless machines); `--dry-run` never launches it. Linux and Windows skip the menu-bar view. Setup does not add a login item; after quitting, reopen with:
+`kith install --no-autostart` (or `--no-radar`) configures MCP and hooks without loading the macOS login agent (useful on headless machines); `--dry-run` never writes or launches anything. Linux and Windows skip the macOS menu-bar app and `LaunchAgent`, using `kith watch` for passive monitoring instead (external IDE `presence.db` discovery is opt-in via `--include-presence`). Remove the login item anytime with `kith uninstall`, or inspect manually with:
 
 ```sh
 kith watch /path/to/workspace --once --json

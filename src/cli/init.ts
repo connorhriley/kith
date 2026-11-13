@@ -21,6 +21,8 @@ export interface InitReport {
   dryRun: boolean;
   /** The workflow mode the generated guidance describes. */
   mode: WorkflowMode;
+  /** True when the mode was explicitly provided or already recorded in repository state. */
+  modeConfigured?: boolean;
   warnings: string[];
 }
 
@@ -53,7 +55,16 @@ export function initializeKithRepository(
   const mode = enforcementMode(options.enforcement);
   // Guidance describes the repository's workflow. An explicit mode wins; otherwise keep what is already recorded.
   let workflowMode: WorkflowMode = 'worktrees';
-  try { workflowMode = options.mode ? parseWorkflowMode(options.mode) : readCoordinationState(repoRoot, { coordinationOnly: true }).workflowMode; } catch (error) { if (options.mode) throw error; }
+  let modeConfigured = Boolean(options.mode);
+  try {
+    if (options.mode) {
+      workflowMode = parseWorkflowMode(options.mode);
+    } else {
+      const state = readCoordinationState(repoRoot, { coordinationOnly: true });
+      workflowMode = state.workflowMode;
+      modeConfigured = Boolean(state.workflowModeConfigured);
+    }
+  } catch (error) { if (options.mode) throw error; }
   const modeArg = mode === 'block' ? '' : ` --enforcement ${mode}`;
   const absRoot = discoverRepository(repoRoot).checkoutRoot;
   const mcpOnly = options.mcpOnly ?? options.integrations === undefined;
@@ -257,13 +268,13 @@ esac
   }
   const report: InitReport = {
     repoRoot: absRoot, indexedFiles: 0, configuredFiles: [...plan.keys()],
-    dryRun: options.dryRun ?? false, mode: workflowMode, warnings,
+    dryRun: options.dryRun ?? false, mode: workflowMode, modeConfigured, warnings,
   };
   if (report.dryRun) return report;
   const engine = new KithEngine(absRoot);
   try {
     if(plan.size) applySetupPlan(absRoot, engine.coordDb.coordDir, plan, warnings);
-    if (options.mode) engine.setWorkflowMode(workflowMode);
+    if (options.mode || !engine.workflowModeConfigured()) engine.setWorkflowMode(workflowMode);
     report.indexedFiles = engine.depGraph.indexRepositoryFiles(absRoot);
   } finally {
     engine.close();

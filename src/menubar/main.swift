@@ -40,10 +40,16 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
             FileHandle.standardError.write(Data("Could not acquire the private Radar instance lock.\n".utf8)); exit(1)
         }
         // Older releases did not hold the instance lock. Leave an existing view
-        // and its selected workspace alone during upgrade, too.
+        // and its selected workspace alone during upgrade, too, without letting
+        // concurrent startups misclassify a lock-loser that is still exiting.
         let executableName = URL(fileURLWithPath: args[0]).lastPathComponent
         if NSWorkspace.shared.runningApplications.contains(where: {
-            $0.processIdentifier != getpid() && $0.isFinishedLaunching && !$0.isTerminated && $0.executableURL?.lastPathComponent == executableName
+            guard $0.processIdentifier != getpid(),
+                  $0.isFinishedLaunching,
+                  !$0.isTerminated,
+                  $0.executableURL?.lastPathComponent == executableName,
+                  let launched = $0.launchDate else { return false }
+            return Date().timeIntervalSince(launched) > 5.0
         }) { acknowledge("KITH_RADAR_RUNNING"); exit(0) }
         selection.select(args[1])
         kithCliPath = args[2]
@@ -73,7 +79,7 @@ class KithMenuBarApp: NSObject, NSApplicationDelegate {
         DispatchQueue.global(qos: .background).async { [weak self] in
             guard let self = self else { return }
             do {
-                let json = try runRadar(executable: self.kithCliPath, arguments: [self.kithScriptPath, "watch", directory, "--once", "--raw"])
+                let json = try runRadar(executable: self.kithCliPath, arguments: [self.kithScriptPath, "watch", directory, "--once", "--raw", "--include-presence"])
                 DispatchQueue.main.async {
                     self.pollInFlight = false
                     guard self.selection.accepts(revision) else { self.pollRadar(); return }

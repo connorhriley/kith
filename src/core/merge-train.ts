@@ -26,6 +26,29 @@ export interface SpeculativeMergeResult {
   diagnostics: string;
 }
 
+export function runVerificationCommand(
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs = Number(process.env.KITH_MERGE_VERIFY_TIMEOUT_MS) || 300_000
+): string {
+  try {
+    const out = execSync(command, {
+      cwd,
+      env,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: timeoutMs,
+    });
+    return `Verification passed (${command}):\n${out.trim()}`.trim();
+  } catch (verifyErr: unknown) {
+    const stdout = (verifyErr as { stdout?: string })?.stdout ?? '';
+    const stderr = (verifyErr as { stderr?: string })?.stderr ?? '';
+    const combined = `${stdout}\n${stderr}`.trim();
+    throw new Error(`Speculative verification failed ('${command}'):\n${combined}`);
+  }
+}
+
 export class SpeculativeMergeTrain {
   constructor(private readonly coordDb: CoordDatabase, private readonly fencing: FencingAndAgentManager) {}
 
@@ -40,6 +63,8 @@ export class SpeculativeMergeTrain {
     worktreePath?: string | null;
     verificationCmd?: string | null;
     commitMessage?: string;
+    waitTimeoutMs?: number;
+    verificationTimeoutMs?: number;
   }): SpeculativeMergeResult {
     this.fencing.assertSession(params.agentId);
     const sessionEnv = this.fencing.sessionEnvironment(params.agentId);
@@ -73,13 +98,20 @@ export class SpeculativeMergeTrain {
     const stageDir = path.join(this.coordDb.coordDir, 'worktrees', `_merge_train_${id}`);
     const lockPath = path.join(this.coordDb.coordDir, 'merge-train.lock');
     let lockFd: number | undefined;
+    const waitMs = Math.max(0, params.waitTimeoutMs ?? 0);
+    const lockDeadline = Date.now() + waitMs;
 
     try {
-      try {
-        lockFd = fs.openSync(lockPath, 'wx', 0o600);
-        fs.writeFileSync(lockFd, JSON.stringify({ pid: process.pid, entryId: id }));
-      } catch {
-        throw new Error('Merge train is busy. If its owner crashed, inspect .coord/merge-train.lock before removing it.');
+      while (lockFd === undefined) {
+        try {
+          lockFd = fs.openSync(lockPath, 'wx', 0o600);
+          fs.writeFileSync(lockFd, JSON.stringify({ pid: process.pid, entryId: id }));
+        } catch {
+          if (Date.now() >= lockDeadline) {
+            throw new Error('Merge train is busy. If its owner crashed, inspect .coord/merge-train.lock before removing it.');
+          }
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(100, Math.max(10, lockDeadline - Date.now())));
+        }
       }
       const baseHead = this.gitHead(this.coordDb.repoRoot);
       const targetBranch = this.gitBranch(this.coordDb.repoRoot);
@@ -137,7 +169,7 @@ export class SpeculativeMergeTrain {
       const stageNodeModules = path.join(stageDir, 'node_modules');
       const hydratedNodeModules = fs.existsSync(rootNodeModules) && !fs.existsSync(stageNodeModules);
       if (hydratedNodeModules) {
-        fs.symlinkSync(rootNodeModules, stageNodeModules, 'dir');
+        fs.symlinkSync(rootNodeModules, stageNodeModules, process.platform === 'win32' ? 'junction' : 'dir');
       }
 
       // 2. Attempt merge of `params.branch` into detached HEAD in `stageDir`
@@ -165,22 +197,7 @@ export class SpeculativeMergeTrain {
       // 3. Run verification command inside the speculative staging tree if specified
       let diagnostics = 'Speculative merge clean.';
       if (params.verificationCmd) {
-        try {
-          const out = execSync(params.verificationCmd, {
-            cwd: stageDir, env: sessionEnv,
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'pipe'],
-            timeout: 120_000,
-          });
-          diagnostics = `Verification passed (${params.verificationCmd}):\n${out.trim()}`.trim();
-        } catch (verifyErr: unknown) {
-          const stdout = (verifyErr as { stdout?: string })?.stdout ?? '';
-          const stderr = (verifyErr as { stderr?: string })?.stderr ?? '';
-          const combined = `${stdout}\n${stderr}`.trim();
-          throw new Error(
-            `Speculative verification failed ('${params.verificationCmd}'):\n${combined}`
-          );
-        }
+        diagnostics = runVerificationCommand(params.verificationCmd, stageDir, sessionEnv, params.verificationTimeoutMs);
       }
 
       // 4. Advance the main repository to the verified speculative commit
@@ -188,7 +205,7 @@ export class SpeculativeMergeTrain {
         cwd: stageDir, encoding: 'utf8',
       }).split('\0').filter(Boolean);
       const unchangedHydration = hydratedNodeModules && fs.lstatSync(stageNodeModules, { throwIfNoEntry: false })?.isSymbolicLink()
-        && fs.readlinkSync(stageNodeModules) === rootNodeModules;
+        && physicalPath(stageNodeModules) === physicalPath(rootNodeModules);
       if (this.gitHead(stageDir) !== verifiedSha || stageChanges.some(change => !(unchangedHydration && change === '?? node_modules'))) {
         throw new Error('Verification changed the staging checkout. Apply fixes in the source worktree and retry with a read-only check.');
       }

@@ -108,6 +108,14 @@ export class HandoffEngine {
     return rows.filter(row => row.kind !== 'done' && !resolved(row)).slice(0, limit);
   }
 
+  private normalizeScopes(globs?: string[]): string[] {
+    if (!globs?.length) return [];
+    return globs.map(glob => {
+      try { return LockEngine.normalizePattern(this.coordDb.repoRoot, glob); }
+      catch { return glob; }
+    });
+  }
+
   /**
    * Handoffs that matter to a claim: those for the same task first, then unfinished ones whose scope or files overlap
    * the claimed scope, then at most two completion notes for the same area.
@@ -116,7 +124,8 @@ export class HandoffEngine {
     const limit = params.limit ?? 5;
     const rows = this.recent();
     const resolved = handoffResolver(rows);
-    const overlaps = (row: HandoffRecord) => params.scopeGlobs.some(want => [...row.scope, ...row.files].some(have => LockEngine.patternsOverlap(want, have)));
+    const scopes = this.normalizeScopes(params.scopeGlobs);
+    const overlaps = (row: HandoffRecord) => scopes.some(want => [...row.scope, ...row.files].some(have => LockEngine.patternsOverlap(want, have)));
     const scored: Array<{ row: HandoffRecord; rank: number }> = [];
     for (const row of rows) {
       const sameTask = params.taskId != null && row.task_id === params.taskId;
@@ -133,9 +142,10 @@ export class HandoffEngine {
   public list(filter: { taskId?: string; agentId?: string; scopeGlobs?: string[]; includeResolved?: boolean; limit?: number } = {}): HandoffRecord[] {
     const rows = this.recent(30 * 24 * 3600 * 1000);
     const resolved = handoffResolver(rows);
+    const scopes = this.normalizeScopes(filter.scopeGlobs);
     return rows.filter(row => (!filter.taskId || row.task_id === filter.taskId)
       && (!filter.agentId || row.agent_id === filter.agentId)
-      && (!filter.scopeGlobs?.length || filter.scopeGlobs.some(want => [...row.scope, ...row.files].some(have => LockEngine.patternsOverlap(want, have))))
+      && (!scopes.length || scopes.some(want => [...row.scope, ...row.files].some(have => LockEngine.patternsOverlap(want, have))))
       // Default is open work: no completion notes, and nothing superseded by a later one.
       && (filter.includeResolved || (row.kind !== 'done' && !resolved(row)))).slice(0, filter.limit ?? 20);
   }

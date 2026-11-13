@@ -61,7 +61,7 @@ export class CoWWorktreeManager {
       if (!fs.existsSync(srcDir) || fs.existsSync(destDir)) continue;
 
       const method = this.cloneDirectoryCoW(srcDir, destDir);
-      hydrationMethod = method;
+      if (hydrationMethod !== 'copy') hydrationMethod = method;
       hydratedDirs.push(dirName);
     }
 
@@ -101,11 +101,12 @@ export class CoWWorktreeManager {
     srcDir: string,
     destDir: string
   ): 'apfs-cow' | 'reflink-cow' | 'copy' {
+    const cowTimeoutMs = Number(process.env.KITH_COW_TIMEOUT_MS) || 60_000;
     if (process.platform === 'darwin') {
       try {
         execFileSync('cp', ['-cR', srcDir, destDir], {
           stdio: 'ignore',
-          timeout: 5000,
+          timeout: cowTimeoutMs,
         });
         return 'apfs-cow';
       } catch {
@@ -115,7 +116,7 @@ export class CoWWorktreeManager {
       try {
         execFileSync('cp', ['--reflink=always', '-R', srcDir, destDir], {
           stdio: 'ignore',
-          timeout: 5000,
+          timeout: cowTimeoutMs,
         });
         return 'reflink-cow';
       } catch {

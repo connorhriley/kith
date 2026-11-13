@@ -346,6 +346,33 @@ export class ShadowGitEngine {
     }
   }
 
+  /** Remove orphaned shadow Git index files left behind by dead or completed sessions. */
+  public pruneStaleShadowIndexes(dryRun = false): number {
+    const indexDir = path.join(this.coordDb.coordDir, 'shadow-index');
+    if (!fs.existsSync(indexDir)) return 0;
+    const activeRows = this.coordDb.db
+      .prepare(`
+        SELECT a.id AS agent_id, s.epoch AS epoch
+        FROM agents a JOIN agent_sessions s ON a.id = s.agent_id
+        WHERE a.status = 'active'
+      `)
+      .all() as Array<{ agent_id: string; epoch: number }>;
+    const keep = new Set(activeRows.map(r => `${r.agent_id.replace(/[^a-zA-Z0-9_-]/g, '_')}-${r.epoch}.index`));
+    let removed = 0;
+    for (const entry of fs.readdirSync(indexDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.index') || keep.has(entry.name)) continue;
+      if (dryRun) {
+        removed++;
+        continue;
+      }
+      try {
+        fs.unlinkSync(path.join(indexDir, entry.name));
+        removed++;
+      } catch { /* Best effort */ }
+    }
+    return removed;
+  }
+
   public listConflicts(): ConflictRecord[] {
     this.fencing.reapDeadAgents();
     const rows = this.coordDb.db

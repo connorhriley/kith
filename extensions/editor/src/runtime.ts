@@ -54,3 +54,17 @@ export function existingKith(files: string[]): string | undefined {
   }
   return undefined;
 }
+export function globalSetupSummary(home = os.homedir()): { claudeHooks: boolean; cursorHooks: boolean; autostart: boolean } {
+  const readJson = (file: string): any => {
+    try { return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : undefined; }
+    catch { return undefined; }
+  };
+  const claude = readJson(path.join(home, '.claude/settings.json'));
+  const claudePre = Array.isArray(claude?.hooks?.PreToolUse) ? claude.hooks.PreToolUse : [];
+  const claudeHooks = claudePre.some((e: any) => Array.isArray(e?.hooks) && e.hooks.some((h: any) => typeof h?.command === 'string' && h.command.includes(' hook pre')));
+  const cursor = readJson(path.join(home, '.cursor/hooks.json'));
+  const cursorPre = Array.isArray(cursor?.hooks?.preToolUse) ? cursor.hooks.preToolUse : [];
+  const cursorHooks = cursorPre.some((e: any) => typeof e?.command === 'string' && e.command.includes(' hook pre'));
+  const autostart = process.platform === 'darwin' && fs.existsSync(path.join(home, 'Library/LaunchAgents/dev.kith.radar.plist'));
+  return { claudeHooks, cursorHooks, autostart };
+}

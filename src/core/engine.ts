@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { discoverRepository, physicalPath, isWithin } from './repository.js';
 import { waitForClaim } from './claim-wait.js';
 import { KITH_PROTOCOL_VERSION } from '../version.js';
+import { isIgnoredPath } from './git-ignore.js';
 import { observeWorkspaces, previewIntegration } from './workspace-observation.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,9 +19,10 @@ import { FencingAndAgentManager } from './fencing.js';
 import { IntentAndTaskEngine } from './intents.js';
 import { HandoffEngine, handoffBlock } from './handoffs.js';
 import { buildBrief, type Brief } from './brief.js';
+import { commitScopedFiles, type CommitParams, type CommitResult } from './commit.js';
 import { MAIN_MODE_NOTE, parseWorkflowMode, workflowModeFrom, type WorkflowMode } from './mode.js';
 import { LockEngine } from './locks.js';
-import { SpeculativeMergeTrain } from './merge-train.js';
+import { SpeculativeMergeTrain, runVerificationCommand } from './merge-train.js';
 import { ConflictRecord, ShadowGitEngine } from './shadow-git.js';
 import {
   buildSwarmPrompts,
@@ -77,12 +79,21 @@ export class KithEngine {
     );
     this.broker = new ResourceBroker(this.coordDb, this.fencing);
     this.handoffs = new HandoffEngine(this.coordDb, this.fencing);
+    try {
+      if (this.fencing.hasIgnoredCleanupTargets()) this.fencing.purgeIgnoredClaims(true);
+    } catch { /* Housekeeping must never fail engine startup. */ }
   }
 
   /** The repository's workflow mode. Shared by every agent and worktree; `worktrees` unless someone chose `main`. */
   public workflowMode(): WorkflowMode {
     const row = this.coordDb.db.prepare("SELECT value FROM meta WHERE key='workflow_mode'").get() as { value: string } | undefined;
     return workflowModeFrom(row?.value);
+  }
+
+  /** True when `workflow_mode` was explicitly written to `meta` rather than falling back to the default. */
+  public workflowModeConfigured(): boolean {
+    const row = this.coordDb.db.prepare("SELECT value FROM meta WHERE key='workflow_mode'").get() as { value: string } | undefined;
+    return row?.value === 'main' || row?.value === 'worktrees';
   }
 
   public setWorkflowMode(mode: WorkflowMode): WorkflowMode {
@@ -92,6 +103,10 @@ export class KithEngine {
       this.coordDb.logEvent(null, 'workflow_mode_changed', { mode: next });
     });
     return next;
+  }
+
+  public commit(params: CommitParams): CommitResult {
+    return commitScopedFiles(this, params);
   }
 
   /** Read-only situational summary from live state: who is active on what, open handoffs, conflicts, claims that overlap a scope. */
@@ -122,6 +137,14 @@ export class KithEngine {
     const file = LockEngine.normalizeFile(targetRoot, params.filePath);
     const access = this.locks.checkFileWriteAccess({ agentId: params.agentId, filePath: file });
     if (!access.allowed) throw new Error(access.reason);
+    if (isIgnoredPath(targetRoot, file)) {
+      return {
+        filePath: file,
+        contractReport: { filePath: file, upsertedContracts: [], removedSymbols: [], breakingChanges: [], transitiveDependents: [] },
+        dirtyMergeConflicts: [],
+        warnings: [],
+      };
+    }
     const content = params.content ?? (fs.existsSync(path.join(targetRoot, file)) ? fs.readFileSync(path.join(targetRoot, file), 'utf8') : '');
 
     const contractReport = this.depGraph.recordFileModification(
@@ -253,6 +276,7 @@ export class KithEngine {
       crossRepoComplete: workspaceContracts.complete,
       resources: this.broker.listResources(),
       workflowMode: this.workflowMode(),
+      workflowModeConfigured: this.workflowModeConfigured(),
       mergeQueue: this.mergeTrain.listQueue(), quarantined: this.bashGuard.listQuarantined(),
       handoffs: handoffBlock(this.handoffs.unresolved(10), { summaryMax: 300, filesMax: 5 }),
       mutexWaiters: this.coordDb.db.prepare('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket').all(),
@@ -270,12 +294,19 @@ export class KithEngine {
     // In main-checkout mode there are no worktrees: honour the repository's workflow, and say so, rather than the request.
     const mode = this.workflowMode(), isolate = mode === 'main' ? false : params.isolateWorktree;
     const notes = mode === 'main' && params.isolateWorktree ? [MAIN_MODE_NOTE] : [];
-    const { intent, worktree } = this.coordDb.withTransaction(() => {
-      const intent = this.intents.declareIntent(params);
-      const worktree = intent.ok && isolate
-        ? this.worktrees.spawnWorktree({ agentId: params.agentId }) : null;
-      return { intent, worktree };
-    });
+    const intent = this.intents.declareIntent(params);
+    let worktree: ReturnType<CoWWorktreeManager['spawnWorktree']> | null = null;
+    if (intent.ok && isolate && intent.task) {
+      try {
+        worktree = this.worktrees.spawnWorktree({ agentId: params.agentId });
+      } catch (err) {
+        this.coordDb.withTransaction(() => {
+          this.coordDb.db.prepare('DELETE FROM locks WHERE task_id = ?').run(intent.task!.id);
+          this.coordDb.db.prepare('DELETE FROM tasks WHERE id = ?').run(intent.task!.id);
+        });
+        throw err;
+      }
+    }
     const workspaceContracts = inspectWorkspaceContracts(
       this.coordDb.repoRoot,
       worktree?.worktreePath ?? this.fencing.getAgent(params.agentId)?.worktree_path ?? undefined
@@ -296,14 +327,23 @@ export class KithEngine {
   public claimNextTask(params: { agentId: string; isolateWorktree?: boolean }) {
     const mode = this.workflowMode(), isolate = mode === 'main' ? false : params.isolateWorktree;
     const notes = mode === 'main' && params.isolateWorktree ? [MAIN_MODE_NOTE] : [];
-    // SQL ownership changes roll back if the filesystem handoff fails. Never remove
-    // a partially created directory: it may contain recovery material or user work.
-    const { claimedRes, worktree } = this.coordDb.withTransaction(() => {
-      const claimedRes = this.intents.claimNextTask(params.agentId);
-      const worktree = claimedRes.claimed && isolate
-        ? this.claimWorktree(params.agentId) : null;
-      return { claimedRes, worktree };
-    });
+    // Claim ownership quickly under SQLite lock, then perform Git/CoW filesystem work outside
+    // the transaction so concurrent writers aren't stalled; roll back ownership on spawn error.
+    const claimedRes = this.intents.claimNextTask(params.agentId);
+    let worktree: ReturnType<KithEngine['claimWorktree']> | null = null;
+    if (claimedRes.claimed && isolate && claimedRes.task) {
+      try {
+        worktree = this.claimWorktree(params.agentId);
+      } catch (err) {
+        this.coordDb.withTransaction(() => {
+          this.coordDb.db.prepare('DELETE FROM locks WHERE task_id = ?').run(claimedRes.task!.id);
+          this.coordDb.db
+            .prepare("UPDATE tasks SET status = 'queued', owner_agent_id = NULL, fencing_token = NULL WHERE id = ?")
+            .run(claimedRes.task!.id);
+        });
+        throw err;
+      }
+    }
     const publishedContracts = this.depGraph.listContracts().slice(0, 30);
     const workspaceContracts = inspectWorkspaceContracts(
       this.coordDb.repoRoot,
@@ -383,22 +423,34 @@ export class KithEngine {
 
   public completeWork(params: {
     agentId: string; taskId?: string; fencingToken?: number;
-    mergeBranch?: string; verificationCmd?: string;
+    mergeBranch?: string; verificationCmd?: string; waitTimeoutMs?: number;
   }) {
     this.fencing.assertSession(params.agentId);
     const agent = this.fencing.getAgent(params.agentId);
     const branch = params.mergeBranch ?? agent?.branch;
     const mergeResult = branch ? this.mergeTrain.enqueueAndMerge({
       agentId: params.agentId, branch, worktreePath: agent?.worktree_path,
-      verificationCmd: params.verificationCmd,
+      verificationCmd: params.verificationCmd, waitTimeoutMs: params.waitTimeoutMs,
     }) : null;
     if (mergeResult && !mergeResult.merged) return {
       ok: false, mergeResult,
       error: 'Speculative merge train failed. Fix the reported issues before completing work.',
     };
+    if (!branch && params.verificationCmd) {
+      try {
+        runVerificationCommand(params.verificationCmd, this.coordDb.repoRoot, this.fencing.sessionEnvironment(params.agentId));
+      } catch (err) {
+        return {
+          ok: false,
+          mergeResult: null,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
     // Retain worktrees for inspection; release ownership only after integration succeeds.
     const completedTasks = this.intents.completeTask(params);
     this.fencing.completeAgentSession(params.agentId);
+    this.shadowGit.pruneStaleShadowIndexes();
     return { ok: true, completedTasks, mergeResult };
   }
 

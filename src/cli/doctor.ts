@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { parse as parseToml } from 'smol-toml';
 import { isWithin, physicalPath } from '../core/repository.js';
 import { readCoordinationState } from '../core/observation.js';
+import { launchAgentPath } from './autostart.js';
 
 /** Diagnostics read files and inspect a snapshot; they never initialize state, trust projects, install packages or run configured hooks. */
 export function doctorReport(directory=process.cwd(), home=os.homedir()) {
@@ -58,9 +59,44 @@ export function doctorReport(directory=process.cwd(), home=os.homedir()) {
       check(`${client}-mcp`,true,'Launcher files are present; native connection, project trust and tool approval are not verified by doctor');
     } catch(error) {check(`${client}-mcp`,false,`${target}: ${error instanceof Error ? error.message : String(error)}; configuration preserved`);}
   }
-  check('mcp-configuration',configured>0,'Use global kith setup or project kith init for your client; configuration alone does not establish a connection');
-  if(state.state==='ready') check('workflow-mode',true,state.workflowMode==='main'?'main-checkout mode: agents share the main checkout and no worktrees are created (change with kith mode worktrees)':'worktree mode: each agent can work in an isolated worktree (change with kith mode main)');
+  check('mcp-configuration',configured>0,'Use global kith install or project kith init for your client; configuration alone does not establish a connection');
+  if(state.state==='ready') check('workflow-mode',true,state.workflowMode==='main'?'main-checkout mode: agents share the main checkout and no worktrees are created (change with kith mode worktrees)':state.workflowModeConfigured?'worktree mode: each agent can work in an isolated worktree (change with kith mode main)':'worktree mode (default, not explicitly set — run kith mode main or kith mode worktrees to pin)');
   check('coordination-state',state.state!=='unavailable',state.state==='ready'?'Schema and counters validated on a private snapshot':state.error??'No project state yet; the first owned task initializes it. No state was created by doctor');
+  const realHome = physicalPath(home);
+  const globalClaudeHooks = path.join(realHome, '.claude/settings.json');
+  if (fs.existsSync(globalClaudeHooks)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(globalClaudeHooks, 'utf8'));
+      const pre = Array.isArray(cfg?.hooks?.PreToolUse) ? cfg.hooks.PreToolUse : [];
+      const hasKith = pre.some((e: any) => Array.isArray(e?.hooks) && e.hooks.some((h: any) => typeof h?.command === 'string' && h.command.includes(' hook pre')));
+      if (hasKith) check('global-claude-hooks', true, 'Passive Claude Code global hooks configured');
+    } catch {
+      check('global-claude-hooks', false, `Cannot parse ${globalClaudeHooks}`);
+    }
+  }
+  const globalCursorHooks = path.join(realHome, '.cursor/hooks.json');
+  if (fs.existsSync(globalCursorHooks)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(globalCursorHooks, 'utf8'));
+      const pre = Array.isArray(cfg?.hooks?.preToolUse) ? cfg.hooks.preToolUse : [];
+      const hasKith = pre.some((e: any) => typeof e?.command === 'string' && e.command.includes(' hook pre'));
+      if (hasKith) check('global-cursor-hooks', true, 'Passive Cursor global hooks configured');
+    } catch {
+      check('global-cursor-hooks', false, `Cannot parse ${globalCursorHooks}`);
+    }
+  }
+  if (checks.some(c => c.name === 'codex-global-mcp' && c.ok)) {
+    check('codex-hooks', true, 'Codex CLI does not expose pre/post tool hooks; protection uses --compact MCP and passive watcher/Radar alerts');
+  }
+  if (process.platform === 'darwin') {
+    const plist = launchAgentPath(realHome);
+    if (fs.existsSync(plist)) {
+      const text = fs.readFileSync(plist, 'utf8');
+      check('autostart', text.includes('bin/kith-menubar'), `Login LaunchAgent present (${plist})`);
+    }
+  } else {
+    check('autostart', true, 'Login autostart targets macOS LaunchAgents; run kith watch manually on this platform');
+  }
   let nativeGuards=false;
   for(const [file,event] of [['.claude/settings.json','PreToolUse'],['.cursor/hooks.json','preToolUse']] as const) {
     const target=path.join(root,file);if(!fs.existsSync(target))continue;

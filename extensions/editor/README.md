@@ -19,11 +19,13 @@ Use the command for your editor. Without the CLI, download the [published 0.1.7 
 
 Open a trusted local Git workspace with Node.js **22.13+ on 22.x or 24+** installed. Kith detects Node automatically; **Kith: Node Path** in user settings can select a different installation.
 
-The extension offers Kith through the editor's native MCP API. The editor still controls server approval, tool permissions and start/stop. Existing Kith server entries are preserved and suppress a duplicate registration. Other MCP servers, hooks and permissions are untouched. VS Code 1.102+ and a Cursor version exposing its MCP extension API are required.
+The extension offers Kith through the editor's native MCP API. On `main` (next release), **Kith: MCP Tool Profile** (`kith.mcp.profile`) defaults to `compact` (small coordinator/agent tool surface) with `full` available when needed. The editor still controls server approval, tool permissions and start/stop. Existing Kith server entries are preserved and suppress a duplicate registration. Other MCP servers, hooks and permissions are untouched. VS Code 1.102+ and a Cursor version exposing its MCP extension API are required.
 
 Tell the agent which repository contains the task. The same connection supports multiple repositories through Kith's `repository` argument; ownership stays scoped to each repository. Follow the returned worktree path and retain your normal verification and merge gates.
 
-On main for the next release, the default view shows recorded tasks and claims, resource waits, integration failures with next steps, and a saved-work count. It says **Watching only** when no task has begun. Detailed checkout and path observations are available through **Kith: Show Coordination Details**; no files are cleaned up.
+On `main` for the next release, the default view shows recorded tasks and claims, resource waits, integration failures with next steps, a saved-work count, and a read-only `Background hooks:` status summary. It says **Watching only** when no task has begun. Detailed checkout and path observations are available through **Kith: Show Coordination Details**; no files are cleaned up automatically.
+
+On `main` for the next release, run **Kith: Install Global Hooks & Autostart** (`kith.installGlobal`) in a trusted workspace to run Kith's one-command global installer (`install <workspace> --human`) inside a terminal for detected clients (Claude Code / Cursor global hooks and Codex MCP). Because the VSIX bundles the JavaScript server without the native macOS `kith-menubar` binary, macOS users wanting Radar login autostart should run `kith install` from the CLI package.
 
 Click **Kith** in the status bar or run **Kith: Show Workspace Status**. It observes linked-worktree dirty paths and reads existing coordination state offline, distinguishing recorded active leases, retained sessions and unavailable ownership. Retained work is preserved for review. It does not initialize a project database, attribute writes to processes, enforce non-cooperating editors, or certify that changes merge. An unavailable scan stays unavailable. No telemetry or model calls are added.
 

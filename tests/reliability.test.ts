@@ -179,15 +179,25 @@ describe('coordination correctness', () => {
 });
 
 
-it('preserves concurrent edits by default while saving before and after recovery copies', () => {
+it('preserves concurrent edits by default while saving before and after recovery copies, and skips read-only commands when a live lock holder edits the file', () => {
   engine = new KithEngine(root);
   for (const id of ['a', 'b']) engine.fencing.registerAgent({ id });
   const file = path.join(root, 'shared.txt');
   fs.writeFileSync(file, 'before');
   engine.locks.acquireLocks({ agentId: 'b', patterns: ['shared.txt'] });
+
+  // Read-only commands (e.g. `true`, `ls`, `stack.mjs status`) during a sibling lock holder's edit are not quarantined.
   engine.bashGuard.capturePreBashSnapshot('a');
   fs.writeFileSync(file, 'legitimate concurrent sibling edit');
-  const report = engine.bashGuard.verifyPostBashAndQuarantine({ agentId: 'a', command: 'true' });
+  const readOnlyReport = engine.bashGuard.verifyPostBashAndQuarantine({ agentId: 'a', command: 'true' });
+  expect(readOnlyReport.allowed).toBe(true);
+  expect(readOnlyReport.quarantinedViolations).toEqual([]);
+
+  // Commands that explicitly target the locked file for writing are quarantined while preserving workspace bytes.
+  fs.writeFileSync(file, 'before');
+  engine.bashGuard.capturePreBashSnapshot('a');
+  fs.writeFileSync(file, 'legitimate concurrent sibling edit');
+  const report = engine.bashGuard.verifyPostBashAndQuarantine({ agentId: 'a', command: 'sh -c "echo overwrite > shared.txt"' });
   expect(fs.readFileSync(file, 'utf8')).toBe('legitimate concurrent sibling edit');
   expect(report.quarantinedViolations).toHaveLength(1);
   const backup = report.quarantinedViolations[0].patch_path;

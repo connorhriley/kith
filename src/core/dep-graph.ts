@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { AstAnalyzer, ExtractedSymbol, SymbolKind } from './ast-analyzer.js';
 import { FencingAndAgentManager } from './fencing.js';
+import { walkNonIgnoredFiles } from './git-ignore.js';
 import { CoordDatabase } from './db.js';
 import { LockEngine } from './locks.js';
 
@@ -52,35 +53,26 @@ export class DependencyAndContractEngine {
   public indexRepositoryFiles(dirPath = this.coordDb.repoRoot): number {
     const files = this.walkSourceFiles(dirPath);
     let indexedCount = 0;
-    for (const file of files) {
-      this.recordFileModification(null, file);
-      indexedCount++;
-    }
+    this.coordDb.withTransaction(() => {
+      for (const file of files) {
+        this.recordFileModification(null, file);
+        indexedCount++;
+      }
+    });
     return indexedCount;
   }
 
-  private walkSourceFiles(dir: string, acc: string[] = []): string[] {
-    if (!fs.existsSync(dir) || dir !== this.coordDb.repoRoot && fs.existsSync(path.join(dir, '.git'))) return acc;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (
-        entry.name.startsWith('.') ||
-        entry.name === 'node_modules' ||
-        entry.name === 'dist' ||
-        entry.name === 'build' ||
-        entry.name === 'target' ||
-        entry.name === 'coverage'
-      ) {
-        continue;
-      }
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        this.walkSourceFiles(fullPath, acc);
-      } else if (entry.isFile() && /\.(ts|tsx|js|jsx|mjs|py)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
-        acc.push(fullPath);
-      }
-    }
-    return acc;
+  private static readonly SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'target', 'coverage']);
+
+  private walkSourceFiles(dir: string): string[] {
+    return walkNonIgnoredFiles({
+      rootDir: this.coordDb.repoRoot,
+      startDir: dir,
+      skipDirNames: DependencyAndContractEngine.SKIP_DIRS,
+      skipDotEntries: true,
+      stopAtNestedGit: true,
+      acceptFile: (name) => /\.(ts|tsx|js|jsx|mjs|py)$/.test(name) && !name.endsWith('.d.ts'),
+    });
   }
 
   /**
@@ -93,6 +85,7 @@ export class DependencyAndContractEngine {
     rawFilePath: string,
     sourceContent?: string
   ): FileModificationReport {
+    if (agentId) this.fencing.reapDeadAgents();
     const analysis = AstAnalyzer.analyzeSource(
       this.coordDb.repoRoot,
       rawFilePath,
@@ -191,8 +184,10 @@ export class DependencyAndContractEngine {
       const transitiveDependents = this.getTransitiveDependents(relPath, 4);
       const breakingChanges: BlastRadiusAlert[] = [];
 
-      if (changedSymbols.length > 0 && transitiveDependents.length > 0) {
-        const activeLocks = this.lockEngine.listLocks();
+      if (changedSymbols.length > 0 && transitiveDependents.length > 0 && agentId) {
+        const activeLocks = this.coordDb.db
+          .prepare('SELECT * FROM locks WHERE expires_at > ? ORDER BY acquired_at ASC')
+          .all(now) as unknown as Array<{ owner_agent_id: string; pattern: string }>;
 
         for (const change of changedSymbols) {
           for (const dep of transitiveDependents) {
