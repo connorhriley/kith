@@ -171,7 +171,8 @@ export class LockEngine {
     const mode = params.mode ?? 'exclusive';
     const lockType = params.lockType ?? 'glob';
     const now = Date.now();
-    const expiresAt = now + (params.leaseDurationMs ?? FencingAndAgentManager.DEFAULT_LEASE_MS);
+    const agentLeaseRemaining = Math.max(0, (this.fencing.getAgent(params.agentId)?.lease_expires_at ?? 0) - now);
+    const expiresAt = now + (params.leaseDurationMs ?? Math.max(FencingAndAgentManager.DEFAULT_LEASE_MS, agentLeaseRemaining));
     const lockRoot = this.rootForAgent(params.agentId);
     let normalizedPatterns = Array.from(
       new Set(params.patterns.map((p) => LockEngine.normalizePattern(lockRoot, lockType === 'file' && !p.startsWith('file:') ? 'file:' + p : p)))

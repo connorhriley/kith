@@ -3,6 +3,7 @@ import { KithEngine } from '../core/engine.js';
 import { SessionOwnershipError } from '../core/fencing.js';
 import { AGENT_HANDOFF_KINDS, handoffBlock, type WriteHandoffParams } from '../core/handoffs.js';
 import { parseWorkflowMode, WORKFLOW_MODES } from '../core/mode.js';
+import { listRepoPresence, resolveHomeDir } from './auto-session.js';
 import { interruptible } from './flags.js';
 import { formatStatusHuman, formatTasksHuman, shouldUseHumanOutput } from './format.js';
 
@@ -184,7 +185,11 @@ export async function runEngineCommand(params: {
 
     if (cmd === 'status') {
       const state = engine.getStatus();
-      console.log(shouldUseHumanOutput(flags) ? formatStatusHuman(state) : JSON.stringify(state, null, 2));
+      const presencePeers = engine.coordDb.commonGitDir
+        ? listRepoPresence(resolveHomeDir(), engine.coordDb.commonGitDir)
+        : [];
+      const enriched = presencePeers.length ? { ...state, presencePeers } : state;
+      console.log(shouldUseHumanOutput(flags) ? formatStatusHuman(enriched) : JSON.stringify(enriched, null, 2));
       return;
     }
 

@@ -156,10 +156,18 @@ export class FencingAndAgentManager {
     const agent = this.getAgent(agentId);
     const session = this.coordDb.db.prepare('SELECT token_hash, epoch FROM agent_sessions WHERE agent_id = ?')
       .get(agentId) as SessionRow | undefined;
-    if (!agent || agent.status !== 'active' || agent.lease_expires_at <= Date.now() || !session ||
+    const now = Date.now();
+    if (!agent || agent.status !== 'active' || !session ||
         !sessionToken || this.hash(sessionToken) !== session.token_hash ||
         !FencingAndAgentManager.isProcessAlive(agent.pid, agent.pid_start_time)) {
       throw new SessionOwnershipError(agentId);
+    }
+    if (agent.lease_expires_at <= now) {
+      if (!agentId.startsWith('auto-')) {
+        throw new SessionOwnershipError(agentId);
+      }
+      const extended = now + 30 * 60 * 1000;
+      this.coordDb.db.prepare('UPDATE agents SET last_heartbeat_at=?, lease_expires_at=? WHERE id=?').run(now, extended, agentId);
     }
     return session.epoch;
   }
@@ -251,13 +259,33 @@ export class FencingAndAgentManager {
 
   public reapDeadAgents(): string[] {
     try { this.purgeIgnoredClaims(); } catch { /* Housekeeping must never block a session. */ }
+    const now = Date.now();
     const agents = this.coordDb.db.prepare("SELECT * FROM agents WHERE status='active'").all() as unknown as AgentRecord[];
     const liveness = new Map<string, boolean>();
+    const toExtend: string[] = [];
     const candidates = agents.filter((a) => {
       const key = `${a.pid}:${a.pid_start_time}`;
       if (!liveness.has(key)) liveness.set(key, FencingAndAgentManager.isProcessAlive(a.pid, a.pid_start_time));
-      return a.lease_expires_at <= Date.now() || !liveness.get(key);
+      const alive = Boolean(liveness.get(key));
+      if (!alive) return true;
+      if (a.lease_expires_at <= now) {
+        if (a.id.startsWith('auto-')) {
+          toExtend.push(a.id);
+          return false;
+        }
+        return true;
+      }
+      return false;
     });
+    if (toExtend.length) {
+      const nextExpiry = now + 30 * 60 * 1000;
+      this.coordDb.withTransaction(() => {
+        for (const id of toExtend) {
+          this.coordDb.db.prepare("UPDATE agents SET lease_expires_at=? WHERE id=? AND status='active'").run(nextExpiry, id);
+          this.coordDb.db.prepare('UPDATE locks SET expires_at=MAX(expires_at, ?) WHERE owner_agent_id=?').run(nextExpiry, id);
+        }
+      });
+    }
     if (!candidates.length) return [];
     return this.coordDb.withTransaction(() => {
       const reaped: string[] = [];

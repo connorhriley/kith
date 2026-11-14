@@ -87,17 +87,21 @@ export function formatStatusHuman(state: Record<string, any>): string {
   const lines: string[] = [
     `Kith · ${repoRoot} · ${modeLabel}${state.state ? ` · ${state.state}` : ''}`,
   ];
-  if (activeAgents.length) {
-    lines.push(`Active agents (${activeAgents.length}):`);
+  const activePids = new Set(activeAgents.map((a: any) => a.pid));
+  const extraPresence = presencePeers.filter((p: any) => !activePids.has(p.pid));
+  if (activeAgents.length || extraPresence.length) {
+    lines.push(`Active sessions (${activeAgents.length + extraPresence.length}):`);
     for (const a of activeAgents) {
       const wt = a.worktree_path ? ` · ${path.basename(a.worktree_path)}` : '';
-      lines.push(`  - ${a.id} [${a.client ?? 'unknown'}]${wt}${a.branch ? ` (${a.branch})` : ''}`);
+      const peer = presencePeers.find((p: any) => p.pid === a.pid);
+      const files = peer && Array.isArray(peer.touchedFiles) && peer.touchedFiles.length
+        ? ` · touched: ${peer.touchedFiles.slice(0, 4).join(', ')}`
+        : '';
+      lines.push(`  - ${a.id} [${a.client ?? 'unknown'}, pid ${a.pid}]${wt}${a.branch ? ` (${a.branch})` : ''}${files}`);
     }
-  } else if (presencePeers.length) {
-    lines.push(`Live detected sessions (${presencePeers.length}, standby until 2+ overlap):`);
-    for (const p of presencePeers) {
-      const files = Array.isArray(p.touchedFiles) && p.touchedFiles.length ? ` · ${p.touchedFiles.slice(0, 3).join(', ')}` : '';
-      lines.push(`  - ${p.sessionKey} [pid ${p.pid}]${files}`);
+    for (const p of extraPresence) {
+      const files = Array.isArray(p.touchedFiles) && p.touchedFiles.length ? ` · touched: ${p.touchedFiles.slice(0, 4).join(', ')}` : '';
+      lines.push(`  - ${p.sessionKey} [${p.client ?? 'auto'}, pid ${p.pid}]${files}`);
     }
   } else {
     lines.push('Active agents: none (passive hooks will auto-engage when 2+ sessions overlap)');

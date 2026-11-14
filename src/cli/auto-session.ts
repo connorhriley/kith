@@ -9,7 +9,7 @@ import { KithEngine } from '../core/engine.js';
 import { FencingAndAgentManager } from '../core/fencing.js';
 import { isWithin, physicalPath, type RepositoryLayout } from '../core/repository.js';
 
-const PRESENCE_TTL_MS = 30 * 60 * 1000;
+const PRESENCE_TTL_MS = 12 * 60 * 60 * 1000;
 const require = createRequire(import.meta.url);
 
 function openSqlite(filePath: string): SqliteDatabaseSync {
@@ -156,6 +156,31 @@ function rowToPresence(row: Record<string, any>): ActivePresence {
   };
 }
 
+function isPidAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+function pruneDeadPresence(db: SqliteDatabaseSync, now: number): void {
+  const rows = db.prepare('SELECT session_key, repo_common_dir, pid, last_seen_at FROM presence').all() as Array<{
+    session_key: string;
+    repo_common_dir: string;
+    pid: number;
+    last_seen_at: number;
+  }>;
+  for (const row of rows) {
+    if (!isPidAlive(row.pid) || row.last_seen_at < now - PRESENCE_TTL_MS) {
+      db.prepare('DELETE FROM presence WHERE session_key = ?').run(row.session_key);
+      db.prepare('DELETE FROM capabilities WHERE repo_common_dir = ? AND session_key = ?').run(row.repo_common_dir, row.session_key);
+    }
+  }
+}
+
 export function recordPresence(
   home: string | undefined,
   params: {
@@ -165,15 +190,16 @@ export function recordPresence(
     client: string;
     pid: number;
     filePath?: string;
+    clearTouchedFiles?: boolean;
   }
 ): ActivePresence[] {
   const now = Date.now();
   return withPresenceDb(home, true, (db) => {
-    db.prepare('DELETE FROM presence WHERE last_seen_at < ?').run(now - PRESENCE_TTL_MS);
+    pruneDeadPresence(db, now);
     const existing = db.prepare('SELECT touched_files_json, created_at FROM presence WHERE session_key = ?')
       .get(params.sessionKey) as { touched_files_json?: string; created_at?: number } | undefined;
     let touched: string[] = [];
-    if (existing?.touched_files_json) {
+    if (!params.clearTouchedFiles && existing?.touched_files_json) {
       try {
         const parsed = JSON.parse(existing.touched_files_json);
         if (Array.isArray(parsed)) touched = parsed.filter((x): x is string => typeof x === 'string');
@@ -211,7 +237,7 @@ export function recordPresence(
 export function listRepoPresence(home: string | undefined, repoCommonDir: string): ActivePresence[] {
   const now = Date.now();
   return withPresenceDb(home, false, (db) => {
-    db.prepare('DELETE FROM presence WHERE last_seen_at < ?').run(now - PRESENCE_TTL_MS);
+    pruneDeadPresence(db, now);
     const rows = db.prepare('SELECT * FROM presence WHERE repo_common_dir = ? ORDER BY created_at')
       .all(repoCommonDir) as Array<Record<string, any>>;
     return rows.map(rowToPresence);
@@ -221,6 +247,7 @@ export function listRepoPresence(home: string | undefined, repoCommonDir: string
 export function listAllLiveRepoRoots(home?: string): string[] {
   const now = Date.now();
   return withPresenceDb(home, false, (db) => {
+    pruneDeadPresence(db, now);
     const rows = db.prepare('SELECT DISTINCT checkout_root FROM presence WHERE last_seen_at >= ?')
       .all(now - PRESENCE_TTL_MS) as Array<{ checkout_root: string }>;
     return rows.map(r => r.checkout_root).filter(root => fs.existsSync(root));

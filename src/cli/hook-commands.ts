@@ -112,16 +112,19 @@ export function runHookPhase(params: {
 
   if (subCmd === 'stop') {
     const agent = engine.fencing.getAgent(agentId);
+    const hasActiveTask = engine.intents.listTasks().some(t => t.status === 'active' && t.owner_agent_id === agentId);
     const dir = agent?.worktree_path ?? engine.coordDb.repoRoot;
     let dirty = false;
-    try {
-      dirty = execFileSync('git', ['status', '--porcelain'], {
-        cwd: dir,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }).trim().length > 0;
-    } catch { /* Non-git or unavailable checkout. */ }
-    if (dirty) {
+    if (hasActiveTask) {
+      try {
+        dirty = execFileSync('git', ['status', '--porcelain'], {
+          cwd: dir,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }).trim().length > 0;
+      } catch { /* Non-git or unavailable checkout. */ }
+    }
+    if (dirty && hasActiveTask) {
       try {
         engine.handoffs.write({
           agentId,
@@ -210,8 +213,18 @@ function handleAutoHook(subCmd: string, flags: Record<string, string | boolean>)
   const ownerPid = resolvePersistentOwnerPid();
 
   if (subCmd === 'stop') {
+    // In Claude Code and Cursor, `Stop` fires at the end of each assistant turn while the client
+    // process remains open. Keep presence and session capabilities alive while the process lives,
+    // and only release ad-hoc per-turn file locks when the session owns no active Kith task.
+    recordPresence(home, {
+      sessionKey,
+      repoCommonDir: layout.commonGitDir,
+      checkoutRoot: layout.checkoutRoot,
+      client: clientName,
+      pid: ownerPid,
+      clearTouchedFiles: true,
+    });
     const cap = getAutoCapability(home, layout.commonGitDir, sessionKey);
-    clearPresenceAndCapability(home, sessionKey, layout.commonGitDir);
     if (!cap || !fs.existsSync(path.join(layout.coordDir, 'state.db'))) {
       passThroughHook('stop', flags.client);
       return;
@@ -220,10 +233,17 @@ function handleAutoHook(subCmd: string, flags: Record<string, string | boolean>)
     try {
       try {
         autoEngine.fencing.resumeSession(cap.agentId, cap.sessionToken);
-        runHookPhase({ engine: autoEngine, subCmd: 'stop', flags, stdinPayload, agentId: cap.agentId });
+        autoEngine.fencing.heartbeat(cap.agentId, 12 * 60 * 60 * 1000);
+        const hasActiveTask = autoEngine.intents
+          .listTasks()
+          .some((t) => t.status === 'active' && t.owner_agent_id === cap.agentId);
+        if (!hasActiveTask) {
+          autoEngine.locks.releaseLocks({ agentId: cap.agentId });
+        }
       } catch {
-        passThroughHook('stop', flags.client);
+        // Ignore if session was not promoted or already cleared.
       }
+      passThroughHook('stop', flags.client);
     } finally {
       autoEngine.close();
     }
