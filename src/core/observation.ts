@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { DatabaseSync as Database } from 'node:sqlite';
-import { listRepoPresence } from '../cli/auto-session.js';
+import { listRepoPresence, ownedByCaller } from '../cli/auto-session.js';
 import { CoordDatabase, sqliteDatabase } from './db.js';
 import { discoverRepository, isWithin, physicalPath } from './repository.js';
 import { FencingAndAgentManager, type AgentRecord } from './fencing.js';
@@ -137,11 +137,19 @@ export function readBrief(directory = process.cwd(), options: { scopeGlobs?: str
       const cleanClient = peer.client.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase() || 'agent';
       const hash = crypto.createHash('sha1').update(peer.sessionKey).digest('hex').slice(0, 8);
       const autoId = `auto-${cleanClient}-${hash}`;
-      if (seenAgentIds.has(autoId) || seenPids.has(peer.pid)) continue;
-      seenAgentIds.add(autoId);
+      const resolvedId = peer.agentId || autoId;
+      if (
+        seenAgentIds.has(resolvedId) ||
+        seenAgentIds.has(autoId) ||
+        seenPids.has(peer.pid) ||
+        [...seenPids].some(pid => ownedByCaller(pid, peer.pid))
+      ) {
+        continue;
+      }
+      seenAgentIds.add(resolvedId);
       seenPids.add(peer.pid);
       agents.push({
-        id: autoId,
+        id: resolvedId,
         client: peer.client,
         status: 'active',
         lease_expires_at: state.observedAt + 60_000,

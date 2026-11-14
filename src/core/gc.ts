@@ -61,9 +61,8 @@ function gitIsMerged(repoRoot: string, commit: string): boolean {
 }
 
 /**
- * Resyncs `.git/index` entries that drifted behind `HEAD` after temporary-index `update-ref` commits:
- * any cached path whose working-tree content already matches `HEAD` is reset to `HEAD` in `.git/index`
- * without touching the working tree.
+ * Resyncs `.git/index` entries that drifted behind `HEAD` after temporary-index `update-ref` commits
+ * without touching any files in the working tree.
  */
 export function resyncStaleIndexEntries(repoRoot: string): number {
   let cachedPaths: string[] = [];
@@ -79,33 +78,15 @@ export function resyncStaleIndexEntries(repoRoot: string): number {
   }
   if (cachedPaths.length === 0) return 0;
 
-  let wtDiffSet = new Set<string>();
   try {
-    const wtOut = execFileSync('git', ['diff', '--name-only', '-z', 'HEAD'], {
+    execFileSync('git', ['reset', '-q', 'HEAD'], {
       cwd: repoRoot,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
+      stdio: ['ignore', 'ignore', 'ignore'],
     });
-    wtDiffSet = new Set(wtOut.split('\0').filter(Boolean));
+    return cachedPaths.length;
   } catch {
     return 0;
   }
-
-  const stalePaths = cachedPaths.filter(p => !wtDiffSet.has(p));
-  if (stalePaths.length === 0) return 0;
-
-  let resynced = 0;
-  for (let i = 0; i < stalePaths.length; i += 100) {
-    const chunk = stalePaths.slice(i, i + 100);
-    try {
-      execFileSync('git', ['reset', '-q', 'HEAD', '--', ...chunk], {
-        cwd: repoRoot,
-        stdio: ['ignore', 'ignore', 'ignore'],
-      });
-      resynced += chunk.length;
-    } catch { /* ignore if index lock held */ }
-  }
-  return resynced;
 }
 
 export function gcCoordination(directory = process.cwd(), options: GcOptions = {}): GcReport {
@@ -256,7 +237,7 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
         (engine.coordDb.db.prepare('SELECT COUNT(*) AS n FROM mcp_operations WHERE created_at < ?').get(cutoff) as { n: number }).n
       );
       const doneRows = engine.coordDb.db.prepare(
-        "SELECT id FROM tasks WHERE status = 'done' AND updated_at < ?"
+        "SELECT id FROM tasks WHERE status IN ('done', 'queued') AND updated_at < ?"
       ).all(cutoff) as Array<{ id: string }>;
       report.prunedDoneTasks = doneRows.filter(r => !pinnedTaskIds.has(r.id)).length;
       report.prunedOldEvents = Number(
@@ -275,7 +256,7 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
           engine.coordDb.db.prepare('DELETE FROM mcp_operations WHERE created_at < ?').run(cutoff).changes
         );
         const doneIds = (
-          engine.coordDb.db.prepare("SELECT id FROM tasks WHERE status = 'done' AND updated_at < ?").all(cutoff) as Array<{ id: string }>
+          engine.coordDb.db.prepare("SELECT id FROM tasks WHERE status IN ('done', 'queued') AND updated_at < ?").all(cutoff) as Array<{ id: string }>
         ).map(r => r.id).filter(id => !pinnedTaskIds.has(id));
         for (const id of doneIds) {
           engine.coordDb.db.prepare("DELETE FROM tasks WHERE id = ?").run(id);

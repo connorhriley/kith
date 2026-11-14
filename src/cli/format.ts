@@ -2,6 +2,7 @@ import path from 'node:path';
 import { FencingAndAgentManager } from '../core/fencing.js';
 import type { GcReport } from '../core/gc.js';
 import type { TaskRecord } from '../core/intents.js';
+import { ownedByCaller } from './auto-session.js';
 import type { InstallReport } from './install.js';
 
 export function shouldUseHumanOutput(flags: Record<string, string | boolean>): boolean {
@@ -86,7 +87,10 @@ export function formatStatusHuman(state: Record<string, any>): string {
   });
   const locks = Array.isArray(state.locks) ? state.locks : [];
   const tasks = Array.isArray(state.tasks) ? state.tasks : [];
-  const openTasks = tasks.filter((t: any) => t.status !== 'done');
+  const staleTaskCutoff = (typeof state.observedAt === 'number' ? state.observedAt : Date.now()) - 14 * 24 * 60 * 60 * 1000;
+  const openTasks = tasks.filter(
+    (t: any) => t.status !== 'done' && !(t.status === 'queued' && typeof t.updated_at === 'number' && t.updated_at < staleTaskCutoff)
+  );
   const conflicts = Array.isArray(state.conflicts) ? state.conflicts : [];
   const handoffs = Array.isArray(state.handoffs) ? state.handoffs : [];
   const presencePeers = Array.isArray(state.presencePeers) ? state.presencePeers : [];
@@ -95,12 +99,23 @@ export function formatStatusHuman(state: Record<string, any>): string {
     `Kith · ${repoRoot} · ${modeLabel}${state.state ? ` · ${state.state}` : ''}`,
   ];
   const activePids = new Set(activeAgents.map((a: any) => a.pid));
-  const extraPresence = presencePeers.filter((p: any) => !activePids.has(p.pid));
+  const activeAgentIds = new Set(activeAgents.map((a: any) => a.id));
+  const extraPresence = presencePeers.filter(
+    (p: any) =>
+      !activePids.has(p.pid) &&
+      (!p.agentId || !activeAgentIds.has(p.agentId)) &&
+      !activeAgents.some((a: any) => typeof a.pid === 'number' && typeof p.pid === 'number' && ownedByCaller(a.pid, p.pid))
+  );
   if (activeAgents.length || extraPresence.length) {
     lines.push(`Active sessions (${activeAgents.length + extraPresence.length}):`);
     for (const a of activeAgents) {
       const wt = a.worktree_path ? ` · ${path.basename(a.worktree_path)}` : '';
-      const peer = presencePeers.find((p: any) => p.pid === a.pid);
+      const peer = presencePeers.find(
+        (p: any) =>
+          p.pid === a.pid ||
+          (p.agentId && p.agentId === a.id) ||
+          (typeof a.pid === 'number' && typeof p.pid === 'number' && ownedByCaller(a.pid, p.pid))
+      );
       const files = peer && Array.isArray(peer.touchedFiles) && peer.touchedFiles.length
         ? ` · touched: ${peer.touchedFiles.slice(0, 4).join(', ')}`
         : '';

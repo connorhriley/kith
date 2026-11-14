@@ -4,6 +4,7 @@ import path from 'node:path';
 import { formatBrief } from '../core/brief.js';
 import { KithEngine } from '../core/engine.js';
 import { FencingAndAgentManager, SessionOwnershipError } from '../core/fencing.js';
+import { resyncStaleIndexEntries } from '../core/gc.js';
 import { isIgnoredPath } from '../core/git-ignore.js';
 import { LockEngine } from '../core/locks.js';
 import { readBrief } from '../core/observation.js';
@@ -78,6 +79,9 @@ export function runHookPhase(params: {
   }
 
   if (subCmd === 'post') {
+    if (command && /\bupdate-ref\b/.test(command)) {
+      resyncStaleIndexEntries(engine.coordDb.repoRoot);
+    }
     const res = handler.handlePostToolUse({ agentId, toolName, filePath, command });
     const msg = [promotedNotice, ...res.warnings, res.deltaFooter].filter(Boolean).join('\n');
     if (flags.client === 'cursor') {

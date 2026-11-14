@@ -66,6 +66,7 @@ function openSqlite(filePath: string): SqliteDatabaseSync {
 
 export interface ActivePresence {
   sessionKey: string;
+  agentId: string;
   repoCommonDir: string;
   checkoutRoot: string;
   client: string;
@@ -217,11 +218,17 @@ function rowToPresence(row: Record<string, any>): ActivePresence {
     const parsed = JSON.parse(String(row.touched_files_json ?? '[]'));
     if (Array.isArray(parsed)) touchedFiles = parsed.filter((x): x is string => typeof x === 'string');
   } catch { /* ignore malformed json */ }
+  const sessionKey = String(row.session_key);
+  const client = String(row.client);
+  const agentId = typeof row.agent_id === 'string' && row.agent_id
+    ? row.agent_id
+    : deterministicAgentId(client, sessionKey);
   return {
-    sessionKey: String(row.session_key),
+    sessionKey,
+    agentId,
     repoCommonDir: String(row.repo_common_dir),
     checkoutRoot: String(row.checkout_root),
-    client: String(row.client),
+    client,
     pid: Number(row.pid),
     touchedFiles,
     createdAt: Number(row.created_at),
@@ -312,8 +319,14 @@ export function recordPresence(
       existing?.created_at ?? now,
       now
     );
-    const rows = db.prepare('SELECT * FROM presence WHERE repo_common_dir = ? ORDER BY created_at')
-      .all(params.repoCommonDir) as Array<Record<string, any>>;
+    const rows = db.prepare(`
+      SELECT p.*, c.agent_id
+      FROM presence p
+      LEFT JOIN capabilities c
+        ON c.repo_common_dir = p.repo_common_dir AND c.session_key = p.session_key
+      WHERE p.repo_common_dir = ?
+      ORDER BY p.created_at
+    `).all(params.repoCommonDir) as Array<Record<string, any>>;
     return rows.map(rowToPresence);
   }) ?? [];
 }
@@ -322,8 +335,14 @@ export function listRepoPresence(home: string | undefined, repoCommonDir: string
   const now = Date.now();
   return withPresenceDb(home, false, (db) => {
     pruneDeadPresence(db, now);
-    const rows = db.prepare('SELECT * FROM presence WHERE repo_common_dir = ? ORDER BY created_at')
-      .all(repoCommonDir) as Array<Record<string, any>>;
+    const rows = db.prepare(`
+      SELECT p.*, c.agent_id
+      FROM presence p
+      LEFT JOIN capabilities c
+        ON c.repo_common_dir = p.repo_common_dir AND c.session_key = p.session_key
+      WHERE p.repo_common_dir = ?
+      ORDER BY p.created_at
+    `).all(repoCommonDir) as Array<Record<string, any>>;
     return rows.map(rowToPresence);
   }) ?? [];
 }
@@ -332,8 +351,14 @@ export function listSessionPresence(home: string | undefined, sessionKey: string
   const now = Date.now();
   return withPresenceDb(home, false, (db) => {
     pruneDeadPresence(db, now);
-    const rows = db.prepare('SELECT * FROM presence WHERE session_key = ? ORDER BY last_seen_at DESC')
-      .all(sessionKey) as Array<Record<string, any>>;
+    const rows = db.prepare(`
+      SELECT p.*, c.agent_id
+      FROM presence p
+      LEFT JOIN capabilities c
+        ON c.repo_common_dir = p.repo_common_dir AND c.session_key = p.session_key
+      WHERE p.session_key = ?
+      ORDER BY p.last_seen_at DESC
+    `).all(sessionKey) as Array<Record<string, any>>;
     return rows.map(rowToPresence);
   }) ?? [];
 }
