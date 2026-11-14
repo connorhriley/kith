@@ -121,7 +121,7 @@ export function readBrief(directory = process.cwd(), options: { scopeGlobs?: str
       }
       const hasTask = tasks.some(t => t.status === 'active' && t.owner_agent_id === agent.id);
       const hasLock = locks.some(l => l.owner_agent_id === agent.id && l.expires_at > state.observedAt);
-      if (!hasTask && !hasLock && agent.lease_expires_at <= state.observedAt) {
+      if (!hasTask && !hasLock) {
         continue;
       }
     }

@@ -73,6 +73,17 @@ export function formatDoctorHuman(report: Record<string, any>): string {
   return lines.join('\n');
 }
 
+function formatRelativeAge(ts: number | undefined, now: number): string {
+  if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return '';
+  const diffSec = Math.max(0, Math.floor((now - ts) / 1000));
+  if (diffSec < 60) return 'just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  return `${Math.floor(diffHr / 24)}d ago`;
+}
+
 export function formatStatusHuman(state: Record<string, any>): string {
   const repoRoot = state.repository?.root ?? state.repository ?? process.cwd();
   const mode = state.workflowMode ?? 'worktrees';
@@ -87,7 +98,8 @@ export function formatStatusHuman(state: Record<string, any>): string {
   });
   const locks = Array.isArray(state.locks) ? state.locks : [];
   const tasks = Array.isArray(state.tasks) ? state.tasks : [];
-  const staleTaskCutoff = (typeof state.observedAt === 'number' ? state.observedAt : Date.now()) - 14 * 24 * 60 * 60 * 1000;
+  const now = typeof state.observedAt === 'number' ? state.observedAt : Date.now();
+  const staleTaskCutoff = now - 14 * 24 * 60 * 60 * 1000;
   const openTasks = tasks.filter(
     (t: any) => t.status !== 'done' && !(t.status === 'queued' && typeof t.updated_at === 'number' && t.updated_at < staleTaskCutoff)
   );
@@ -119,11 +131,13 @@ export function formatStatusHuman(state: Record<string, any>): string {
       const files = peer && Array.isArray(peer.touchedFiles) && peer.touchedFiles.length
         ? ` · touched: ${peer.touchedFiles.slice(0, 4).join(', ')}`
         : '';
-      lines.push(`  - ${a.id} [${a.client ?? 'unknown'}, pid ${a.pid}]${wt}${a.branch ? ` (${a.branch})` : ''}${files}`);
+      const age = formatRelativeAge(peer?.lastSeenAt ?? a.last_heartbeat_at, now);
+      lines.push(`  - ${a.id} [${a.client ?? 'unknown'}, pid ${a.pid}${age ? ` · ${age}` : ''}]${wt}${a.branch ? ` (${a.branch})` : ''}${files}`);
     }
     for (const p of extraPresence) {
       const files = Array.isArray(p.touchedFiles) && p.touchedFiles.length ? ` · touched: ${p.touchedFiles.slice(0, 4).join(', ')}` : '';
-      lines.push(`  - ${p.sessionKey} [${p.client ?? 'auto'}, pid ${p.pid}]${files}`);
+      const age = formatRelativeAge(p.lastSeenAt, now);
+      lines.push(`  - ${p.sessionKey} [${p.client ?? 'auto'}, pid ${p.pid}${age ? ` · ${age}` : ''}]${files}`);
     }
   } else {
     lines.push('Active agents: none (passive hooks will auto-engage when 2+ sessions overlap)');
