@@ -16,7 +16,8 @@ import {
 import { OperationJournal, RetryError, failureData, toolReply } from './retries.js';
 import { registerCompactTools } from './compact-tools.js';
 import { bindMcpSessionToAutoPresence, resolveHomeDir } from '../cli/auto-session.js';
-import { discoverRepository } from '../core/repository.js';
+import { readBrief } from '../core/observation.js';
+import { discoverChildRepositories, discoverRepository } from '../core/repository.js';
 import { AGENT_HANDOFF_KINDS, handoffBlock } from '../core/handoffs.js';
 
 const COMPACT_INSTRUCTIONS =
@@ -85,7 +86,11 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean, optio
     if (!target) throw new Error('No project selected. Pass repository with the absolute Git checkout path for this task.');
     const layout = discoverRepository(target);
     if (pinnedRoot && layout.checkoutRoot !== pinnedRoot) throw new Error('This connection is pinned with --repo. Use a global connection to select another repository.');
-    if (!pinned && !layout.commonGitDir) throw new Error('Global connections require a Git checkout; do not use HOME or a parent directory as a project.');
+    if (!pinned && !layout.commonGitDir) {
+      const children = layout.checkoutRoot !== resolveHomeDir() ? discoverChildRepositories(layout.checkoutRoot) : [];
+      const childHint = children.length ? ` Child repositories under ${layout.checkoutRoot}: ${children.map(c => c.checkoutRoot).join(', ')}.` : '';
+      throw new Error(`Global connections require a Git checkout; do not use HOME or a parent directory as a project.${childHint}`);
+    }
     let context = contexts.get(layout.checkoutRoot);
     if (!context) {
       context = createContext(layout.checkoutRoot, layout.checkoutRoot === (pinnedRoot ?? repoRoot));
@@ -105,6 +110,23 @@ function buildKithMcpServer(repoRoot: string | undefined, pinned: boolean, optio
         const { repository, ...input } = args as { repository?: string } & Record<string, unknown>;
         const execution = (async () => {
           try {
+            if (name === 'kith_brief' && !pinned) {
+              const target = repository ?? repoRoot;
+              if (target && path.isAbsolute(target)) {
+                const layout = discoverRepository(target);
+                if (!layout.commonGitDir && layout.checkoutRoot !== resolveHomeDir()) {
+                  const children = discoverChildRepositories(layout.checkoutRoot);
+                  if (children.length > 0) {
+                    const scopeGlobs = Array.isArray(input.scopeGlobs) ? (input.scopeGlobs as string[]) : undefined;
+                    return toolReply({
+                      ok: true,
+                      workspace: layout.checkoutRoot,
+                      repositories: children.map((c) => readBrief(c.checkoutRoot, { scopeGlobs })),
+                    });
+                  }
+                }
+              }
+            }
             const context = contextFor(repository);
             const run = async () => { extra.signal.throwIfAborted(); return handler(input as z.infer<z.ZodObject<T>>, extra, context); };
             if (!keyed || input.operationKey === undefined) return await run();

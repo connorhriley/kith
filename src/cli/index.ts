@@ -8,7 +8,7 @@ import { buildSwarmPrompts, KithEngine } from '../core/engine.js';
 import { gcCoordination } from '../core/gc.js';
 import { parseWorkflowMode } from '../core/mode.js';
 import { readBrief, readCoordinationState, recoveryReport } from '../core/observation.js';
-import { discoverRepository, physicalPath } from '../core/repository.js';
+import { discoverChildRepositories, discoverRepository, physicalPath } from '../core/repository.js';
 import { runKithMcpStdioServer } from '../mcp/server.js';
 import { clearAutoSession, listRepoPresence, resolveHomeDir } from './auto-session.js';
 import { bootoutHostAutostart } from './autostart.js';
@@ -149,6 +149,25 @@ async function main(): Promise<void> {
   // Read-only and session-free: runs for any shell, hook or agent, never creates or changes state, and never fails the caller.
   if (cmd === 'brief') {
     const scope = typeof flags.scope === 'string' ? flags.scope.split(',').map(glob => glob.trim()).filter(Boolean) : undefined;
+    let rootLayout = null;
+    try { rootLayout = discoverRepository(repoRoot); } catch { /* handled below */ }
+    if (rootLayout && !rootLayout.commonGitDir && !flags.repo) {
+      const children = discoverChildRepositories(repoRoot);
+      if (children.length > 0) {
+        const briefs = children.map(c => readBrief(c.checkoutRoot, { scopeGlobs: scope }));
+        if (flags.json) {
+          console.log(JSON.stringify({ workspace: rootLayout.checkoutRoot, repositories: briefs }, null, 2));
+        } else {
+          const formatted = briefs.map(b => formatBrief(b, { quiet: true })).filter(Boolean);
+          if (formatted.length > 0) {
+            console.log(formatted.join('\n\n'));
+          } else if (!flags.quiet) {
+            console.log(`Nothing is active or unfinished in Kith across ${children.length} repositories in ${rootLayout.checkoutRoot}.`);
+          }
+        }
+        return;
+      }
+    }
     let brief;
     try { brief = readBrief(repoRoot, { scopeGlobs: scope }); }
     catch (error) {
@@ -181,6 +200,23 @@ async function main(): Promise<void> {
 
   if (cmd === 'gc') {
     const staleDays = typeof flags['stale-days'] === 'string' ? Number(flags['stale-days']) : undefined;
+    const layout = discoverRepository(repoRoot);
+    if (!layout.commonGitDir && !flags.repo) {
+      const children = discoverChildRepositories(repoRoot);
+      if (children.length > 0) {
+        const reports = children.map(c => gcCoordination(c.checkoutRoot, {
+          dryRun: Boolean(flags['dry-run']),
+          staleDays,
+          force: Boolean(flags.force),
+        }));
+        if (shouldUseHumanOutput(flags)) {
+          console.log(reports.map(r => formatGcHuman(r)).join('\n'));
+        } else {
+          console.log(JSON.stringify({ ok: true, workspace: layout.checkoutRoot, repositories: reports }, null, 2));
+        }
+        return;
+      }
+    }
     const report = gcCoordination(repoRoot, {
       dryRun: Boolean(flags['dry-run']),
       staleDays,
@@ -210,6 +246,22 @@ async function main(): Promise<void> {
 
   if (cmd === 'overview') {
     const state = readCoordinationState(repoRoot);
+    if (!state.repository.commonGitDir && !flags.repo) {
+      const children = discoverChildRepositories(repoRoot);
+      if (children.length > 0) {
+        const blocks: string[] = [`Kith workspace · ${state.repository.root} (${children.length} repositories)`];
+        for (const child of children) {
+          const childState = readCoordinationState(child.checkoutRoot);
+          const peers = child.commonGitDir ? listRepoPresence(undefined, child.commonGitDir) : [];
+          if (childState.state === 'ready' || peers.length > 0) {
+            blocks.push(formatStatusHuman({ ...childState, ...(peers.length ? { presencePeers: peers } : {}) }));
+          }
+        }
+        console.log(blocks.join('\n\n'));
+        console.log("\nRun 'kith help' for commands.");
+        return;
+      }
+    }
     const presencePeers = state.repository.commonGitDir ? listRepoPresence(undefined, state.repository.commonGitDir) : [];
     console.log(formatStatusHuman({ ...state, ...(presencePeers.length ? { presencePeers } : {}) }));
     console.log("\nRun 'kith help' for commands.");
@@ -226,6 +278,22 @@ async function main(): Promise<void> {
   if (cmd === 'recover' || (cmd === 'status' && (flags.offline || (!flags.live && !fs.existsSync(path.join(discoverRepository(repoRoot).coordDir, 'state.db')))))) {
     const state = cmd === 'recover' ? recoveryReport(repoRoot) : readCoordinationState(repoRoot);
     if (cmd === 'status' && shouldUseHumanOutput(flags)) {
+      if (!state.repository.commonGitDir && !flags.repo) {
+        const children = discoverChildRepositories(repoRoot);
+        if (children.length > 0) {
+          const blocks: string[] = [`Kith workspace · ${state.repository.root} (${children.length} repositories)`];
+          for (const child of children) {
+            const childState = readCoordinationState(child.checkoutRoot);
+            const peers = child.commonGitDir ? listRepoPresence(undefined, child.commonGitDir) : [];
+            if (childState.state === 'ready' || peers.length > 0) {
+              blocks.push(formatStatusHuman({ ...childState, ...(peers.length ? { presencePeers: peers } : {}) }));
+            }
+          }
+          console.log(blocks.join('\n\n'));
+          process.exitCode = 0;
+          return;
+        }
+      }
       const presencePeers = state.repository.commonGitDir ? listRepoPresence(undefined, state.repository.commonGitDir) : [];
       console.log(formatStatusHuman({ ...state, ...(presencePeers.length ? { presencePeers } : {}) }));
     } else {

@@ -16,16 +16,40 @@ function openSqlite(filePath: string): SqliteDatabaseSync {
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
   const db = new DatabaseSync(filePath);
   db.exec('PRAGMA busy_timeout = 3000; PRAGMA journal_mode = WAL;');
+  const existingCols = db.prepare('PRAGMA table_info(presence)').all() as Array<{ name: string; pk: number }>;
+  const pkCount = existingCols.filter((c) => c.pk > 0).length;
+  if (existingCols.length > 0 && pkCount < 2) {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      CREATE TABLE presence_v2 (
+        session_key TEXT NOT NULL,
+        repo_common_dir TEXT NOT NULL,
+        checkout_root TEXT NOT NULL,
+        client TEXT NOT NULL,
+        pid INTEGER NOT NULL,
+        touched_files_json TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        PRIMARY KEY (repo_common_dir, session_key)
+      );
+      INSERT OR REPLACE INTO presence_v2 (session_key, repo_common_dir, checkout_root, client, pid, touched_files_json, created_at, last_seen_at)
+      SELECT session_key, repo_common_dir, checkout_root, client, pid, touched_files_json, created_at, last_seen_at FROM presence;
+      DROP TABLE presence;
+      ALTER TABLE presence_v2 RENAME TO presence;
+      COMMIT;
+    `);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS presence (
-      session_key TEXT PRIMARY KEY,
+      session_key TEXT NOT NULL,
       repo_common_dir TEXT NOT NULL,
       checkout_root TEXT NOT NULL,
       client TEXT NOT NULL,
       pid INTEGER NOT NULL,
       touched_files_json TEXT NOT NULL DEFAULT '[]',
       created_at INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL
+      last_seen_at INTEGER NOT NULL,
+      PRIMARY KEY (repo_common_dir, session_key)
     );
     CREATE INDEX IF NOT EXISTS idx_presence_repo ON presence(repo_common_dir, last_seen_at);
     CREATE TABLE IF NOT EXISTS capabilities (
@@ -75,20 +99,69 @@ export function extractHookSessionKey(
   return `${prefix}:${rawId}`;
 }
 
+function existingParentDir(targetPath: string): string | null {
+  let cur = targetPath;
+  while (true) {
+    try {
+      const stat = fs.statSync(cur);
+      return stat.isDirectory() ? cur : path.dirname(cur);
+    } catch {
+      const next = path.dirname(cur);
+      if (next === cur) return null;
+      cur = next;
+    }
+  }
+}
+
+function hasGitAncestor(dir: string): boolean {
+  let cur = dir;
+  while (true) {
+    if (fs.existsSync(path.join(cur, '.git'))) return true;
+    const next = path.dirname(cur);
+    if (next === cur) return false;
+    cur = next;
+  }
+}
+
 export function resolveHookStartDir(
   explicitRepo: string | boolean | undefined,
   payload?: Record<string, any>,
   fallbackCwd = process.cwd()
 ): string {
   if (typeof explicitRepo === 'string' && explicitRepo.trim()) return path.resolve(explicitRepo);
+  let baseCwd = fallbackCwd;
   if (typeof payload?.cwd === 'string' && path.isAbsolute(payload.cwd) && fs.existsSync(payload.cwd)) {
-    return payload.cwd;
-  }
-  if (Array.isArray(payload?.workspace_roots)) {
+    baseCwd = payload.cwd;
+  } else if (Array.isArray(payload?.workspace_roots)) {
     const first = payload.workspace_roots.find((p: unknown) => typeof p === 'string' && path.isAbsolute(p) && fs.existsSync(p));
-    if (first) return first;
+    if (first) baseCwd = first;
   }
-  return fallbackCwd;
+
+  const input = payload?.tool_input;
+  if (input && typeof input === 'object') {
+    const rawFile =
+      input.file_path ??
+      input.notebook_path ??
+      input.target_file ??
+      input.path ??
+      (Array.isArray(input.edits) ? input.edits[0]?.file_path : undefined);
+    if (typeof rawFile === 'string' && rawFile.trim()) {
+      const resolvedFile = path.isAbsolute(rawFile) ? rawFile : path.resolve(baseCwd, rawFile);
+      const dir = existingParentDir(resolvedFile);
+      if (dir && hasGitAncestor(dir)) return dir;
+    }
+    if (typeof input.command === 'string' && input.command.trim()) {
+      const cdMatch = /(?:^|[;&|]\s*|\bgit\s+-C\s+|\bcd\s+)(?:['"]([^'"]+)['"]|([^\s;&|'"`]+))/.exec(input.command);
+      const rawTarget = cdMatch?.[1] ?? cdMatch?.[2];
+      if (rawTarget && !rawTarget.startsWith('-')) {
+        const resolvedDir = path.isAbsolute(rawTarget) ? rawTarget : path.resolve(baseCwd, rawTarget);
+        const dir = existingParentDir(resolvedDir);
+        if (dir && hasGitAncestor(dir)) return dir;
+      }
+    }
+  }
+
+  return baseCwd;
 }
 
 /**
@@ -174,11 +247,23 @@ function pruneDeadPresence(db: SqliteDatabaseSync, now: number): void {
     last_seen_at: number;
   }>;
   for (const row of rows) {
-    if (!isPidAlive(row.pid) || row.last_seen_at < now - PRESENCE_TTL_MS) {
+    if (!isPidAlive(row.pid)) {
       db.prepare('DELETE FROM presence WHERE session_key = ?').run(row.session_key);
+      db.prepare('DELETE FROM capabilities WHERE session_key = ?').run(row.session_key);
+    } else if (row.last_seen_at < now - PRESENCE_TTL_MS) {
+      db.prepare('DELETE FROM presence WHERE repo_common_dir = ? AND session_key = ?').run(row.repo_common_dir, row.session_key);
       db.prepare('DELETE FROM capabilities WHERE repo_common_dir = ? AND session_key = ?').run(row.repo_common_dir, row.session_key);
     }
   }
+  db.prepare(`
+    DELETE FROM capabilities
+    WHERE updated_at < ?
+      AND NOT EXISTS (
+        SELECT 1 FROM presence p
+        WHERE p.repo_common_dir = capabilities.repo_common_dir
+          AND p.session_key = capabilities.session_key
+      )
+  `).run(now - PRESENCE_TTL_MS);
 }
 
 export function recordPresence(
@@ -196,8 +281,8 @@ export function recordPresence(
   const now = Date.now();
   return withPresenceDb(home, true, (db) => {
     pruneDeadPresence(db, now);
-    const existing = db.prepare('SELECT touched_files_json, created_at FROM presence WHERE session_key = ?')
-      .get(params.sessionKey) as { touched_files_json?: string; created_at?: number } | undefined;
+    const existing = db.prepare('SELECT touched_files_json, created_at FROM presence WHERE repo_common_dir = ? AND session_key = ?')
+      .get(params.repoCommonDir, params.sessionKey) as { touched_files_json?: string; created_at?: number } | undefined;
     let touched: string[] = [];
     if (!params.clearTouchedFiles && existing?.touched_files_json) {
       try {
@@ -211,8 +296,7 @@ export function recordPresence(
     db.prepare(`
       INSERT INTO presence (session_key, repo_common_dir, checkout_root, client, pid, touched_files_json, created_at, last_seen_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(session_key) DO UPDATE SET
-        repo_common_dir = excluded.repo_common_dir,
+      ON CONFLICT(repo_common_dir, session_key) DO UPDATE SET
         checkout_root = excluded.checkout_root,
         client = excluded.client,
         pid = excluded.pid,
@@ -240,6 +324,16 @@ export function listRepoPresence(home: string | undefined, repoCommonDir: string
     pruneDeadPresence(db, now);
     const rows = db.prepare('SELECT * FROM presence WHERE repo_common_dir = ? ORDER BY created_at')
       .all(repoCommonDir) as Array<Record<string, any>>;
+    return rows.map(rowToPresence);
+  }) ?? [];
+}
+
+export function listSessionPresence(home: string | undefined, sessionKey: string): ActivePresence[] {
+  const now = Date.now();
+  return withPresenceDb(home, false, (db) => {
+    pruneDeadPresence(db, now);
+    const rows = db.prepare('SELECT * FROM presence WHERE session_key = ? ORDER BY last_seen_at DESC')
+      .all(sessionKey) as Array<Record<string, any>>;
     return rows.map(rowToPresence);
   }) ?? [];
 }
@@ -272,10 +366,11 @@ export function clearPresenceAndCapability(
   repoCommonDir?: string
 ): void {
   withPresenceDb(home, false, (db) => {
-    db.prepare('DELETE FROM presence WHERE session_key = ?').run(sessionKey);
     if (repoCommonDir) {
+      db.prepare('DELETE FROM presence WHERE repo_common_dir = ? AND session_key = ?').run(repoCommonDir, sessionKey);
       db.prepare('DELETE FROM capabilities WHERE repo_common_dir = ? AND session_key = ?').run(repoCommonDir, sessionKey);
     } else {
+      db.prepare('DELETE FROM presence WHERE session_key = ?').run(sessionKey);
       db.prepare('DELETE FROM capabilities WHERE session_key = ?').run(sessionKey);
     }
   });

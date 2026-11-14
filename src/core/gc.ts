@@ -60,6 +60,54 @@ function gitIsMerged(repoRoot: string, commit: string): boolean {
   }
 }
 
+/**
+ * Resyncs `.git/index` entries that drifted behind `HEAD` after temporary-index `update-ref` commits:
+ * any cached path whose working-tree content already matches `HEAD` is reset to `HEAD` in `.git/index`
+ * without touching the working tree.
+ */
+export function resyncStaleIndexEntries(repoRoot: string): number {
+  let cachedPaths: string[] = [];
+  try {
+    const out = execFileSync('git', ['diff', '--cached', '--name-only', '-z', 'HEAD'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    cachedPaths = out.split('\0').filter(Boolean);
+  } catch {
+    return 0;
+  }
+  if (cachedPaths.length === 0) return 0;
+
+  let wtDiffSet = new Set<string>();
+  try {
+    const wtOut = execFileSync('git', ['diff', '--name-only', '-z', 'HEAD'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    wtDiffSet = new Set(wtOut.split('\0').filter(Boolean));
+  } catch {
+    return 0;
+  }
+
+  const stalePaths = cachedPaths.filter(p => !wtDiffSet.has(p));
+  if (stalePaths.length === 0) return 0;
+
+  let resynced = 0;
+  for (let i = 0; i < stalePaths.length; i += 100) {
+    const chunk = stalePaths.slice(i, i + 100);
+    try {
+      execFileSync('git', ['reset', '-q', 'HEAD', '--', ...chunk], {
+        cwd: repoRoot,
+        stdio: ['ignore', 'ignore', 'ignore'],
+      });
+      resynced += chunk.length;
+    } catch { /* ignore if index lock held */ }
+  }
+  return resynced;
+}
+
 export function gcCoordination(directory = process.cwd(), options: GcOptions = {}): GcReport {
   const dryRun = Boolean(options.dryRun);
   const force = Boolean(options.force);
@@ -96,6 +144,12 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
   try {
     if (!dryRun) {
       report.reapedAgents = engine.fencing.reapDeadAgents().length;
+      engine.coordDb.db
+        .prepare("DELETE FROM handoffs WHERE task_id IS NULL AND summary = 'Session stopped with uncommitted changes.'")
+        .run();
+      if (layout.commonGitDir) {
+        resyncStaleIndexEntries(layout.checkoutRoot);
+      }
     }
     report.prunedShadowIndexes = engine.shadowGit.pruneStaleShadowIndexes(dryRun);
 
@@ -103,7 +157,9 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
     const activeWorktreePaths = new Set(
       activeAgents.map(a => a.worktree_path).filter((p): p is string => Boolean(p)).map(p => physicalPath(p))
     );
-    const openHandoffs = engine.handoffs.unresolved(500);
+    const openHandoffs = engine.handoffs
+      .unresolved(500)
+      .filter(h => !(h.task_id === null && h.summary === 'Session stopped with uncommitted changes.'));
     // Only explicit agent-written handoffs pin clean/merged worktrees; auto-captured crash handoffs rely on dirty/unmerged checks.
     const explicitHandoffs = openHandoffs.filter(h => h.source === 'agent');
     const handoffWorktrees = new Set(
@@ -207,7 +263,7 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
         (engine.coordDb.db.prepare('SELECT COUNT(*) AS n FROM events WHERE timestamp < ?').get(cutoff) as { n: number }).n
       );
       const deadRows = engine.coordDb.db.prepare(
-        "SELECT id FROM agents WHERE status != 'active' AND last_heartbeat_at < ?"
+        "SELECT id FROM agents WHERE status != 'active' AND (last_heartbeat_at < ? OR id LIKE 'auto-%')"
       ).all(cutoff) as Array<{ id: string }>;
       report.prunedDeadAgents = deadRows.filter(r => !pinnedAgentIds.has(r.id)).length;
     } else {
@@ -228,11 +284,13 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
         report.prunedOldEvents = Number(
           engine.coordDb.db.prepare('DELETE FROM events WHERE timestamp < ?').run(cutoff).changes
         );
+        engine.coordDb.db.prepare('DELETE FROM quarantine WHERE created_at < ?').run(cutoff);
         const deadRows = engine.coordDb.db.prepare(
-          "SELECT id FROM agents WHERE status != 'active' AND last_heartbeat_at < ?"
+          "SELECT id FROM agents WHERE status != 'active' AND (last_heartbeat_at < ? OR id LIKE 'auto-%')"
         ).all(cutoff) as Array<{ id: string }>;
         for (const r of deadRows) {
           if (pinnedAgentIds.has(r.id)) continue;
+          engine.coordDb.db.prepare('DELETE FROM agent_sessions WHERE agent_id = ?').run(r.id);
           engine.coordDb.db.prepare('DELETE FROM agents WHERE id = ?').run(r.id);
           report.prunedDeadAgents++;
         }

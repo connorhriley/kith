@@ -7,7 +7,7 @@ import { FencingAndAgentManager, SessionOwnershipError } from '../core/fencing.j
 import { isIgnoredPath } from '../core/git-ignore.js';
 import { LockEngine } from '../core/locks.js';
 import { readBrief } from '../core/observation.js';
-import { discoverRepository } from '../core/repository.js';
+import { discoverChildRepositories, discoverRepository } from '../core/repository.js';
 import {
   AutoSessionConflictError,
   clearPresenceAndCapability,
@@ -15,6 +15,7 @@ import {
   extractHookSessionKey,
   getAutoCapability,
   listRepoPresence,
+  listSessionPresence,
   promoteAutoSession,
   recordPresence,
   resolveHomeDir,
@@ -153,13 +154,32 @@ function handleSessionStartHook(flags: Record<string, string | boolean>): void {
     const home = resolveHomeDir();
     const sessionKey = extractHookSessionKey(flags.client, payload);
     const clientName = typeof flags.client === 'string' ? flags.client : 'claude';
+    const ownerPid = resolvePersistentOwnerPid();
+
+    if (!layout.commonGitDir) {
+      const childLayouts = discoverChildRepositories(startDir);
+      const childTexts: string[] = [];
+      for (const child of childLayouts) {
+        const hasState = fs.existsSync(path.join(child.coordDir, 'state.db'));
+        const peers = child.commonGitDir ? listRepoPresence(home, child.commonGitDir) : [];
+        if (!hasState && peers.length === 0) continue;
+        const brief = readBrief(child.checkoutRoot);
+        const formatted = formatBrief(brief, { quiet: true });
+        if (formatted) childTexts.push(formatted);
+      }
+      const text = childTexts.join('\n\n');
+      if (flags.client === 'cursor') console.log(JSON.stringify({ additional_context: text }));
+      else if (text) console.log(text);
+      return;
+    }
+
     const peers = layout.commonGitDir && sessionKey
       ? recordPresence(home, {
         sessionKey,
         repoCommonDir: layout.commonGitDir,
         checkoutRoot: layout.checkoutRoot,
         client: clientName,
-        pid: resolvePersistentOwnerPid(),
+        pid: ownerPid,
       })
       : (layout.commonGitDir ? listRepoPresence(home, layout.commonGitDir) : []);
 
@@ -204,10 +224,6 @@ function handleAutoHook(subCmd: string, flags: Record<string, string | boolean>)
   }
   const startDir = resolveHookStartDir(flags.repo, stdinPayload, process.cwd());
   const layout = startDir === path.parse(startDir).root ? null : discoverRepository(startDir);
-  if (!layout?.commonGitDir) {
-    passThroughHook(subCmd, flags.client);
-    return;
-  }
   const home = resolveHomeDir();
   const clientName = typeof flags.client === 'string' ? flags.client : 'auto';
   const ownerPid = resolvePersistentOwnerPid();
@@ -216,37 +232,51 @@ function handleAutoHook(subCmd: string, flags: Record<string, string | boolean>)
     // In Claude Code and Cursor, `Stop` fires at the end of each assistant turn while the client
     // process remains open. Keep presence and session capabilities alive while the process lives,
     // and only release ad-hoc per-turn file locks when the session owns no active Kith task.
-    recordPresence(home, {
-      sessionKey,
-      repoCommonDir: layout.commonGitDir,
-      checkoutRoot: layout.checkoutRoot,
-      client: clientName,
-      pid: ownerPid,
-      clearTouchedFiles: true,
-    });
-    const cap = getAutoCapability(home, layout.commonGitDir, sessionKey);
-    if (!cap || !fs.existsSync(path.join(layout.coordDir, 'state.db'))) {
-      passThroughHook('stop', flags.client);
-      return;
+    const targets = new Map<string, { repoCommonDir: string; checkoutRoot: string }>();
+    if (layout?.commonGitDir) {
+      targets.set(layout.commonGitDir, { repoCommonDir: layout.commonGitDir, checkoutRoot: layout.checkoutRoot });
     }
-    const autoEngine = new KithEngine(layout.checkoutRoot);
-    try {
-      try {
-        autoEngine.fencing.resumeSession(cap.agentId, cap.sessionToken);
-        autoEngine.fencing.heartbeat(cap.agentId, 12 * 60 * 60 * 1000);
-        const hasActiveTask = autoEngine.intents
-          .listTasks()
-          .some((t) => t.status === 'active' && t.owner_agent_id === cap.agentId);
-        if (!hasActiveTask) {
-          autoEngine.locks.releaseLocks({ agentId: cap.agentId });
-        }
-      } catch {
-        // Ignore if session was not promoted or already cleared.
+    for (const p of listSessionPresence(home, sessionKey)) {
+      if (!targets.has(p.repoCommonDir) && fs.existsSync(p.checkoutRoot)) {
+        targets.set(p.repoCommonDir, { repoCommonDir: p.repoCommonDir, checkoutRoot: p.checkoutRoot });
       }
-      passThroughHook('stop', flags.client);
-    } finally {
-      autoEngine.close();
     }
+    for (const target of targets.values()) {
+      recordPresence(home, {
+        sessionKey,
+        repoCommonDir: target.repoCommonDir,
+        checkoutRoot: target.checkoutRoot,
+        client: clientName,
+        pid: ownerPid,
+        clearTouchedFiles: true,
+      });
+      const targetLayout = discoverRepository(target.checkoutRoot);
+      const cap = getAutoCapability(home, target.repoCommonDir, sessionKey);
+      if (!cap || !fs.existsSync(path.join(targetLayout.coordDir, 'state.db'))) continue;
+      const autoEngine = new KithEngine(targetLayout.checkoutRoot);
+      try {
+        try {
+          autoEngine.fencing.resumeSession(cap.agentId, cap.sessionToken);
+          autoEngine.fencing.heartbeat(cap.agentId, 12 * 60 * 60 * 1000);
+          const hasActiveTask = autoEngine.intents
+            .listTasks()
+            .some((t) => t.status === 'active' && t.owner_agent_id === cap.agentId);
+          if (!hasActiveTask) {
+            autoEngine.locks.releaseLocks({ agentId: cap.agentId });
+          }
+        } catch {
+          // Ignore if session was not promoted or already cleared.
+        }
+      } finally {
+        autoEngine.close();
+      }
+    }
+    passThroughHook('stop', flags.client);
+    return;
+  }
+
+  if (!layout?.commonGitDir) {
+    passThroughHook(subCmd, flags.client);
     return;
   }
 

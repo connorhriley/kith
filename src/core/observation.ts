@@ -1,11 +1,13 @@
 import { KITH_PROTOCOL_VERSION } from '../version.js';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { DatabaseSync as Database } from 'node:sqlite';
+import { listRepoPresence } from '../cli/auto-session.js';
 import { CoordDatabase, sqliteDatabase } from './db.js';
 import { discoverRepository, isWithin, physicalPath } from './repository.js';
-import type { AgentRecord } from './fencing.js';
+import { FencingAndAgentManager, type AgentRecord } from './fencing.js';
 import { observeWorkspaces } from './workspace-observation.js';
 import { LockEngine } from './locks.js';
 import { HANDOFF_SELECT, rowToHandoff, type HandoffRecord } from './handoff-store.js';
@@ -99,13 +101,60 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
 export function readBrief(directory = process.cwd(), options: { scopeGlobs?: string[]; handoffLimit?: number } = {}): Brief {
   const state = readCoordinationState(directory, { coordinationOnly: true });
   const scopeGlobs = options.scopeGlobs?.map(glob => { try { return LockEngine.normalizePattern(state.repository.root, glob); } catch { return glob; } });
+  const tasks = (state.tasks as Array<Record<string, any>>).map(task => ({ id: String(task.id), title: String(task.title), status: String(task.status),
+    owner_agent_id: (task.owner_agent_id as string | null) ?? null, scope_globs: (task.scope_globs as string[]) ?? [], priority: Number(task.priority), updated_at: Number(task.updated_at) }));
+  const locks = (state.locks as Array<Record<string, any>>).map(lock => ({ owner_agent_id: String(lock.owner_agent_id), pattern: String(lock.pattern), mode: String(lock.mode), expires_at: Number(lock.expires_at) }));
+  const agents: Array<Pick<AgentRecord, 'id' | 'client' | 'status' | 'lease_expires_at' | 'last_heartbeat_at'>> = [];
+  const seenAgentIds = new Set<string>();
+  const seenPids = new Set<number>();
+  for (const agent of state.agents) {
+    if (agent.status === 'active' && agent.id.startsWith('auto-')) {
+      const alive = FencingAndAgentManager.isProcessAlive(agent.pid, agent.pid_start_time);
+      if (alive) {
+        seenAgentIds.add(agent.id);
+        seenPids.add(agent.pid);
+        agents.push({
+          ...agent,
+          lease_expires_at: Math.max(agent.lease_expires_at, state.observedAt + 60_000),
+        });
+        continue;
+      }
+      const hasTask = tasks.some(t => t.status === 'active' && t.owner_agent_id === agent.id);
+      const hasLock = locks.some(l => l.owner_agent_id === agent.id && l.expires_at > state.observedAt);
+      if (!hasTask && !hasLock && agent.lease_expires_at <= state.observedAt) {
+        continue;
+      }
+    }
+    if (agent.status === 'active') {
+      seenAgentIds.add(agent.id);
+      seenPids.add(agent.pid);
+    }
+    agents.push(agent);
+  }
+  if (state.state === 'ready' && state.repository.commonGitDir) {
+    const peers = listRepoPresence(undefined, state.repository.commonGitDir);
+    for (const peer of peers) {
+      const cleanClient = peer.client.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase() || 'agent';
+      const hash = crypto.createHash('sha1').update(peer.sessionKey).digest('hex').slice(0, 8);
+      const autoId = `auto-${cleanClient}-${hash}`;
+      if (seenAgentIds.has(autoId) || seenPids.has(peer.pid)) continue;
+      seenAgentIds.add(autoId);
+      seenPids.add(peer.pid);
+      agents.push({
+        id: autoId,
+        client: peer.client,
+        status: 'active',
+        lease_expires_at: state.observedAt + 60_000,
+        last_heartbeat_at: peer.lastSeenAt,
+      });
+    }
+  }
   return buildBrief({
     repository: state.repository.root, mode: state.workflowMode, observedAt: state.observedAt,
     available: state.state === 'ready', error: state.state === 'unavailable' ? state.error : undefined,
-    agents: state.agents,
-    tasks: (state.tasks as Array<Record<string, any>>).map(task => ({ id: String(task.id), title: String(task.title), status: String(task.status),
-      owner_agent_id: (task.owner_agent_id as string | null) ?? null, scope_globs: (task.scope_globs as string[]) ?? [], priority: Number(task.priority), updated_at: Number(task.updated_at) })),
-    locks: (state.locks as Array<Record<string, any>>).map(lock => ({ owner_agent_id: String(lock.owner_agent_id), pattern: String(lock.pattern), mode: String(lock.mode), expires_at: Number(lock.expires_at) })),
+    agents,
+    tasks,
+    locks,
     conflicts: (state.conflicts as Array<Record<string, any>>).map(conflict => ({ agent_a: String(conflict.agent_a), agent_b: String(conflict.agent_b), file_path: String(conflict.file_path), severity: String(conflict.severity) })),
     handoffs: state.handoffs,
   }, { ...options, scopeGlobs });

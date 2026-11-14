@@ -86,6 +86,40 @@ export function discoverRepository(input: string): RepositoryLayout {
   }
 }
 
+/**
+ * When a workspace directory (such as a multi-repo parent folder) is not itself a Git repository,
+ * discover immediate child directories that are Git repositories.
+ */
+export function discoverChildRepositories(input: string): RepositoryLayout[] {
+  let directory: string;
+  try {
+    directory = fs.realpathSync.native(input);
+    if (!fs.statSync(directory).isDirectory()) return [];
+  } catch {
+    return [];
+  }
+  const results: RepositoryLayout[] = [];
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === '_archive') continue;
+    if (!entry.isDirectory()) continue;
+    const childPath = path.join(directory, entry.name);
+    if (!fs.existsSync(path.join(childPath, '.git'))) continue;
+    try {
+      const layout = discoverRepository(childPath);
+      if (layout.commonGitDir) results.push(layout);
+    } catch {
+      // Ignore broken or inaccessible child directories.
+    }
+  }
+  return results.sort((a, b) => a.checkoutRoot.localeCompare(b.checkoutRoot));
+}
+
 /** Read-only probe using an existing directory; uncertain results retain exclusion. */
 export function caseSensitivePaths(root: string): boolean {
   for (let current = physicalPath(root); path.dirname(current) !== current; current = path.dirname(current)) {

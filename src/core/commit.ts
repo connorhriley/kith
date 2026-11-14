@@ -5,6 +5,7 @@ import path from 'node:path';
 import { ancestorChain, listRepoPresence, ownedByCaller, resolveHomeDir } from '../cli/auto-session.js';
 import type { KithEngine } from './engine.js';
 import { FencingAndAgentManager } from './fencing.js';
+import { resyncStaleIndexEntries } from './gc.js';
 import { ignoredPaths } from './git-ignore.js';
 import { LockEngine } from './locks.js';
 
@@ -377,6 +378,7 @@ export function commitScopedFiles(engine: KithEngine, params: CommitParams): Com
           sleepSync(40);
         }
       }
+      resyncStaleIndexEntries(worktreeRoot);
 
       engine.coordDb.logEvent(primaryAgentId, 'scoped_commit', {
         commit: commitSha,

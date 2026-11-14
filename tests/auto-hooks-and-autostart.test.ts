@@ -246,4 +246,55 @@ describe('autonomous hook promotion, reboot persistence, and intuitive CLI', () 
     expect(fs.readFileSync(path.join(home, '.cursor/hooks.json'), 'utf8')).toBe(origCursorHooks);
     expect(fs.existsSync(launchAgentPath(home))).toBe(false);
   });
+
+  it('tracks multi-repo parent workspaces (Briefed-style) without overwriting presence across child repos', () => {
+    const workspace = path.join(temp, 'workspace');
+    fs.mkdirSync(workspace, { recursive: true });
+    const repoA = createRepo('workspace/repo-a');
+    const repoB = createRepo('workspace/repo-b');
+    const home = path.join(temp, 'home');
+    fs.mkdirSync(home, { recursive: true });
+    const env = isolatedEnv(home);
+
+    // Session 1 (cwd = parent non-git workspace) edits files in both repoA and repoB
+    const preA = runCli(['hook', 'pre', '--client', 'claude', '--auto'], workspace, env, {
+      session_id: 'sess-multi-1',
+      cwd: workspace,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(repoA, 'src/shared.ts') },
+    });
+    expect(preA.status, preA.stderr).toBe(0);
+
+    const preB = runCli(['hook', 'pre', '--client', 'claude', '--auto'], workspace, env, {
+      session_id: 'sess-multi-1',
+      cwd: workspace,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(repoB, 'src/other.ts') },
+    });
+    expect(preB.status, preB.stderr).toBe(0);
+
+    // Running `kith status --human` in the parent non-git workspace aggregates both child repos
+    const wsStatus = runCli(['status', '--human'], workspace, env);
+    expect(wsStatus.status).toBe(0);
+    expect(wsStatus.stdout).toContain('Kith workspace');
+    expect(wsStatus.stdout).toContain('repo-a');
+    expect(wsStatus.stdout).toContain('repo-b');
+    expect(wsStatus.stdout).toContain('claude:sess-multi-1');
+
+    // Session 2 (cwd = parent workspace) tries to edit repoA/src/shared.ts -> blocked because Session 1's repoA presence was preserved!
+    const preA2 = runCli(['hook', 'pre', '--client', 'claude', '--auto'], workspace, env, {
+      session_id: 'sess-multi-2',
+      cwd: workspace,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(repoA, 'src/shared.ts') },
+    });
+    expect(preA2.status).toBe(2);
+    expect(preA2.stderr).toContain('conflicts with a claim');
+
+    // Running `kith brief` in the parent workspace now shows the active promoted sessions in repoA
+    const wsBrief = runCli(['brief'], workspace, env);
+    expect(wsBrief.status).toBe(0);
+    expect(wsBrief.stdout).toContain('repo-a');
+    expect(wsBrief.stdout).toContain('Active (2)');
+  });
 });

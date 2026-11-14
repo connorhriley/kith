@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { FencingAndAgentManager } from '../core/fencing.js';
 import type { GcReport } from '../core/gc.js';
 import type { TaskRecord } from '../core/intents.js';
 import type { InstallReport } from './install.js';
@@ -76,7 +77,13 @@ export function formatStatusHuman(state: Record<string, any>): string {
   const mode = state.workflowMode ?? 'worktrees';
   const modeLabel = state.workflowModeConfigured === false && state.state === 'ready' ? `${mode} mode (default, unset)` : `${mode} mode`;
   const agents = Array.isArray(state.agents) ? state.agents : [];
-  const activeAgents = agents.filter((a: any) => a.status === 'active');
+  const activeAgents = agents.filter((a: any) => {
+    if (a.status !== 'active') return false;
+    if (typeof a.id === 'string' && a.id.startsWith('auto-') && a.pid && a.pid_start_time) {
+      return FencingAndAgentManager.isProcessAlive(a.pid, a.pid_start_time);
+    }
+    return true;
+  });
   const locks = Array.isArray(state.locks) ? state.locks : [];
   const tasks = Array.isArray(state.tasks) ? state.tasks : [];
   const openTasks = tasks.filter((t: any) => t.status !== 'done');
