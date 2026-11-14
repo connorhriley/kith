@@ -3,6 +3,7 @@ import { KithEngine } from '../core/engine.js';
 import { SessionOwnershipError } from '../core/fencing.js';
 import { AGENT_HANDOFF_KINDS, handoffBlock, type WriteHandoffParams } from '../core/handoffs.js';
 import { parseWorkflowMode, WORKFLOW_MODES } from '../core/mode.js';
+import { extractRecentAgentFiles } from '../core/observation.js';
 import { listRepoPresence, resolveHomeDir } from './auto-session.js';
 import { interruptible } from './flags.js';
 import { formatStatusHuman, formatTasksHuman, shouldUseHumanOutput } from './format.js';
@@ -14,7 +15,7 @@ const ENGINE_COMMANDS = [
 
 const SUBCOMMANDS: Record<string, string[]> = {
   session: ['start', 'end', 'clear'],
-  task: ['add', 'claim', 'list'],
+  task: ['add', 'claim', 'done', 'clear', 'list'],
   lock: ['acquire', 'release', 'list'],
   contract: ['publish', 'list'],
   worktree: ['spawn', 'remove', 'list', 'preview'],
@@ -188,7 +189,15 @@ export async function runEngineCommand(params: {
       const presencePeers = engine.coordDb.commonGitDir
         ? listRepoPresence(resolveHomeDir(), engine.coordDb.commonGitDir)
         : [];
-      const enriched = presencePeers.length ? { ...state, presencePeers } : state;
+      const eventRows = engine.coordDb.db
+        .prepare("SELECT agent_id, event_type, payload_json FROM events WHERE event_type IN ('locks_acquired','contracts_updated','contract_breaking_change') ORDER BY id DESC LIMIT 200")
+        .all() as Array<{ agent_id: string; event_type: string; payload_json: string }>;
+      const recentAgentFiles = extractRecentAgentFiles(eventRows);
+      const enriched = {
+        ...state,
+        recentAgentFiles,
+        ...(presencePeers.length ? { presencePeers } : {}),
+      };
       console.log(shouldUseHumanOutput(flags) ? formatStatusHuman(enriched) : JSON.stringify(enriched, null, 2));
       return;
     }
@@ -251,6 +260,39 @@ export async function runEngineCommand(params: {
         if (!res) { if (!sessionToken) engine.fencing.abandonAgentSession(agentId); return; }
         console.log(JSON.stringify({ ...res, sessionToken: session.sessionToken }, null, 2));
         process.exitCode = res.claimed ? 0 : 1;
+        return;
+      }
+      if (subCmd === 'done') {
+        const targetId = positional[2] ?? (typeof flags.id === 'string' ? flags.id : undefined);
+        if (!targetId) throw new Error('Expected task id: kith task done <task-id>');
+        const existing = engine.coordDb.db.prepare('SELECT id FROM tasks WHERE id = ?').get(targetId) as { id: string } | undefined;
+        if (!existing) throw new Error(`Task not found: ${targetId}`);
+        engine.coordDb.withTransaction(() => {
+          engine.coordDb.db.prepare("UPDATE tasks SET status = 'done', owner_agent_id = NULL, updated_at = ? WHERE id = ?").run(Date.now(), targetId);
+          engine.coordDb.db.prepare("DELETE FROM handoffs WHERE task_id = ? AND source = 'auto' AND kind = 'abandoned'").run(targetId);
+        });
+        console.log(shouldUseHumanOutput(flags) ? `Marked task ${targetId} done.` : JSON.stringify({ ok: true, id: targetId, status: 'done' }, null, 2));
+        return;
+      }
+      if (subCmd === 'clear') {
+        const targetId = positional[2] ?? (typeof flags.id === 'string' ? flags.id : undefined);
+        const clearAll = Boolean(flags.all) || !targetId;
+        let cleared = 0;
+        engine.coordDb.withTransaction(() => {
+          if (!clearAll && targetId) {
+            engine.coordDb.db.prepare('DELETE FROM handoffs WHERE task_id = ?').run(targetId);
+            cleared = Number(engine.coordDb.db.prepare('DELETE FROM tasks WHERE id = ?').run(targetId).changes);
+          } else {
+            const ids = (engine.coordDb.db.prepare("SELECT id FROM tasks WHERE status = 'queued'").all() as Array<{ id: string }>).map(r => r.id);
+            for (const id of ids) {
+              engine.coordDb.db.prepare('DELETE FROM handoffs WHERE task_id = ?').run(id);
+              cleared += Number(engine.coordDb.db.prepare('DELETE FROM tasks WHERE id = ?').run(id).changes);
+            }
+          }
+        });
+        console.log(shouldUseHumanOutput(flags)
+          ? (clearAll ? `Cleared ${cleared} queued task(s).` : (cleared ? `Cleared task ${targetId}.` : `Task not found: ${targetId}`))
+          : JSON.stringify({ ok: true, cleared, ...(clearAll ? { allQueued: true } : { id: targetId }) }, null, 2));
         return;
       }
       const tasks = engine.intents.listTasks();

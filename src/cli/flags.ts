@@ -4,7 +4,7 @@ const BOOLEAN_FLAGS = new Set([
   'worktree', 'wait', 'raw', 'dry-run', 'help', 'version', 'shell', 'new', 'mcp-only',
   'offline', 'once', 'json', 'quiet', 'no-notify', 'no-radar', 'require-session',
   'release', 'all', 'refresh-guidance', 'compact', 'full', 'human', 'no-hooks', 'force',
-  'project', 'main', 'keep', 'auto', 'no-autostart', 'live', 'global', 'include-presence', 'conflicts',
+  'project', 'main', 'keep', 'auto', 'no-autostart', 'live', 'global', 'include-presence', 'conflicts', 'watch',
 ]);
 
 export function parseFlags(argv: string[]): {
@@ -48,6 +48,8 @@ export function parseFlags(argv: string[]): {
       const val = arg.slice(3);
       flags.m = val;
       flags.message = val;
+    } else if (arg === '-w') {
+      flags.watch = true;
     } else {
       positional.push(arg);
     }
@@ -82,7 +84,7 @@ Zero-config safety net for parallel coding agents. Runs locally via MCP and pass
 Usage:
   kith                                        Show status in a terminal (or help when piped)
   kith install [dir]                          Install --compact MCP, global hooks, and macOS autostart
-  kith status                                 Show active agents, locks, conflicts, and tasks
+  kith status [-w|--watch]                    Show active agents, locks, conflicts, and tasks
   kith brief [--scope <globs>]                Quick summary for a new session or subagent
   kith commit -m <msg> [files...]             Commit only your recorded/specified files via a temp index
   kith run [--scope <g>] [--worktree] -- <cmd> Launch an agent/command inside a managed worktree session
@@ -108,7 +110,7 @@ Low-level coordination & plumbing commands:
   kith heartbeat --agent <id>                            Renew session lease
   kith begin --agent <id> --title <t> --scope <g>        Declare task intent & acquire scope locks
   kith complete --agent <id> [--merge] [--verify <cmd>]  Integrate branch & run verification
-  kith task add|claim|list                               Manage task queue
+  kith task add|claim|done|clear|list                    Manage task queue
   kith lock acquire|release|list                         Manage file/glob locks
   kith contract publish|list                             Manage shared contract signatures
   kith worktree spawn|remove|list|preview                Manage isolated Git worktrees

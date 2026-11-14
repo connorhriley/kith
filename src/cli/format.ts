@@ -84,10 +84,7 @@ function formatRelativeAge(ts: number | undefined, now: number): string {
   return `${Math.floor(diffHr / 24)}d ago`;
 }
 
-export function formatStatusHuman(state: Record<string, any>): string {
-  const repoRoot = state.repository?.root ?? state.repository ?? process.cwd();
-  const mode = state.workflowMode ?? 'worktrees';
-  const modeLabel = state.workflowModeConfigured === false && state.state === 'ready' ? `${mode} mode (default, unset)` : `${mode} mode`;
+function summarizeStatus(state: Record<string, any>) {
   const agents = Array.isArray(state.agents) ? state.agents : [];
   const activeAgents = agents.filter((a: any) => {
     if (a.status !== 'active') return false;
@@ -106,10 +103,6 @@ export function formatStatusHuman(state: Record<string, any>): string {
   const conflicts = Array.isArray(state.conflicts) ? state.conflicts : [];
   const handoffs = Array.isArray(state.handoffs) ? state.handoffs : [];
   const presencePeers = Array.isArray(state.presencePeers) ? state.presencePeers : [];
-
-  const lines: string[] = [
-    `Kith · ${repoRoot} · ${modeLabel}${state.state ? ` · ${state.state}` : ''}`,
-  ];
   const activePids = new Set(activeAgents.map((a: any) => a.pid));
   const activeAgentIds = new Set(activeAgents.map((a: any) => a.id));
   const extraPresence = presencePeers.filter(
@@ -118,6 +111,55 @@ export function formatStatusHuman(state: Record<string, any>): string {
       (!p.agentId || !activeAgentIds.has(p.agentId)) &&
       !activeAgents.some((a: any) => typeof a.pid === 'number' && typeof p.pid === 'number' && ownedByCaller(a.pid, p.pid))
   );
+  return { activeAgents, extraPresence, locks, openTasks, conflicts, handoffs, presencePeers, now };
+}
+
+export function isStatusIdle(state: Record<string, any>): boolean {
+  const s = summarizeStatus(state);
+  return (
+    s.activeAgents.length === 0 &&
+    s.extraPresence.length === 0 &&
+    s.locks.length === 0 &&
+    s.openTasks.length === 0 &&
+    s.conflicts.length === 0
+  );
+}
+
+export function formatWorkspaceStatusHuman(
+  workspaceRoot: string,
+  children: Array<{ state: Record<string, any> }>
+): string {
+  const blocks: string[] = [`Kith workspace · ${workspaceRoot} (${children.length} repositories)`];
+  const idleNames: string[] = [];
+  for (const child of children) {
+    const hasPresence = Array.isArray(child.state.presencePeers) && child.state.presencePeers.length > 0;
+    if (child.state.state !== 'ready' && !hasPresence) continue;
+    if (isStatusIdle(child.state)) {
+      const rootPath = String(child.state.repository?.root ?? child.state.repository ?? '');
+      idleNames.push(path.basename(rootPath) || rootPath);
+    } else {
+      blocks.push(formatStatusHuman(child.state));
+    }
+  }
+  if (idleNames.length > 0) {
+    blocks.push(`Idle repos (${idleNames.length}): ${idleNames.join(', ')}`);
+  }
+  if (blocks.length === 1 || (blocks.length === 2 && idleNames.length > 0 && blocks.length - 1 === 1 && !children.some(c => (c.state.state === 'ready' || (Array.isArray(c.state.presencePeers) && c.state.presencePeers.length > 0)) && !isStatusIdle(c.state)))) {
+    blocks.push('Active agents: none across all repositories');
+  }
+  return blocks.join('\n\n');
+}
+
+export function formatStatusHuman(state: Record<string, any>): string {
+  const repoRoot = state.repository?.root ?? state.repository ?? process.cwd();
+  const mode = state.workflowMode ?? 'worktrees';
+  const modeLabel = state.workflowModeConfigured === false && state.state === 'ready' ? `${mode} mode (default, unset)` : `${mode} mode`;
+  const { activeAgents, extraPresence, locks, openTasks, conflicts, handoffs, presencePeers, now } = summarizeStatus(state);
+  const recentAgentFiles = (state.recentAgentFiles ?? {}) as Record<string, string[]>;
+
+  const lines: string[] = [
+    `Kith · ${repoRoot} · ${modeLabel}${state.state ? ` · ${state.state}` : ''}`,
+  ];
   if (activeAgents.length || extraPresence.length) {
     lines.push(`Active sessions (${activeAgents.length + extraPresence.length}):`);
     for (const a of activeAgents) {
@@ -128,14 +170,24 @@ export function formatStatusHuman(state: Record<string, any>): string {
           (p.agentId && p.agentId === a.id) ||
           (typeof a.pid === 'number' && typeof p.pid === 'number' && ownedByCaller(a.pid, p.pid))
       );
-      const files = peer && Array.isArray(peer.touchedFiles) && peer.touchedFiles.length
-        ? ` · touched: ${peer.touchedFiles.slice(0, 4).join(', ')}`
-        : '';
+      const activeList = peer?.touchedFiles?.length
+        ? { label: 'touched', list: peer.touchedFiles }
+        : peer?.recentFiles?.length
+          ? { label: 'recent', list: peer.recentFiles }
+          : Array.isArray(recentAgentFiles[a.id]) && recentAgentFiles[a.id].length
+            ? { label: 'recent', list: recentAgentFiles[a.id] }
+            : null;
+      const files = activeList ? ` · ${activeList.label}: ${activeList.list.slice(0, 4).join(', ')}` : '';
       const age = formatRelativeAge(peer?.lastSeenAt ?? a.last_heartbeat_at, now);
       lines.push(`  - ${a.id} [${a.client ?? 'unknown'}, pid ${a.pid}${age ? ` · ${age}` : ''}]${wt}${a.branch ? ` (${a.branch})` : ''}${files}`);
     }
     for (const p of extraPresence) {
-      const files = Array.isArray(p.touchedFiles) && p.touchedFiles.length ? ` · touched: ${p.touchedFiles.slice(0, 4).join(', ')}` : '';
+      const activeList = Array.isArray(p.touchedFiles) && p.touchedFiles.length
+        ? { label: 'touched', list: p.touchedFiles }
+        : Array.isArray(p.recentFiles) && p.recentFiles.length
+          ? { label: 'recent', list: p.recentFiles }
+          : null;
+      const files = activeList ? ` · ${activeList.label}: ${activeList.list.slice(0, 4).join(', ')}` : '';
       const age = formatRelativeAge(p.lastSeenAt, now);
       lines.push(`  - ${p.sessionKey} [${p.client ?? 'auto'}, pid ${p.pid}${age ? ` · ${age}` : ''}]${files}`);
     }

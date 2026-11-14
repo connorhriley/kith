@@ -60,6 +60,20 @@ function gitIsMerged(repoRoot: string, commit: string): boolean {
   }
 }
 
+function gitHasCommitSince(repoRoot: string, sinceMs: number, files: string[]): boolean {
+  if (!files.length) return false;
+  try {
+    const out = execFileSync(
+      'git',
+      ['log', '-1', '--format=%H', `--since=@${Math.floor(sinceMs / 1000)}`, '--', ...files],
+      { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    ).trim();
+    return out.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Resyncs `.git/index` entries that drifted behind `HEAD` after temporary-index `update-ref` commits
  * without touching any files in the working tree.
@@ -138,9 +152,20 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
     const activeWorktreePaths = new Set(
       activeAgents.map(a => a.worktree_path).filter((p): p is string => Boolean(p)).map(p => physicalPath(p))
     );
-    const openHandoffs = engine.handoffs
+    const rawOpenHandoffs = engine.handoffs
       .unresolved(500)
       .filter(h => !(h.task_id === null && h.summary === 'Session stopped with uncommitted changes.'));
+    const queuedTaskIds = new Set(
+      (engine.coordDb.db.prepare("SELECT id FROM tasks WHERE status = 'queued'").all() as Array<{ id: string }>).map(r => r.id)
+    );
+    const resolvedAutoHandoffs = rawOpenHandoffs.filter((h) => {
+      if (h.source !== 'auto' || h.kind !== 'abandoned' || !h.task_id || !queuedTaskIds.has(h.task_id)) return false;
+      if (h.branch && h.branch.startsWith('kith/') && !gitIsMerged(layout.checkoutRoot, h.branch)) return false;
+      return force || gitHasCommitSince(layout.checkoutRoot, h.created_at, h.files);
+    });
+    const resolvedAutoHandoffIds = new Set(resolvedAutoHandoffs.map(h => h.id));
+    const resolvedAutoTaskIds = new Set(resolvedAutoHandoffs.map(h => h.task_id!));
+    const openHandoffs = rawOpenHandoffs.filter(h => !resolvedAutoHandoffIds.has(h.id));
     // Only explicit agent-written handoffs pin clean/merged worktrees; auto-captured crash handoffs rely on dirty/unmerged checks.
     const explicitHandoffs = openHandoffs.filter(h => h.source === 'agent');
     const handoffWorktrees = new Set(
@@ -239,7 +264,11 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
       const doneRows = engine.coordDb.db.prepare(
         "SELECT id FROM tasks WHERE status IN ('done', 'queued') AND updated_at < ?"
       ).all(cutoff) as Array<{ id: string }>;
-      report.prunedDoneTasks = doneRows.filter(r => !pinnedTaskIds.has(r.id)).length;
+      const prunedTaskSet = new Set([
+        ...doneRows.filter(r => !pinnedTaskIds.has(r.id)).map(r => r.id),
+        ...resolvedAutoTaskIds,
+      ]);
+      report.prunedDoneTasks = prunedTaskSet.size;
       report.prunedOldEvents = Number(
         (engine.coordDb.db.prepare('SELECT COUNT(*) AS n FROM events WHERE timestamp < ?').get(cutoff) as { n: number }).n
       );
@@ -255,11 +284,18 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
         report.prunedOperations = Number(
           engine.coordDb.db.prepare('DELETE FROM mcp_operations WHERE created_at < ?').run(cutoff).changes
         );
+        for (const hid of resolvedAutoHandoffIds) {
+          engine.coordDb.db.prepare('DELETE FROM handoffs WHERE id = ?').run(hid);
+        }
         const doneIds = (
           engine.coordDb.db.prepare("SELECT id FROM tasks WHERE status IN ('done', 'queued') AND updated_at < ?").all(cutoff) as Array<{ id: string }>
         ).map(r => r.id).filter(id => !pinnedTaskIds.has(id));
-        for (const id of doneIds) {
-          engine.coordDb.db.prepare("DELETE FROM tasks WHERE id = ?").run(id);
+        const pruneTaskIds = new Set([...doneIds, ...resolvedAutoTaskIds]);
+        for (const id of pruneTaskIds) {
+          if (resolvedAutoTaskIds.has(id)) {
+            engine.coordDb.db.prepare('DELETE FROM handoffs WHERE task_id = ?').run(id);
+          }
+          engine.coordDb.db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
           report.prunedDoneTasks++;
         }
         report.prunedOldEvents = Number(

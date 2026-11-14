@@ -14,6 +14,39 @@ import { HANDOFF_SELECT, rowToHandoff, type HandoffRecord } from './handoff-stor
 import { workflowModeFrom, type WorkflowMode } from './mode.js';
 import { buildBrief, type Brief } from './brief.js';
 
+export function extractRecentAgentFiles(
+  rows: Array<{ agent_id: string; event_type: string; payload_json: string }>
+): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  for (const row of rows) {
+    const agentId = row.agent_id;
+    if (!agentId) continue;
+    let payload: Record<string, any>;
+    try {
+      payload = JSON.parse(String(row.payload_json ?? '{}')) as Record<string, any>;
+    } catch {
+      continue;
+    }
+    const candidates: string[] = [];
+    if (typeof payload.filePath === 'string' && payload.filePath) {
+      candidates.push(payload.filePath);
+    }
+    if (Array.isArray(payload.patterns)) {
+      for (const p of payload.patterns) {
+        if (typeof p === 'string' && p) candidates.push(p);
+      }
+    }
+    const current = result[agentId] ?? (result[agentId] = []);
+    for (const raw of candidates) {
+      const cleaned = raw.startsWith('file:') ? raw.slice(5) : raw;
+      if (!cleaned || cleaned.includes('*') || current.includes(cleaned)) continue;
+      current.push(cleaned);
+      if (current.length >= 5) break;
+    }
+  }
+  return result;
+}
+
 /** Copies a consistent stopped-state set before opening SQLite, so even SHM reconstruction cannot touch original recovery files. */
 export function readCoordinationState(directory = process.cwd(), options: { ownersOnly?: boolean; coordinationOnly?: boolean } = {}) {
   const layout = discoverRepository(directory), observedAt = Date.now();
@@ -22,7 +55,7 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     sessionEpochs: {} as Record<string, number>, truncated: false, schemaVersion: 0, fencingEpoch: 0, agents: [] as AgentRecord[], tasks: [] as Record<string,unknown>[], locks: [] as Record<string,unknown>[],
     conflicts: [] as Record<string,unknown>[], contracts: [] as Record<string,unknown>[], resources: [] as Record<string,unknown>[],
     mergeQueue: [] as Record<string,unknown>[], quarantined: [] as Record<string,unknown>[], mutexWaiters: [] as Record<string,unknown>[],
-    commandGuards: [] as Record<string,unknown>[], events: [] as Record<string,unknown>[], workspaces: [] as ReturnType<typeof observeWorkspaces>,
+    commandGuards: [] as Record<string,unknown>[], events: [] as Record<string,unknown>[], recentAgentFiles: {} as Record<string, string[]>, workspaces: [] as ReturnType<typeof observeWorkspaces>,
     handoffs: [] as HandoffRecord[], workflowMode: 'worktrees' as WorkflowMode, workflowModeConfigured: false };
   let scratch: string | undefined, db: Database | undefined;
   try {
@@ -62,6 +95,9 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     const workflowModeConfigured = rawMode === 'main' || rawMode === 'worktrees';
     const workflowMode = workflowModeFrom(rawMode);
     const agents=all<AgentRecord>('SELECT * FROM agents ORDER BY registered_at DESC' + (options.coordinationOnly ? ' LIMIT 201' : ''));
+    const recentAgentFiles = !options.ownersOnly
+      ? extractRecentAgentFiles(all<{agent_id:string;event_type:string;payload_json:string}>("SELECT agent_id, event_type, payload_json FROM events WHERE event_type IN ('locks_acquired','contracts_updated','contract_breaking_change') ORDER BY id DESC LIMIT 200"))
+      : {};
     if (options.coordinationOnly) {
       const tasks = all("SELECT * FROM tasks WHERE status IN ('active','blocked','queued') ORDER BY priority DESC, updated_at DESC LIMIT 201").map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))}));
       const locks = all('SELECT * FROM locks WHERE expires_at > '+observedAt+' ORDER BY acquired_at DESC LIMIT 501');
@@ -72,7 +108,7 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
       const sessionEpochs = Object.fromEntries(all<{agent_id:string;epoch:number}>('SELECT s.agent_id,s.epoch FROM agent_sessions s JOIN agents a ON s.agent_id=a.id ORDER BY a.registered_at DESC LIMIT 201').map(r=>[r.agent_id,r.epoch]));
       const conflicts = all('SELECT * FROM conflicts ORDER BY detected_at DESC LIMIT 51').map(({details_json,...r})=>({...r,details:JSON.parse(String(details_json))}));
       db.exec('COMMIT');
-      return {...empty,state:'ready' as const,schemaVersion,agents,sessionEpochs,tasks,locks,conflicts,handoffs,workflowMode,workflowModeConfigured,resources,mutexWaiters,commandGuards,mergeQueue,
+      return {...empty,state:'ready' as const,schemaVersion,agents,sessionEpochs,tasks,locks,conflicts,handoffs,workflowMode,workflowModeConfigured,resources,mutexWaiters,commandGuards,mergeQueue,recentAgentFiles,
         truncated:[agents,tasks,resources,mutexWaiters,commandGuards,mergeQueue].some(rows=>rows.length>200)||locks.length>500};
     }
     if (options.ownersOnly) { db.exec('COMMIT'); return { ...empty, state: 'ready' as const, schemaVersion, agents }; }
@@ -87,6 +123,7 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
       mutexWaiters:all('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket'),
       commandGuards:all('SELECT mutex_name,owner_agent_id,worker_pid,supervisor_pid FROM mutex_runs ORDER BY mutex_name'),
       events:all('SELECT * FROM events ORDER BY id DESC LIMIT 100').map(({payload_json,...r})=>({...r,payload:JSON.parse(String(payload_json))})),
+      recentAgentFiles,
       workspaces:options.coordinationOnly ? [] : observeWorkspaces(layout.checkoutRoot,agents,observedAt),
     };
     db.exec('COMMIT'); return state;
@@ -104,10 +141,21 @@ export function readBrief(directory = process.cwd(), options: { scopeGlobs?: str
   const tasks = (state.tasks as Array<Record<string, any>>).map(task => ({ id: String(task.id), title: String(task.title), status: String(task.status),
     owner_agent_id: (task.owner_agent_id as string | null) ?? null, scope_globs: (task.scope_globs as string[]) ?? [], priority: Number(task.priority), updated_at: Number(task.updated_at) }));
   const locks = (state.locks as Array<Record<string, any>>).map(lock => ({ owner_agent_id: String(lock.owner_agent_id), pattern: String(lock.pattern), mode: String(lock.mode), expires_at: Number(lock.expires_at) }));
-  const agents: Array<Pick<AgentRecord, 'id' | 'client' | 'status' | 'lease_expires_at' | 'last_heartbeat_at'>> = [];
+  const agents: Array<Pick<AgentRecord, 'id' | 'client' | 'status' | 'lease_expires_at' | 'last_heartbeat_at'> & { recentFiles?: string[] }> = [];
+  const peers = state.state === 'ready' && state.repository.commonGitDir
+    ? listRepoPresence(undefined, state.repository.commonGitDir)
+    : [];
   const seenAgentIds = new Set<string>();
   const seenPids = new Set<number>();
   for (const agent of state.agents) {
+    const matchPeer = peers.find(
+      p => p.pid === agent.pid || p.agentId === agent.id || ownedByCaller(agent.pid, p.pid)
+    );
+    const recentFiles = matchPeer?.touchedFiles?.length
+      ? matchPeer.touchedFiles
+      : matchPeer?.recentFiles?.length
+        ? matchPeer.recentFiles
+        : state.recentAgentFiles[agent.id];
     if (agent.status === 'active' && agent.id.startsWith('auto-')) {
       const alive = FencingAndAgentManager.isProcessAlive(agent.pid, agent.pid_start_time);
       if (alive) {
@@ -115,6 +163,7 @@ export function readBrief(directory = process.cwd(), options: { scopeGlobs?: str
         seenPids.add(agent.pid);
         agents.push({
           ...agent,
+          ...(recentFiles?.length ? { recentFiles } : {}),
           lease_expires_at: Math.max(agent.lease_expires_at, state.observedAt + 60_000),
         });
         continue;
@@ -129,10 +178,12 @@ export function readBrief(directory = process.cwd(), options: { scopeGlobs?: str
       seenAgentIds.add(agent.id);
       seenPids.add(agent.pid);
     }
-    agents.push(agent);
+    agents.push({
+      ...agent,
+      ...(recentFiles?.length ? { recentFiles } : {}),
+    });
   }
-  if (state.state === 'ready' && state.repository.commonGitDir) {
-    const peers = listRepoPresence(undefined, state.repository.commonGitDir);
+  if (peers.length) {
     for (const peer of peers) {
       const cleanClient = peer.client.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase() || 'agent';
       const hash = crypto.createHash('sha1').update(peer.sessionKey).digest('hex').slice(0, 8);
@@ -148,12 +199,18 @@ export function readBrief(directory = process.cwd(), options: { scopeGlobs?: str
       }
       seenAgentIds.add(resolvedId);
       seenPids.add(peer.pid);
+      const recentFiles = peer.touchedFiles.length
+        ? peer.touchedFiles
+        : peer.recentFiles.length
+          ? peer.recentFiles
+          : state.recentAgentFiles[resolvedId];
       agents.push({
         id: resolvedId,
         client: peer.client,
         status: 'active',
         lease_expires_at: state.observedAt + 60_000,
         last_heartbeat_at: peer.lastSeenAt,
+        ...(recentFiles?.length ? { recentFiles } : {}),
       });
     }
   }

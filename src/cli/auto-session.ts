@@ -47,6 +47,7 @@ function openSqlite(filePath: string): SqliteDatabaseSync {
       client TEXT NOT NULL,
       pid INTEGER NOT NULL,
       touched_files_json TEXT NOT NULL DEFAULT '[]',
+      recent_files_json TEXT NOT NULL DEFAULT '[]',
       created_at INTEGER NOT NULL,
       last_seen_at INTEGER NOT NULL,
       PRIMARY KEY (repo_common_dir, session_key)
@@ -61,6 +62,13 @@ function openSqlite(filePath: string): SqliteDatabaseSync {
       PRIMARY KEY (repo_common_dir, session_key)
     );
   `);
+  const colsAfter = db.prepare('PRAGMA table_info(presence)').all() as Array<{ name: string }>;
+  if (!colsAfter.some((c) => c.name === 'recent_files_json')) {
+    db.exec(`
+      ALTER TABLE presence ADD COLUMN recent_files_json TEXT NOT NULL DEFAULT '[]';
+      UPDATE presence SET recent_files_json = touched_files_json WHERE recent_files_json = '[]';
+    `);
+  }
   return db;
 }
 
@@ -72,6 +80,7 @@ export interface ActivePresence {
   client: string;
   pid: number;
   touchedFiles: string[];
+  recentFiles: string[];
   createdAt: number;
   lastSeenAt: number;
 }
@@ -214,10 +223,18 @@ function withPresenceDb<T>(home: string | undefined, create: boolean, fn: (db: S
 
 function rowToPresence(row: Record<string, any>): ActivePresence {
   let touchedFiles: string[] = [];
+  let recentFiles: string[] = [];
   try {
     const parsed = JSON.parse(String(row.touched_files_json ?? '[]'));
     if (Array.isArray(parsed)) touchedFiles = parsed.filter((x): x is string => typeof x === 'string');
   } catch { /* ignore malformed json */ }
+  try {
+    const parsedRecent = JSON.parse(String(row.recent_files_json ?? '[]'));
+    if (Array.isArray(parsedRecent)) recentFiles = parsedRecent.filter((x): x is string => typeof x === 'string');
+  } catch { /* ignore malformed json */ }
+  if (recentFiles.length === 0 && touchedFiles.length > 0) {
+    recentFiles = [...touchedFiles];
+  }
   const sessionKey = String(row.session_key);
   const client = String(row.client);
   const agentId = typeof row.agent_id === 'string' && row.agent_id
@@ -231,6 +248,7 @@ function rowToPresence(row: Record<string, any>): ActivePresence {
     client,
     pid: Number(row.pid),
     touchedFiles,
+    recentFiles,
     createdAt: Number(row.created_at),
     lastSeenAt: Number(row.last_seen_at),
   };
@@ -288,26 +306,38 @@ export function recordPresence(
   const now = Date.now();
   return withPresenceDb(home, true, (db) => {
     pruneDeadPresence(db, now);
-    const existing = db.prepare('SELECT touched_files_json, created_at FROM presence WHERE repo_common_dir = ? AND session_key = ?')
-      .get(params.repoCommonDir, params.sessionKey) as { touched_files_json?: string; created_at?: number } | undefined;
+    const existing = db.prepare('SELECT touched_files_json, recent_files_json, created_at FROM presence WHERE repo_common_dir = ? AND session_key = ?')
+      .get(params.repoCommonDir, params.sessionKey) as { touched_files_json?: string; recent_files_json?: string; created_at?: number } | undefined;
     let touched: string[] = [];
+    let recent: string[] = [];
     if (!params.clearTouchedFiles && existing?.touched_files_json) {
       try {
         const parsed = JSON.parse(existing.touched_files_json);
         if (Array.isArray(parsed)) touched = parsed.filter((x): x is string => typeof x === 'string');
       } catch { /* ignore */ }
     }
+    const rawRecent = existing?.recent_files_json && existing.recent_files_json !== '[]'
+      ? existing.recent_files_json
+      : existing?.touched_files_json;
+    if (rawRecent) {
+      try {
+        const parsedRecent = JSON.parse(rawRecent);
+        if (Array.isArray(parsedRecent)) recent = parsedRecent.filter((x): x is string => typeof x === 'string');
+      } catch { /* ignore */ }
+    }
     if (params.filePath) {
       touched = [params.filePath, ...touched.filter(f => f !== params.filePath)].slice(0, 50);
+      recent = [params.filePath, ...recent.filter(f => f !== params.filePath)].slice(0, 10);
     }
     db.prepare(`
-      INSERT INTO presence (session_key, repo_common_dir, checkout_root, client, pid, touched_files_json, created_at, last_seen_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO presence (session_key, repo_common_dir, checkout_root, client, pid, touched_files_json, recent_files_json, created_at, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(repo_common_dir, session_key) DO UPDATE SET
         checkout_root = excluded.checkout_root,
         client = excluded.client,
         pid = excluded.pid,
         touched_files_json = excluded.touched_files_json,
+        recent_files_json = excluded.recent_files_json,
         last_seen_at = excluded.last_seen_at
     `).run(
       params.sessionKey,
@@ -316,6 +346,7 @@ export function recordPresence(
       params.client,
       params.pid,
       JSON.stringify(touched),
+      JSON.stringify(recent),
       existing?.created_at ?? now,
       now
     );

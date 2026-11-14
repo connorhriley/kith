@@ -17,7 +17,7 @@ export interface BriefInput {
   /** false when the repository has no Kith state yet. */
   available: boolean;
   error?: string;
-  agents: Array<Pick<AgentRecord, 'id' | 'client' | 'status' | 'lease_expires_at' | 'last_heartbeat_at'>>;
+  agents: Array<Pick<AgentRecord, 'id' | 'client' | 'status' | 'lease_expires_at' | 'last_heartbeat_at'> & { recentFiles?: string[] }>;
   tasks: Array<{ id: string; title: string; status: string; owner_agent_id: string | null; scope_globs: string[]; priority: number; updated_at?: number }>;
   locks: Array<{ owner_agent_id: string; pattern: string; mode: string; expires_at: number }>;
   conflicts: Array<{ agent_a: string; agent_b: string; file_path: string; severity: string }>;
@@ -26,7 +26,7 @@ export interface BriefInput {
 
 export interface BriefAgent {
   agentId: string; client: string; state: 'live' | 'stale'; lastSeenMs: number;
-  tasks: Array<{ id: string; title: string; scope: string[] }>; claims: number;
+  tasks: Array<{ id: string; title: string; scope: string[] }>; claims: number; recentFiles?: string[];
 }
 
 export interface BriefHandoff extends CompactHandoff { ageMs: number; moreItems?: boolean }
@@ -74,7 +74,8 @@ export function buildBrief(input: BriefInput, options: { scopeGlobs?: string[]; 
     const claims = locksOf(agent.id);
     if (scope && !tasks.length && !overlaps(scope, claims.map(lock => lock.pattern))) continue;
     active.push({ agentId: agent.id, client: agent.client, state, lastSeenMs: Math.max(0, now - agent.last_heartbeat_at),
-      tasks: tasks.map(task => ({ id: task.id, title: task.title, scope: task.scope_globs.slice(0, 5) })), claims: claims.length });
+      tasks: tasks.map(task => ({ id: task.id, title: task.title, scope: task.scope_globs.slice(0, 5) })), claims: claims.length,
+      ...(agent.recentFiles?.length ? { recentFiles: agent.recentFiles.slice(0, 4) } : {}) });
   }
   active.sort((a, b) => Number(b.state === 'live') - Number(a.state === 'live') || a.lastSeenMs - b.lastSeenMs);
 
@@ -127,7 +128,11 @@ export function formatBrief(brief: Brief, options: { quiet?: boolean } = {}): st
   if (brief.active.length) {
     lines.push(`Active (${brief.active.length})`);
     for (const agent of brief.active) {
-      const work = agent.tasks.length ? agent.tasks.map(task => `"${task.title}" on ${shortScope(task.scope) || 'unscoped work'}`).join('; ') : `${agent.claims} claim(s)`;
+      const work = agent.tasks.length
+        ? agent.tasks.map(task => `"${task.title}" on ${shortScope(task.scope) || 'unscoped work'}`).join('; ')
+        : agent.claims === 0 && agent.recentFiles?.length
+          ? `0 claim(s) · recent: ${shortScope(agent.recentFiles)}`
+          : `${agent.claims} claim(s)`;
       const status = agent.state === 'live' ? 'live' : `lease expired, last seen ${humanAge(agent.lastSeenMs)}`;
       lines.push(`  • ${agent.agentId}${agent.client ? ` [${agent.client}]` : ''} · ${status} · ${work}`);
     }

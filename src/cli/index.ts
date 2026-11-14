@@ -14,8 +14,8 @@ import { clearAutoSession, listRepoPresence, resolveHomeDir } from './auto-sessi
 import { bootoutHostAutostart } from './autostart.js';
 import { runEngineCommand } from './coord-commands.js';
 import { doctorReport } from './doctor.js';
-import { parseFlags, printHelp } from './flags.js';
-import { formatDoctorHuman, formatGcHuman, formatInstallHuman, formatStatusHuman, shouldUseHumanOutput } from './format.js';
+import { interruptible, parseFlags, printHelp } from './flags.js';
+import { formatDoctorHuman, formatGcHuman, formatInstallHuman, formatStatusHuman, formatWorkspaceStatusHuman, shouldUseHumanOutput } from './format.js';
 import { handleHookCommand } from './hook-commands.js';
 import { enforcementMode } from './hook-handler.js';
 import { INTEGRATIONS, Integration, initializeKithRepository } from './init.js';
@@ -76,7 +76,7 @@ async function runLegacySetupCommand(
 async function main(): Promise<void> {
   suppressSqliteExperimentalWarning();
   const { positional, flags, passthroughCmd } = parseFlags(process.argv.slice(2));
-  const cmd = positional[0] ?? (!flags.help && !flags.version && !flags.json && process.stdout.isTTY ? 'overview' : 'help');
+  const cmd = positional[0] ?? (!flags.help && !flags.version && !flags.json && (process.stdout.isTTY || Boolean(flags.human) || Boolean(flags.watch)) ? 'overview' : 'help');
   const subCmd = positional[1];
   const targetFromPositional = (['init', 'setup', 'install', 'gc', 'watch', 'menubar', 'bar', 'tray', 'doctor', 'recover'].includes(cmd) && positional[1])
     ? path.resolve(positional[1])
@@ -244,26 +244,43 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (cmd === 'overview') {
+  const renderStatusText = (): { text: string; unavailable: boolean } => {
     const state = readCoordinationState(repoRoot);
     if (!state.repository.commonGitDir && !flags.repo) {
       const children = discoverChildRepositories(repoRoot);
       if (children.length > 0) {
-        const blocks: string[] = [`Kith workspace · ${state.repository.root} (${children.length} repositories)`];
-        for (const child of children) {
+        const enrichedChildren = children.map((child) => {
           const childState = readCoordinationState(child.checkoutRoot);
           const peers = child.commonGitDir ? listRepoPresence(undefined, child.commonGitDir) : [];
-          if (childState.state === 'ready' || peers.length > 0) {
-            blocks.push(formatStatusHuman({ ...childState, ...(peers.length ? { presencePeers: peers } : {}) }));
-          }
-        }
-        console.log(blocks.join('\n\n'));
-        console.log("\nRun 'kith help' for commands.");
-        return;
+          return { state: { ...childState, ...(peers.length ? { presencePeers: peers } : {}) } };
+        });
+        return { text: formatWorkspaceStatusHuman(state.repository.root, enrichedChildren), unavailable: false };
       }
     }
     const presencePeers = state.repository.commonGitDir ? listRepoPresence(undefined, state.repository.commonGitDir) : [];
-    console.log(formatStatusHuman({ ...state, ...(presencePeers.length ? { presencePeers } : {}) }));
+    return {
+      text: formatStatusHuman({ ...state, ...(presencePeers.length ? { presencePeers } : {}) }),
+      unavailable: state.state === 'unavailable',
+    };
+  };
+
+  if (cmd === 'overview' || (cmd === 'status' && flags.watch && shouldUseHumanOutput(flags))) {
+    if (flags.watch && shouldUseHumanOutput(flags)) {
+      await interruptible(async (signal) => {
+        while (!signal.aborted) {
+          const { text } = renderStatusText();
+          const stamp = new Date().toLocaleTimeString();
+          process.stdout.write(`\x1b[2J\x1b[H[${stamp}] kith status --watch (Ctrl-C to stop)\n\n${text}\n`);
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 2000);
+            signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+          });
+        }
+      });
+      return;
+    }
+    const { text } = renderStatusText();
+    console.log(text);
     console.log("\nRun 'kith help' for commands.");
     return;
   }
@@ -276,29 +293,14 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'recover' || (cmd === 'status' && (flags.offline || (!flags.live && !fs.existsSync(path.join(discoverRepository(repoRoot).coordDir, 'state.db')))))) {
-    const state = cmd === 'recover' ? recoveryReport(repoRoot) : readCoordinationState(repoRoot);
     if (cmd === 'status' && shouldUseHumanOutput(flags)) {
-      if (!state.repository.commonGitDir && !flags.repo) {
-        const children = discoverChildRepositories(repoRoot);
-        if (children.length > 0) {
-          const blocks: string[] = [`Kith workspace · ${state.repository.root} (${children.length} repositories)`];
-          for (const child of children) {
-            const childState = readCoordinationState(child.checkoutRoot);
-            const peers = child.commonGitDir ? listRepoPresence(undefined, child.commonGitDir) : [];
-            if (childState.state === 'ready' || peers.length > 0) {
-              blocks.push(formatStatusHuman({ ...childState, ...(peers.length ? { presencePeers: peers } : {}) }));
-            }
-          }
-          console.log(blocks.join('\n\n'));
-          process.exitCode = 0;
-          return;
-        }
-      }
-      const presencePeers = state.repository.commonGitDir ? listRepoPresence(undefined, state.repository.commonGitDir) : [];
-      console.log(formatStatusHuman({ ...state, ...(presencePeers.length ? { presencePeers } : {}) }));
-    } else {
-      console.log(JSON.stringify(state, null, 2));
+      const { text } = renderStatusText();
+      console.log(text);
+      process.exitCode = 0;
+      return;
     }
+    const state = cmd === 'recover' ? recoveryReport(repoRoot) : readCoordinationState(repoRoot);
+    console.log(JSON.stringify(state, null, 2));
     process.exitCode = state.state === 'unavailable' ? 1 : 0;
     return;
   }
