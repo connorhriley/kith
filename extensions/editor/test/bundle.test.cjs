@@ -39,3 +39,12 @@ test('sealed server payload finishes two project tasks and refuses capability re
   }
  }finally{await c.close();fs.rmSync(temp,{recursive:true,force:true});}
 });
+test('sealed server payload also exposes the 6-tool --compact surface cleanly',async()=>{
+ const temp=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'kith-editor-compact-')));
+ const server=path.join(temp,'server');fs.cpSync(path.resolve(__dirname,'../server'),server,{recursive:true});
+ const c=new Client({name:'editor-bundle-compact',version:'1'});
+ try{
+  await c.connect(new StdioClientTransport({command:process.execPath,args:[path.join(server,'launch.cjs'),'mcp','--compact'],cwd:path.parse(temp).root,env:process.env,stderr:'ignore'}));
+  assert.deepEqual((await c.listTools()).tools.map(t=>t.name),['kith_brief','kith_work','kith_claim','kith_handoff','kith_finish','kith_resource']);
+ }finally{await c.close();fs.rmSync(temp,{recursive:true,force:true});}
+});

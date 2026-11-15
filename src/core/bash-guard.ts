@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CoordDatabase } from './db.js';
 import { DependencyAndContractEngine } from './dep-graph.js';
 import { FencingAndAgentManager } from './fencing.js';
+import { ignoredPaths, walkNonIgnoredFiles } from './git-ignore.js';
 import { LockEngine } from './locks.js';
 import { ShadowGitEngine } from './shadow-git.js';
 
@@ -37,6 +38,41 @@ const GIT_PREFIX = String.raw`\bgit(?:\s+(?:-C|-c|--git-dir|--work-tree)(?:=|\s+
 const DESTRUCTIVE_SHARED_TREE = new RegExp(GIT_PREFIX + String.raw`(?:reset|clean|checkout|restore|switch|stash|merge|rebase|pull|cherry-pick|revert|am)\b`);
 const DESTRUCTIVE_SHARED_REFS = new RegExp(GIT_PREFIX + String.raw`(?:update-ref|symbolic-ref|worktree\s+(?:remove|prune)|branch\s+(?:-[dDmMfF]|--(?:delete|move|force)))\b`);
 
+const WRITE_PRIMITIVE_RE = /(?:>>?|\b(?:tee|rm|mv|cp|dd|patch|truncate|touch|unlink|writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream)\b|\bsed\s+(?:-[a-zA-Z]*i|--in-place)|\bperl\s+-[a-zA-Z]*i|\.write_(?:text|bytes)\(|open\([^)]*['"][wa+])/u;
+const READ_ONLY_CMD_RE = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s+)*(?:ls|tail|head|cat|less|more|grep|egrep|fgrep|rg|find|fd|wc|stat|file|du|df|pwd|echo|printf|true|false|which|whereis|type|uname|whoami|id|date|env|printenv|ps|lsof|jq|awk|cut|sort|uniq|tr|diff|shasum|sha256sum|md5|git\s+(?:status|diff|log|show|branch|rev-parse|ls-files|check-ignore| blame)\b|kith\s+(?:status|brief|doctor|mode|lock\s+list|task\s+list|handoff\s+list)\b|(?:node\s+)?(?:\S*\/)?stack\.mjs\s+status\b)/u;
+
+/**
+ * True when a shell command is purely observational (e.g. `ls`, `tail`, `git status`, `stack.mjs status`)
+ * and contains no file-redirection or write primitives.
+ */
+export function isReadOnlyShellCommand(command: string): boolean {
+  const stripped = command
+    .replace(/\b\d*>&\d+\b/g, '')
+    .replace(/\b\d*>\s*\/dev\/null\b/g, '')
+    .trim();
+  if (!stripped) return true;
+  if (WRITE_PRIMITIVE_RE.test(stripped)) return false;
+  const segments = stripped.split(/(?:&&|\|\||[;|&\n])+/u).map(s => s.trim()).filter(Boolean);
+  return segments.length > 0 && segments.every(seg => READ_ONLY_CMD_RE.test(seg));
+}
+
+/**
+ * True when `command` explicitly references `relPath` (or its filename) and contains a write/mutation
+ * indicator. Prevents blaming unrelated or read-only commands for concurrent edits made by the live
+ * lock holder in a shared checkout.
+ */
+export function commandTargetsFileForWrite(command: string, relPath: string): boolean {
+  if (isReadOnlyShellCommand(command)) return false;
+  const stripped = command
+    .replace(/\b\d*>&\d+\b/g, '')
+    .replace(/\b\d*>\s*\/dev\/null\b/g, '');
+  if (!WRITE_PRIMITIVE_RE.test(stripped)) return false;
+  const norm = relPath.replace(/\\/g, '/');
+  if (stripped.includes(norm)) return true;
+  const base = path.posix.basename(norm);
+  return base.length >= 4 && stripped.includes(base);
+}
+
 export class BashMerkleGuard {
   constructor(
     private readonly coordDb: CoordDatabase,
@@ -59,7 +95,10 @@ export class BashMerkleGuard {
     const peers = this.fencing.listAgents(true).filter(a => a.id !== params.agentId);
     const sharesCheckout = peers.some(a => physicalPath(a.worktree_path ?? this.coordDb.repoRoot) === root);
     if (peers.length && DESTRUCTIVE_SHARED_REFS.test(params.command) || sharesCheckout && DESTRUCTIVE_SHARED_TREE.test(params.command)) {
-      return { safe: false, reason: 'Git operation can replace shared work or refs while peer agents are active. Coordinate the operation before retrying.' };
+      return {
+        safe: false,
+        reason: 'Git operation can replace shared work or refs while peer agents are active. To commit only your own files safely while peers are active, run: kith commit -m "<message>" [files...]',
+      };
     }
 
     return { safe: true };
@@ -81,6 +120,16 @@ export class BashMerkleGuard {
       .listLocks()
       .filter((l) => l.owner_agent_id !== agentId);
 
+    const snapPath = this.getSnapshotFilePath(agentId);
+    let prevEntries: Record<string, FileSnapshotEntry> = {};
+    if (fs.existsSync(snapPath)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(snapPath, 'utf8')) as { rootDir?: string; entries?: Record<string, FileSnapshotEntry> };
+        if (parsed.rootDir === rootDir && parsed.entries) prevEntries = parsed.entries;
+      } catch { /* Ignore damaged prior snapshot cache */ }
+    }
+
+    const now = Date.now();
     const entries: Record<string, FileSnapshotEntry> = {};
     const files = this.walkWorkspaceFiles(rootDir);
 
@@ -89,11 +138,22 @@ export class BashMerkleGuard {
       const stat = fs.statSync(absPath);
       if (stat.size > 5 * 1024 * 1024) continue; // Skip >5MB binaries
 
-      const buf = fs.readFileSync(absPath);
-      const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
       const lockedByOther = activeLocks.some((l) =>
         LockEngine.patternsOverlap(relPath, l.pattern)
       );
+      const cached = prevEntries[relPath];
+      const unchanged = cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size && stat.mtimeMs < now - 2000;
+      if (unchanged && (!lockedByOther || cached.backupContentBase64 !== undefined)) {
+        entries[relPath] = {
+          ...cached,
+          lockedByOther,
+          backupContentBase64: lockedByOther ? cached.backupContentBase64 : undefined,
+        };
+        continue;
+      }
+
+      const buf = fs.readFileSync(absPath);
+      const sha256 = unchanged ? cached.sha256 : crypto.createHash('sha256').update(buf).digest('hex');
 
       entries[relPath] = {
         relPath,
@@ -105,7 +165,6 @@ export class BashMerkleGuard {
       };
     }
 
-    const snapPath = this.getSnapshotFilePath(agentId);
     fs.writeFileSync(
       snapPath,
       JSON.stringify({ timestamp: Date.now(), rootDir, entries }),
@@ -140,6 +199,7 @@ export class BashMerkleGuard {
 
     const currentFiles = this.walkWorkspaceFiles(rootDir);
     const seenCurrentRelPaths = new Set<string>();
+    const candidates: Array<{ relPath: string; buf: Buffer | null; prev: FileSnapshotEntry | null }> = [];
     const authorizedModifiedFiles: string[] = [];
     const quarantinedViolations: QuarantineRecord[] = [];
 
@@ -160,51 +220,64 @@ export class BashMerkleGuard {
         continue;
       }
 
-      // File was created or modified during the bash command!
-      const access = this.lockEngine.checkFileWriteAccess({
-        agentId: params.agentId,
-        filePath: relPath,
-      });
-
-      if (!access.allowed) {
-        const violation = this.quarantineAndRevertFile({
-          agentId: params.agentId,
-          command: params.command,
-          rootDir,
-          relPath,
-          unauthorizedBuf: buf,
-          restoreLockedFiles: params.restoreLockedFiles ?? false,
-          prevEntry: prev ?? null,
-          reason: access.reason ?? 'Locked by another agent',
-        });
-        quarantinedViolations.push(violation);
-      } else {
-        authorizedModifiedFiles.push(relPath);
-      }
+      candidates.push({ relPath, buf, prev: prev ?? null });
     }
 
     // Also check if any previously existing file was deleted by the bash command
     for (const [relPath, prev] of Object.entries(beforeEntries)) {
       if (!seenCurrentRelPaths.has(relPath)) {
-        const access = this.lockEngine.checkFileWriteAccess({
-          agentId: params.agentId,
-          filePath: relPath,
-        });
-        if (!access.allowed) {
-          const violation = this.quarantineAndRevertFile({
-            agentId: params.agentId,
-            command: params.command,
-            rootDir,
-            relPath,
-            unauthorizedBuf: null,
-            restoreLockedFiles: params.restoreLockedFiles ?? false,
-            prevEntry: prev,
-            reason: access.reason ?? 'Deleted file locked by another agent',
-          });
-          quarantinedViolations.push(violation);
-        } else {
-          authorizedModifiedFiles.push(relPath);
+        candidates.push({ relPath, buf: null, prev });
+      }
+    }
+
+    const ignored = candidates.length
+      ? ignoredPaths(rootDir, candidates.map((c) => c.relPath))
+      : new Set<string>();
+    const physRoot = physicalPath(rootDir);
+    const livePeersInCheckout = new Set(
+      this.fencing
+        .listAgents(true)
+        .filter((a) => a.id !== params.agentId && physicalPath(a.worktree_path ?? this.coordDb.repoRoot) === physRoot)
+        .map((a) => a.id)
+    );
+    const myLocks = this.lockEngine.listLocks().filter((l) => l.owner_agent_id === params.agentId);
+    const readOnlyCmd = isReadOnlyShellCommand(params.command);
+
+    for (const c of candidates) {
+      if (ignored.has(c.relPath)) continue;
+      const access = this.lockEngine.checkFileWriteAccess({
+        agentId: params.agentId,
+        filePath: c.relPath,
+      });
+      if (!access.allowed) {
+        const holderId = access.conflictingLock?.owner_agent_id;
+        if (!params.restoreLockedFiles) {
+          // When another live agent holds the lock in the same shared checkout, concurrent edits on disk
+          // belong to that lock holder unless this command itself explicitly targeted the file for writing.
+          if (readOnlyCmd || (holderId && livePeersInCheckout.has(holderId) && !commandTargetsFileForWrite(params.command, c.relPath))) {
+            continue;
+          }
         }
+        const defaultReason = c.buf === null ? 'Deleted file locked by another agent' : 'Locked by another agent';
+        quarantinedViolations.push(this.quarantineAndRevertFile({
+          agentId: params.agentId,
+          command: params.command,
+          rootDir,
+          relPath: c.relPath,
+          unauthorizedBuf: c.buf,
+          restoreLockedFiles: params.restoreLockedFiles ?? false,
+          prevEntry: c.prev,
+          reason: access.reason ?? defaultReason,
+        }));
+      } else {
+        if (readOnlyCmd) continue;
+        if (livePeersInCheckout.size > 0 && myLocks.length > 0) {
+          const claimedByCaller = myLocks.some((l) => l.pattern !== '**' && LockEngine.patternsOverlap(LockEngine.literalScope(c.relPath), l.pattern));
+          if (!claimedByCaller && !commandTargetsFileForWrite(params.command, c.relPath)) {
+            continue;
+          }
+        }
+        authorizedModifiedFiles.push(c.relPath);
       }
     }
 
@@ -317,29 +390,13 @@ export class BashMerkleGuard {
     return record;
   }
 
-  private walkWorkspaceFiles(dir: string, acc: string[] = []): string[] {
-    if (!fs.existsSync(dir)) return acc;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (
-        entry.name === '.git' ||
-        entry.name === '.coord' ||
-        entry.name === 'node_modules' ||
-        entry.name === 'dist' ||
-        entry.name === 'coverage' ||
-        entry.name === '.next' ||
-        entry.name === 'target'
-      ) {
-        continue;
-      }
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        this.walkWorkspaceFiles(fullPath, acc);
-      } else if (entry.isFile()) {
-        acc.push(fullPath);
-      }
-    }
-    return acc;
+  private static readonly SKIP_DIRS = new Set([
+    '.git', '.coord', 'node_modules', 'dist', 'build', 'out', 'coverage',
+    '.next', '.turbo', '.venv', 'venv', '.pytest_cache', '__pycache__', 'target',
+  ]);
+
+  private walkWorkspaceFiles(rootDir: string): string[] {
+    return walkNonIgnoredFiles({ rootDir, skipDirNames: BashMerkleGuard.SKIP_DIRS });
   }
 
   public listQuarantined(): QuarantineRecord[] {

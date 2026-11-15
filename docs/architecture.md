@@ -15,6 +15,9 @@ Kith runs locally. There is no coordination server: CLI and MCP clients share `.
 | `shadow-git.ts` | Per-agent indexes, synthetic commits, dirty-tree merge probes |
 | `worktree-cow.ts` | Isolated worktree creation and dependency hydration |
 | `merge-train.ts` | Serialized integration through a disposable staging worktree |
+| `brief.ts` | The read-only situational summary shared by the offline reader, the CLI and the MCP tool |
+| `mode.ts` | Repository workflow mode: `worktrees` or `main` |
+| `handoffs.ts`, `handoff-store.ts` | Notes that survive a session boundary: written by agents, recorded by Kith when a session ends without one, delivered by task and scope overlap; storage is DB-only so it is safe inside reclaim and completion transactions |
 | `bash-guard.ts` | Best-effort snapshots and quarantine recovery |
 | `broker.ts` | Port reservations, FIFO mutex tickets, renewable command leases and process-group guards |
 
@@ -24,7 +27,7 @@ Kith runs locally. There is no coordination server: CLI and MCP clients share `.
 
 Writer transactions use `BEGIN IMMEDIATE`, so task claims and lock conflict checks share a single SQLite writer boundary. No asynchronous work should occur inside a database transaction. Port probing occurs before the transaction and reservations are rechecked inside it.
 
-Git integration uses an exclusive local lock file and a unique staging directory per attempt. Kith checks the target's cleanliness, branch, and HEAD before advancing it. This does not serialize external Git processes. A crash intentionally leaves the lock for inspection rather than guessing that it is safe to reclaim.
+Git integration uses an exclusive local lock file and a unique staging directory per attempt. Kith checks the target's branch and HEAD, and that it holds no uncommitted edits to a file the integration changes, before advancing it; unrelated local work in a shared checkout is left alone. This does not serialize external Git processes. A crash intentionally leaves the lock for inspection rather than guessing that it is safe to reclaim.
 
 Git clients launched from subdirectories, symlink aliases and linked checkouts discover the same physical common Git directory. Ordinary repositories retain the primary checkout's `.coord` directory; repositories using a separate Git directory store shared state in `<common-git-dir>/kith`. Git operations still target the selected checkout and its current branch. A new session started inside a linked checkout records that checkout as its working path. Non-Git directories use the explicitly selected directory. Existing checkout-local databases are refused rather than silently abandoned. See [path and scope rules](path-and-scope-rules.md).
 

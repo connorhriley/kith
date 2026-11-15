@@ -44,7 +44,11 @@ it('previews exact committed conflicts and refuses dirty inputs without checkpoi
  const targetHead=git(root,'rev-parse','HEAD'),sourceHead=git(b.worktreePath,'rev-parse','HEAD'),before=digest(engine.coordDb.coordDir);
  expect(engine.previewIntegration('b')).toMatchObject({ok:true,clean:false,conflicts:['shared.ts'],sourceHead,targetHead,verified:false});
  expect(git(root,'rev-parse','HEAD')).toBe(targetHead);expect(git(b.worktreePath,'rev-parse','HEAD')).toBe(sourceHead);expect(digest(engine.coordDb.coordDir)).toEqual(before);
- fs.writeFileSync(path.join(root,'local.txt'),'keep');expect(engine.previewIntegration('b').clean).toBeNull();expect(fs.readFileSync(path.join(root,'local.txt'),'utf8')).toBe('keep');
+ // Unrelated local work in the target does not stop a preview and is left exactly as it was.
+ fs.writeFileSync(path.join(root,'local.txt'),'keep');expect(engine.previewIntegration('b')).toMatchObject({ok:true,clean:false,conflicts:['shared.ts'],targetDirtyFiles:[{status:'??',path:'local.txt'}]});expect(fs.readFileSync(path.join(root,'local.txt'),'utf8')).toBe('keep');
+ // Local edits to a file the integration changes do: the preview is refused and names the file.
+ fs.appendFileSync(path.join(root,'shared.ts'),'// local edit\n');
+ const refused=engine.previewIntegration('b');expect(refused.clean).toBeNull();expect(refused.ok).toBe(false);expect(refused.reason).toContain('shared.ts');
 });
 
 it('offline observation and doctor preserve expired owners, event cursors and the original WAL/SHM bytes',()=>{

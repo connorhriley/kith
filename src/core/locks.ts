@@ -5,6 +5,7 @@ import { scopeSegments, scopesOverlap } from './glob.js';
 import { caseSensitivePaths, isWithin, physicalPath, repositoryFile } from './repository.js';
 import { CoordDatabase } from './db.js';
 import { FencingAndAgentManager, StaleFencingTokenError } from './fencing.js';
+import { isIgnoredPath, ignoredPaths } from './git-ignore.js';
 
 export interface LockRecord {
   id: string;
@@ -70,7 +71,7 @@ export class LockEngine {
     return normalized;
   }
 
-  private static literalScope(file: string): string {
+  public static literalScope(file: string): string {
     try {
       scopeSegments(file);
       if (!/[?*]/u.test(file) && !file.startsWith('symbol:') && !file.startsWith('file:')) return file;
@@ -82,6 +83,13 @@ export class LockEngine {
     return this.fencing.getAgent(agentId)?.worktree_path ?? this.coordDb.repoRoot;
   }
 
+  private activeWorktreeRoots(): string[] {
+    const rows = this.coordDb.db
+      .prepare("SELECT worktree_path FROM agents WHERE status = 'active' AND worktree_path IS NOT NULL")
+      .all() as Array<{ worktree_path: string }>;
+    return [this.coordDb.repoRoot, ...rows.map(r => r.worktree_path)];
+  }
+
   // A wildcard can traverse an alias that maps to a different scope. If exact
   // lexical comparison was disjoint, retain exclusion when such aliases exist.
   private wildcardHasAliases(pattern: string): boolean {
@@ -91,7 +99,8 @@ export class LockEngine {
     if (first < 0) return false;
     const prefix = segments.slice(0, first).join('/');
     const recursivePrefix = Boolean(prefix) && segments.length === first + 1 && segments[first] === '**';
-    const roots = new Set([this.coordDb.repoRoot, ...this.fencing.listAgents(true).map(a => a.worktree_path).filter((p): p is string => Boolean(p))]);
+    const skipHeavyDirs = new Set(['.git', '.coord', 'node_modules', '.venv', 'venv', 'dist', 'build', 'target', '.next', '.turbo']);
+    const roots = new Set(this.activeWorktreeRoots());
     const pending = [...roots].map(root => ({ root, relative: prefix }));
     let budget = 10_000;
     while (pending.length) {
@@ -101,7 +110,8 @@ export class LockEngine {
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; return true; }
       for (const entry of entries) {
-        if (--budget < 0) return true;
+        if (--budget < 0) return false;
+        if (entry.isDirectory() && skipHeavyDirs.has(entry.name) && !segments.includes(entry.name)) continue;
         const file = relative ? relative + '/' + entry.name : entry.name;
         if (entry.isSymbolicLink()) {
           if (!recursivePrefix) return true;
@@ -161,10 +171,21 @@ export class LockEngine {
     const mode = params.mode ?? 'exclusive';
     const lockType = params.lockType ?? 'glob';
     const now = Date.now();
-    const expiresAt = now + (params.leaseDurationMs ?? FencingAndAgentManager.DEFAULT_LEASE_MS);
-    const normalizedPatterns = Array.from(
-      new Set(params.patterns.map((p) => LockEngine.normalizePattern(this.rootForAgent(params.agentId), lockType === 'file' && !p.startsWith('file:') ? 'file:' + p : p)))
+    const agentLeaseRemaining = Math.max(0, (this.fencing.getAgent(params.agentId)?.lease_expires_at ?? 0) - now);
+    const expiresAt = now + (params.leaseDurationMs ?? Math.max(FencingAndAgentManager.DEFAULT_LEASE_MS, agentLeaseRemaining));
+    const lockRoot = this.rootForAgent(params.agentId);
+    let normalizedPatterns = Array.from(
+      new Set(params.patterns.map((p) => LockEngine.normalizePattern(lockRoot, lockType === 'file' && !p.startsWith('file:') ? 'file:' + p : p)))
     );
+    // Git-ignored files (logs, traces, build output) are never shared source: claim nothing on them.
+    if (lockType === 'file') {
+      const literal = (p: string) => p.startsWith('file:') ? p.slice(5) : p;
+      const ignored = ignoredPaths(lockRoot, normalizedPatterns.map(literal));
+      normalizedPatterns = normalizedPatterns.filter(p => !ignored.has(literal(p)));
+      if (!normalizedPatterns.length) {
+        return { ok: true, fencingToken: this.fencing.assertSession(params.agentId), locks: [], conflicts: [] };
+      }
+    }
 
     return this.coordDb.withTransaction(() => {
       this.fencing.assertSession(params.agentId);
@@ -302,6 +323,7 @@ export class LockEngine {
     this.fencing.reapDeadAgents();
     this.fencing.assertSession(params.agentId);
     const normPath = LockEngine.normalizeFile(this.rootForAgent(params.agentId), params.filePath);
+    if (isIgnoredPath(this.rootForAgent(params.agentId), normPath)) return { allowed: true };
     const requested = LockEngine.literalScope(normPath);
     const now = Date.now();
 
@@ -381,7 +403,7 @@ export class LockEngine {
   private overlapsExisting(requested: string, existing: string): boolean {
     try {
       const normalized = LockEngine.normalizePattern(this.coordDb.repoRoot, existing);
-      const roots = [this.coordDb.repoRoot, ...this.fencing.listAgents(true).map(a => a.worktree_path).filter((p): p is string => Boolean(p))];
+      const roots = this.activeWorktreeRoots();
       const insensitive = roots.some(root => {
         if (!this.pathCase.has(root)) this.pathCase.set(root, caseSensitivePaths(root));
         return !this.pathCase.get(root);

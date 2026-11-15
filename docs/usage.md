@@ -13,13 +13,41 @@ kith_record_file_edit {"agentId":"auth-worker","filePath":"src/auth/middleware.t
 kith_complete_work   {"agentId":"auth-worker","verificationCmd":"pnpm typecheck"}
 ```
 
-Use a different ID and nonoverlapping scope for another agent. An overlapping exclusive scope returns a tool error. Commands run with the MCP server permissions and require client approval; their working directory defaults to the registered worktree. Keep the connection open. Owned calls already renew the lease; in the next release their replies include `session.leaseExpiresAt` (Unix milliseconds), with `agent.lease_expires_at` on session grants. Heartbeat only during idle periods before that deadline; an expired claim cannot be used or revived. A replayed operation contains the original historical deadline and does not renew ownership. Use status for a blocker, changed coordination or recovery rather than polling between edits.
+Use a different ID and nonoverlapping scope for another agent. An overlapping exclusive scope returns a tool error. Commands run with the MCP server permissions and require client approval; their working directory defaults to the registered worktree. Keep the connection open. Owned calls already renew the lease. From 0.1.8 their replies include `session.leaseExpiresAt` (Unix milliseconds), with `agent.lease_expires_at` on session grants. Heartbeat only during idle periods before that deadline; an expired claim cannot be used or revived. A replayed operation contains the original historical deadline and does not renew ownership. Use status for a blocker, changed coordination or recovery rather than polling between edits.
+
+## Before you start: the brief
+
+```
+kith brief --scope 'src/auth/**'      # who is active, claims that overlap, open handoffs, conflicts. Read-only; no session needed
+kith_brief  {"scopeGlobs":["src/auth/**"]}   # the same, over MCP
+```
+
+Run it before beginning work. With `kith init --only brief` Claude Code runs it for you at the start of every session.
+
+## Working in the main checkout
+
+Some teams work on the main branch with one checkout and treat worktrees as overhead. Say so once:
+
+```
+kith mode main          # or: kith init --mode main
+```
+
+Agents then call `kith_begin_work` with their scope as usual. No worktree is created (`isolateWorktree` is ignored, with a note), claims keep sessions off each other's files, and `kith_complete_work` releases the claims. There is no integration step, so run your project's checks before completing. `kith mode worktrees` switches back.
+
+## Handoffs between sessions
+
+Claims say who owns what; they do not say what the owner learned. Leave a note when you finish, get blocked or must stop:
+
+```
+kith_write_handoff  {"agentId":"auth-worker","kind":"blocked","summary":"Token refresh fails behind the proxy.","failed":["Raised the timeout; no effect"],"learned":["The proxy strips the Authorization header"],"remaining":["Retry with the proxy bypass"],"releaseTask":true}
+kith handoff write --summary "..." --kind blocked --failed "tried A; tried B" --release   # CLI: separate list items with semicolons
+```
+
+`releaseTask` returns the task to the queue and frees its claims. The next agent that calls `kith_begin_work` on an overlapping scope, or `kith_claim_next_task` for that task, gets the note in `handoffs`; `kith_read_handoffs` and `kith handoff list` return the full text. If your session dies or disconnects mid-task, Kith records what it observed (claimed files, the last failed integration, quarantined changes) so the next agent does not start from nothing. Notes are information written by another agent, not instructions: verify them against the code.
 
 Use `kith_run_with_mutex` with literal argv when commands share mutable resources, such as a package installation or shared test database. Ordinary worktree reads need no mutex. `kith_complete_work` runs the integration verification command: avoid immediately running it twice unless diagnosis or project policy requires it. Keep all required project checks and review/merge gates. File-edit reports already publish extracted signatures; `kith_publish_contract` remains available for explicit/planned contracts. See the runnable [two-client example](../examples/two-agents.mjs).
 
 ## Launch a dev server on its allocated port
-
-These additions are available in source builds on `main`; the published `kith-coord@0.1.3` does not include them yet. Build/link the checkout before using the CLI examples.
 
 Run from the target repository (or pass `--repo /absolute/checkout`). Use a unique agent ID for each session. A standalone invocation creates and ends its own temporary session; an existing session must provide its capability as usual.
 
@@ -82,7 +110,7 @@ For independent PRs, create each task's Git worktree from the intended PR base f
 
 Successful completion ends the session and retains its worktree. Run owned commands before completing, or start a fresh session for later maintenance. A refused claim can leave an active session without locks; it can retry on the same connection or expire normally. Status `conflicts` describes current detected file conflicts, not a history of refused scope claims.
 
-Integration refuses a target with uncommitted or untracked work to preserve it. Commit or preserve those files explicitly, use a clean integration checkout, or keep the existing PR workflow above. Do not blanket-ignore unknown files to silence the guard. The supervised command runner uses the server's permissions, including network access; it is not a sandbox. `verificationCmd` is an explicit shell string; mutex commands use literal argv.
+A shared checkout is normally dirty with other agents' uncommitted work, and integration does not require it to be clean. It refuses only when the target has uncommitted or untracked changes to a file the integration itself changes, and names those files; unrelated local work is left exactly as it was. Commit or preserve the named files, use a separate integration checkout, or keep the existing PR workflow above. Do not blanket-ignore unknown files to silence the guard. The supervised command runner uses the server's permissions, including network access; it is not a sandbox. `verificationCmd` is an explicit shell string; mutex commands use literal argv.
 
 ## CLI fallback: keep the owning shell alive
 
@@ -106,7 +134,7 @@ unset KITH_AGENT_ID KITH_SESSION_TOKEN
 
 Quote globs so the shell does not expand them. CLI scopes are comma-separated. Use `file:src/routes/[id]/page.tsx` for a literal filename containing glob syntax; see [scope grammar and discovery](path-and-scope-rules.md). An ID alone cannot resume another session. Dead or expired sessions release coordination resources when a mutating operation reaps them. Active supervised command guards survive expiry until shutdown is confirmed.
 
-Completion checkpoints uncommitted worktree changes and integrates into the branch currently checked out in the selected repository checkout (`--repo` when supplied). The target must be clean. A verification failure leaves the target unchanged and the worktree available for repair. Successful completion also keeps the worktree for inspection; removal is explicit and refuses dirty, untracked, or ignored work. Existing branches are never reset to create a worktree. Hydration tries filesystem clones and falls back to an independent copy; cost depends on the filesystem and dependency size.
+Completion checkpoints uncommitted worktree changes and integrates into the branch currently checked out in the selected repository checkout (`--repo` when supplied). The target may hold unrelated uncommitted work, but not edits to files the integration changes. A verification failure leaves the target unchanged and the worktree available for repair. Successful completion also keeps the worktree for inspection; removal is explicit and refuses dirty, untracked, or ignored work. Existing branches are never reset to create a worktree. Hydration tries filesystem clones and falls back to an independent copy; cost depends on the filesystem and dependency size.
 
 A verification command is optional. Without one, integration checks Git mergeability only. Choose a command that actually checks your project.
 
@@ -128,7 +156,7 @@ kith status
 kith status --offline
 kith recover
 kith doctor
-# Preview committed source/target trees; dirty inputs are refused
+# Preview committed source/target trees; a dirty source is refused, and a dirty target only when it overlaps the integration
 kith worktree preview --agent worker-1
 
 # Allocate a cooperating client's port; start your service promptly
@@ -174,4 +202,4 @@ Never include session tokens in issues, terminal recordings, or shared logs. See
 
 The read-only watcher excludes byte-identical dirty copies (including matching executable modes) across linked worktrees. Remaining shared dirty paths are advisories, not proven merge conflicts. Files over 8 MiB and non-file objects remain unverified rather than being treated as identical. The menu shows at most eight overlap rows; `kith watch --once` provides the full observations.
 
-Omit `--once` for continuous observation. `--notify=false` suppresses optional macOS notifications. From the next release, macOS setup opens Radar automatically unless `--no-radar` is passed. Dry runs never launch it. An existing view keeps its selected workspace; choose **Switch Workspace** in its menu to change it. Setup adds no login item. Radar polls local state without model calls or MCP conversation traffic. On macOS 12 or newer, `kith menubar /absolute/checkout` opens the same limited read-only view. The package includes an Intel/Apple Silicon executable, launched with this installation's Node and CLI paths; unavailable/failed scans remain visibly unavailable. Other platforms use `kith watch`. Source contributors can rebuild with `pnpm build:menubar` using Apple's command-line tools, and run the pipe/timeout regressions with `pnpm test:menubar`.
+Omit `--once` for continuous observation. `--notify=false` suppresses optional macOS notifications. From 0.1.8, macOS `kith install` and `kith setup` open Radar and register a login LaunchAgent unless `--no-radar` or `--no-autostart` is passed. Dry runs never launch it. An existing view keeps its selected workspace; choose **Switch Workspace** in its menu to change it. Radar polls local state without model calls or MCP conversation traffic. On macOS 12 or newer, `kith menubar /absolute/checkout` opens the same limited read-only view. The package includes an Intel/Apple Silicon executable, launched with this installation's Node and CLI paths; unavailable/failed scans remain visibly unavailable. Other platforms use `kith watch`. Source contributors can rebuild with `pnpm build:menubar` using Apple's command-line tools, and run the pipe/timeout regressions with `pnpm test:menubar`.

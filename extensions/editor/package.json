@@ -2,7 +2,7 @@
   "name": "kith",
   "displayName": "Kith",
   "description": "Connect coding agents to Kith and inspect local worktree coordination in VS Code and Cursor.",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "kith-coord",
   "license": "MIT",
   "icon": "icon.png",
@@ -61,6 +61,10 @@
       {
         "command": "kith.showDetails",
         "title": "Kith: Show Coordination Details"
+      },
+      {
+        "command": "kith.installGlobal",
+        "title": "Kith: Install Global Hooks & Autostart"
       }
     ],
     "mcpServerDefinitionProviders": [
@@ -83,6 +87,16 @@
           "default": true,
           "scope": "window",
           "description": "Offer the bundled Kith MCP server through the editor. Existing Kith configurations are preserved."
+        },
+        "kith.mcp.profile": {
+          "type": "string",
+          "enum": [
+            "compact",
+            "full"
+          ],
+          "default": "compact",
+          "scope": "window",
+          "description": "MCP tool surface offered by Kith: compact (6 composite tools, lower token overhead) or full (17 granular tools)."
         },
         "kith.statusIntervalSeconds": {
           "type": "integer",

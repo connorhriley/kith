@@ -32,6 +32,31 @@ eval "$(kith session start --agent auth-worker --new --owner-pid "$$" --shell)"
 
 `--new` does not steal a live session. Worktree paths are retained across generations. After successful worktree integration, use a new maintenance session to run `kith worktree remove`; changed, untracked, and ignored files still prevent removal.
 
+## Git-ignored files and clearing a stuck auto-session
+
+Kith does not lock, parse for AST contracts, snapshot/quarantine in Bash guards, or record merge conflicts on a path that `git check-ignore` reports as ignored in the repository the path belongs to (a nested checkout uses its own rules). Dev-server logs, build traces and caches are therefore invisible to coordination. Conflicts, file claims and contract rows that older versions recorded on ignored paths are deleted automatically when any Kith engine opens the repository or reaps dead agents. Tracked files are never treated as ignored.
+
+An auto-joined hook session (`auto-<client>-<hash>`) normally recovers by itself: if the caller is in the same process tree as the registered owner (or the prior owner died or expired) and its saved capability no longer resumes, the hook reclaims the registration automatically. If a separate live process holds that session key (`Auto-session capability conflict for <client>:<session-id>`), passive hooks warn with a recovery command without blocking unrelated shell commands or unlocked files (edits to files locked by another active session remain blocked). Clear it by hand from the repository:
+
+```sh
+kith session clear claude:<session-id>      # or the agent id, e.g. auto-claude-1a2b3c4d
+kith session clear --conflicts              # only delete recorded conflicts, keep sessions
+```
+
+`kith session clear <target>` forgets the session's saved capability and presence, releases its claims, marks the agent dead and deletes conflicts recorded against it. The session registers again on its next tool call. It needs no session token, so run it only for sessions you own.
+
+When a client with `--auto` hooks also registers an MCP session (`kith_begin_work` or `kith_work`), Kith automatically binds the MCP capability to the parent client's `presence.db` session and transfers any locks held by its `auto-*` agent ID so subsequent hook calls and MCP calls share a single session.
+
+## Committing in a shared checkout (`kith commit`)
+
+When multiple sessions share a single checkout (`kith mode main`), the Bash guard blocks raw `git update-ref`, `git reset`, and `git checkout` while peers are active so one session cannot overwrite or sweep another session's uncommitted work. To commit only your own files safely while peers are active, run:
+
+```sh
+kith commit -m "feat: scoped change" [files...]
+```
+
+If `[files...]` is omitted, `kith commit` collects the caller session's recorded modified files (from active file/narrow-glob locks, `presence.db` touched files, and active task scopes), verifies no target file is locked by another live agent, stages only those paths in a temporary index under `.coord/commit.lock`, advances `HEAD` with compare-and-swap `git update-ref`, and runs `git reset -q HEAD -- <files>` so `.git/index` stays synchronized with `HEAD` without touching peers' dirty files. You can also run `kith commit` inside `kith_run_with_mutex` / `kith_resource` (`action: "mutex"`) or pass `commitMessage` (and optional `commitFiles`) to `kith_finish`.
+
 ## MCP ownership
 
 `kith_begin_work`, `kith_claim_next_task`, and `kith_start_session` return a session token when they register or resume a session. A single stdio connection retains its granted capabilities internally. Another connection must explicitly present the capability to resume the same live ID. All agent-scoped mutation tools accept an optional `sessionToken`; a mixed CLI/hook/MCP client can inherit `KITH_AGENT_ID` and `KITH_SESSION_TOKEN` instead.
