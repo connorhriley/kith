@@ -48,6 +48,13 @@ export class ShadowGitEngine {
     }
   }
 
+  private blobAt(commit: string, filePath: string): string | null {
+    try {
+      const out = execFileSync('git', ['--literal-pathspecs', 'ls-tree', '-z', commit, '--', filePath], { cwd: this.coordDb.repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      return /^\d+ blob ([0-9a-f]+)\t/.exec(out)?.[1] ?? null;
+    } catch { return null; }
+  }
+
   public getHeadCommit(dir = this.coordDb.repoRoot): string | null {
     try {
       return execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -94,6 +101,9 @@ export class ShadowGitEngine {
         env,
         stdio: 'ignore',
       });
+      fs.writeFileSync(`${shadowIndex}.base`, headCommit);
+    } else {
+      this.rebaseShadowIndex(shadowIndex, targetDir, env, headCommit);
     }
 
     if (params.worktreeDir && (!params.modifiedFiles || params.modifiedFiles.length === 0)) {
@@ -177,6 +187,41 @@ export class ShadowGitEngine {
     });
 
     return shadowCommitSha;
+  }
+
+  /**
+   * HEAD moves when anyone commits (including via a temporary index). Entries the agent never
+   * touched must follow HEAD, or committed work reads as an uncommitted divergence and later
+   * surfaces as a false merge conflict.
+   */
+  private rebaseShadowIndex(shadowIndex: string, dir: string, env: NodeJS.ProcessEnv, head: string): void {
+    const baseFile = `${shadowIndex}.base`;
+    let base = '';
+    try { base = fs.readFileSync(baseFile, 'utf8').trim(); } catch { /* Index predates base tracking. */ }
+    if (base === head) return;
+    try {
+      if (base) {
+        const raw = execFileSync('git', ['diff-tree', '-r', '-z', '--raw', '--no-renames', base, head], { cwd: dir, encoding: 'utf8' }).split('\0');
+        const staged = new Map<string, string>();
+        for (const line of execFileSync('git', ['ls-files', '--stage', '-z'], { cwd: dir, env, encoding: 'utf8' }).split('\0')) {
+          const m = /^\d+ ([0-9a-f]+) \d\t([\s\S]+)$/.exec(line);
+          if (m) staged.set(m[2], m[1]);
+        }
+        const zero = '0'.repeat(40);
+        const info: string[] = [];
+        for (let i = 0; i + 1 < raw.length; i += 2) {
+          const m = /^:\d+ (\d+) ([0-9a-f]+) ([0-9a-f]+) /.exec(raw[i]);
+          if (!m) continue;
+          const [, newMode, oldSha, newSha] = m;
+          const file = raw[i + 1];
+          const mine = staged.get(file);
+          const untouched = oldSha === zero ? mine === undefined : mine === oldSha;
+          if (untouched) info.push(newSha === zero ? `0 ${zero}\t${file}` : `${newMode} ${newSha}\t${file}`);
+        }
+        if (info.length) execFileSync('git', ['update-index', '--index-info', '-z'], { cwd: dir, env, input: info.join('\0') + '\0', stdio: ['pipe', 'ignore', 'ignore'] });
+      }
+      fs.writeFileSync(baseFile, head);
+    } catch { /* A stale index only costs accuracy; the conflict filter still applies. */ }
   }
 
   /**
@@ -287,8 +332,13 @@ export class ShadowGitEngine {
       const now = Date.now();
       const ignored = ignoredPaths(this.coordDb.repoRoot, [...stageBlobsByFile.keys()]);
 
+      const head = this.getHeadCommit();
       for (const [filePath, stages] of stageBlobsByFile.entries()) {
         if (ignored.has(filePath)) continue;
+        // A side that already equals HEAD has nothing uncommitted, so the other side is not a conflict.
+        const committed = head ? this.blobAt(head, filePath) : null;
+        if (stages.stage2 && stages.stage2 === stages.stage3) continue;
+        if (committed && (stages.stage2 === committed || stages.stage3 === committed)) continue;
         const severity = 'text_conflict' as const;
 
         const record: ConflictRecord = {

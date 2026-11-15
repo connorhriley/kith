@@ -42,6 +42,7 @@ export interface SessionRegistration { agent: AgentRecord; fencingToken: number;
 
 export class FencingAndAgentManager {
   public static readonly DEFAULT_LEASE_MS = 5 * 60 * 1000;
+  public static readonly IDLE_CONFLICT_MS = 60 * 60 * 1000;
   private readonly capabilities = new Map<string, string>();
   private static ownWindowsStart: string | null = null;
   private static inspectionFailure: string | null = null;
@@ -260,6 +261,12 @@ export class FencingAndAgentManager {
   public reapDeadAgents(): string[] {
     try { this.purgeIgnoredClaims(); } catch { /* Housekeeping must never block a session. */ }
     const now = Date.now();
+    // A peer silent for this long, or past its lease, must not keep raising conflicts for others.
+    try {
+      this.coordDb.db.prepare(`DELETE FROM conflicts WHERE agent_a IN (SELECT id FROM agents WHERE last_heartbeat_at < ? OR lease_expires_at < ?)
+        OR agent_b IN (SELECT id FROM agents WHERE last_heartbeat_at < ? OR lease_expires_at < ?)`)
+        .run(now - FencingAndAgentManager.IDLE_CONFLICT_MS, now, now - FencingAndAgentManager.IDLE_CONFLICT_MS, now);
+    } catch { /* Housekeeping must never block a session. */ }
     const agents = this.coordDb.db.prepare("SELECT * FROM agents WHERE status='active'").all() as unknown as AgentRecord[];
     const liveness = new Map<string, boolean>();
     const toExtend: string[] = [];

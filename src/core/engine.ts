@@ -243,16 +243,47 @@ export class KithEngine {
       }
     }
 
-    for (const c of activeConflicts) {
-      const peer = c.agent_a === agentId ? c.agent_b : c.agent_a;
-      lines.push(
-        `• [ACTIVE CONFLICT] ${c.file_path} with agent '${peer}' (${c.severity}: ${c.details.reason})`
-      );
+    // Conflicts matter to this agent only on files it edited (it probed them) or holds a lock on.
+    // Everything else is a count. Only what changed since its last call is printed.
+    const held = (this.coordDb.db.prepare(`SELECT pattern FROM locks WHERE owner_agent_id = ?`).all(agentId) as Array<{ pattern: string }>)
+      .map((l) => l.pattern.replace(/^file:/, ''));
+    const mine = activeConflicts.filter((c) =>
+      c.agent_a === agentId || held.some((p) => c.file_path === p || LockEngine.patternsOverlap(p, c.file_path)));
+    const keyOf = (c: ConflictRecord) => `${c.file_path}\0${c.agent_a === agentId ? c.agent_b : c.agent_a}`;
+    const seenFile = path.join(this.coordDb.coordDir, 'delta-seen', `${agentId.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`);
+    let seen: { keys: string[]; others: number } = { keys: [], others: 0 };
+    try { seen = JSON.parse(fs.readFileSync(seenFile, 'utf8')); } catch { /* First delta for this agent. */ }
+    const seenKeys = new Set(seen.keys);
+    const fresh = mine.filter((c) => !seenKeys.has(keyOf(c)));
+    const others = activeConflicts.length - mine.length;
+    for (const c of fresh) {
+      lines.push(`• [ACTIVE CONFLICT] ${c.file_path} with agent '${keyOf(c).split('\0')[1]}' (${c.severity}: ${c.details.reason})`);
     }
+    if (others !== seen.others && (others > 0 || seen.others > 0)) {
+      lines.push(`• [CONFLICTS ON OTHER FILES] ${others} (not files you edited or hold)`);
+    }
+    try {
+      const keys = mine.map(keyOf).sort();
+      if (fresh.length || others !== seen.others || keys.length !== seen.keys.length) {
+        fs.mkdirSync(path.dirname(seenFile), { recursive: true });
+        fs.writeFileSync(seenFile, JSON.stringify({ keys, others }));
+      }
+    } catch { /* Dedup state is best effort. */ }
+
+    const CAP = 1500;
+    const kept: string[] = [];
+    let size = 0;
+    for (const line of lines) {
+      if (size + line.length > CAP - 120) break;
+      kept.push(line);
+      size += line.length + 1;
+    }
+    if (kept.length < lines.length) kept.push(`• … ${lines.length - kept.length} more; run \`kith status\``);
+    else if (fresh.length || others > 0) kept.push('• Details: `kith status`');
 
     const formattedFooter =
       lines.length > 0
-        ? `\n\n--- KITH LIVE SIBLING DELTA ---\n${lines.join('\n')}`
+        ? `\n\n--- KITH LIVE SIBLING DELTA ---\n${kept.join('\n')}`
         : '';
 
     return {
