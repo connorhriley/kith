@@ -5,9 +5,14 @@ import path from 'node:path';
 import { discoverRepository, isWithin, physicalPath } from './repository.js';
 
 const require = createRequire(import.meta.url);
-const { DatabaseSync } = require('node:sqlite') as {
-  DatabaseSync: typeof DatabaseSyncType;
-};
+let sqlite: { DatabaseSync: typeof DatabaseSyncType } | undefined;
+/**
+ * Load node:sqlite on first use. A process that never opens a database (a pass-through hook, `kith help`)
+ * then neither pays for the module nor prints Node's experimental-feature warning.
+ */
+export function sqliteDatabase(): typeof DatabaseSyncType {
+  return (sqlite ??= require('node:sqlite') as { DatabaseSync: typeof DatabaseSyncType }).DatabaseSync;
+}
 
 export interface CoordEvent {
   id: number;
@@ -53,7 +58,7 @@ export class CoordDatabase {
     }
     // Reject unknown state through a read-only connection before pragmas, checkpoints or setup writes.
     if (fs.existsSync(this.dbPath)) {
-      const probe = new DatabaseSync(this.dbPath, { readOnly: true });
+      const probe = new (sqliteDatabase())(this.dbPath, { readOnly: true });
       try {
         probe.exec('PRAGMA busy_timeout=10000; BEGIN');
         CoordDatabase.schemaVersion(probe, !recoveryFiles);
@@ -70,7 +75,7 @@ export class CoordDatabase {
       fs.mkdirSync(target, { recursive: true });
     }
 
-    this.db = new DatabaseSync(this.dbPath);
+    this.db = new (sqliteDatabase())(this.dbPath);
 
     try {
       this.configurePragmas(); this.migrate(!recoveryFiles);
@@ -321,6 +326,20 @@ export class CoordDatabase {
           owner_pid INTEGER NOT NULL, owner_start TEXT NOT NULL,
           result_json TEXT, created_at INTEGER NOT NULL
         );
+      `);
+      // Optional and additive: older binaries ignore the table and schema stays 3, so mixed-version clients
+      // sharing one repository keep working. Readers must tolerate its absence in older snapshots.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS handoffs (
+          id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT NOT NULL, client TEXT NOT NULL DEFAULT '',
+          kind TEXT NOT NULL, source TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '',
+          done_json TEXT NOT NULL DEFAULT '[]', remaining_json TEXT NOT NULL DEFAULT '[]',
+          learned_json TEXT NOT NULL DEFAULT '[]', failed_json TEXT NOT NULL DEFAULT '[]',
+          files_json TEXT NOT NULL DEFAULT '[]', scope_json TEXT NOT NULL DEFAULT '[]',
+          branch TEXT, worktree_path TEXT, transcript_ref TEXT, created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_handoffs_task ON handoffs(task_id);
+        CREATE INDEX IF NOT EXISTS idx_handoffs_created ON handoffs(created_at DESC);
       `);
       if (version < 2) {
         // Legacy sessions have no capability. Invalidate coordination ownership, never files.

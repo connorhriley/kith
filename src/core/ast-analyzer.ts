@@ -318,11 +318,19 @@ export class AstAnalyzer {
     let depth = 0;
     for (let i = startIndex; i < Math.min(lines.length, startIndex + 35); i++) {
       const line = lines[i];
+      const braceOpen = line.indexOf('{');
       for (const ch of line) {
         if (ch === '{') depth++;
         else if (ch === '}') depth--;
       }
-      if (i > startIndex && depth >= 1) {
+      if (i === startIndex && braceOpen >= 0) {
+        const braceClose = line.lastIndexOf('}');
+        const inline = (braceClose > braceOpen ? line.slice(braceOpen + 1, braceClose) : line.slice(braceOpen + 1)).trim();
+        for (const part of inline.split(/[;,]/)) {
+          const clean = part.trim();
+          if (clean && !clean.startsWith('//')) fields.push(clean);
+        }
+      } else if (i > startIndex && depth >= 1) {
         const clean = line.trim().replace(/;$/, '').replace(/,$/, '');
         if (clean && !clean.startsWith('//') && clean !== '}') {
           fields.push(clean);

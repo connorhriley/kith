@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { CoordDatabase } from './db.js';
 import { FencingAndAgentManager } from './fencing.js';
 import { LockConflict, LockEngine, LockRecord } from './locks.js';
+import { captureCompletion } from './handoff-store.js';
 
 export interface TaskRecord {
   id: string;
@@ -308,6 +309,7 @@ export class IntentAndTaskEngine {
           this.fencing.verifyFencingToken(task.id, params.fencingToken, task.fencing_token);
         }
 
+        try { captureCompletion(this.coordDb, params.agentId, task); } catch { /* Best effort: never block completion. */ }
         this.coordDb.db
           .prepare(`UPDATE tasks SET status = 'done', updated_at = ? WHERE id = ?`)
           .run(now, task.id);

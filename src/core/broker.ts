@@ -70,9 +70,6 @@ export class ResourceBroker {
       });
     }
 
-    if (!Number.isInteger(basePort) || basePort < 1 || basePort > 65535) {
-      throw new Error('basePort must be an integer between 1 and 65535');
-    }
     const limit = Math.min(basePort + 500, 65536);
     for (let candidatePort = basePort; candidatePort < limit; candidatePort++) {
       if (!(await ResourceBroker.isTcpPortFree(candidatePort))) continue;

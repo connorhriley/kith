@@ -1,12 +1,35 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { discoverRepository, physicalPath } from './repository.js';
+import { discoverRepository, isWithin, physicalPath } from './repository.js';
 import { readCoordinationState } from './observation.js';
 import { coordinationView, type CoordinationView } from './coordination-view.js';
 import { inspectWorkspaceContracts, type LinkedWorkspaceContract } from './workspace-contracts.js';
+
+const require = createRequire(import.meta.url);
+
+function livePresenceRepositories(): string[] {
+  try {
+    const rawHome = process.env.KITH_HOME || process.env.HOME || os.homedir();
+    const dbPath = path.join(physicalPath(rawHome), '.local/share/kith/presence.db');
+    if (!fs.existsSync(dbPath)) return [];
+    const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const cutoff = Date.now() - 30 * 60 * 1000;
+      const rows = db.prepare('SELECT DISTINCT checkout_root FROM presence WHERE last_seen_at >= ?').all(cutoff) as Array<{ checkout_root: string }>;
+      return rows.map(r => r.checkout_root).filter(p => fs.existsSync(p));
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  }
+}
 
 const execFileAsync = promisify(execFile);
 export interface FileChangeEvent { filePath: string; repoPath: string; timestamp: number }
@@ -76,6 +99,7 @@ export class PassiveConflictWatcher {
   constructor(public readonly rootDir: string, private readonly options: {
     intervalMs?: number;
     notify?: boolean;
+    includeExternalPresence?: boolean;
     onCollision?: (alert: CollisionAlert) => void;
     onFileChange?: (event: FileChangeEvent) => void;
     onScanError?: (errors: ScanIssue[]) => void;
@@ -100,9 +124,13 @@ export class PassiveConflictWatcher {
       try { fs.lstatSync(path.join(dir, '.git')); return true; }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
     };
+    let resolvedRoot: string | null = null;
+    let rootIsRepo = false;
     try {
       const root = fs.realpathSync(this.rootDir);
-      if (marker(root)) candidates.push(root);
+      resolvedRoot = root;
+      rootIsRepo = marker(root);
+      if (rootIsRepo) candidates.push(root);
       for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
         if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
           const sub = path.join(root, entry.name);
@@ -111,6 +139,15 @@ export class PassiveConflictWatcher {
       }
     } catch (error) {
       this.errors.push({ repository: this.rootDir, message: `Cannot discover repositories: ${error instanceof Error ? error.message : String(error)}` });
+    }
+    if (this.options.includeExternalPresence || (resolvedRoot && !rootIsRepo)) {
+      for (const activeRoot of livePresenceRepositories()) {
+        try {
+          const real = fs.realpathSync(activeRoot);
+          const allowed = this.options.includeExternalPresence || (resolvedRoot !== null && isWithin(resolvedRoot, real));
+          if (allowed && !candidates.includes(real) && marker(real)) candidates.push(real);
+        } catch { /* Best-effort live presence pickup. */ }
+      }
     }
     const inspected = new Set<string>();
     for (const candidate of candidates) {

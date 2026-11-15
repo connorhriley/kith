@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CoordDatabase } from './db.js';
+import { captureAbandoned } from './handoff-store.js';
+import { ignoredPaths } from './git-ignore.js';
 
 export interface AgentRecord {
   id: string;
@@ -40,6 +42,7 @@ export interface SessionRegistration { agent: AgentRecord; fencingToken: number;
 
 export class FencingAndAgentManager {
   public static readonly DEFAULT_LEASE_MS = 5 * 60 * 1000;
+  public static readonly IDLE_CONFLICT_MS = 60 * 60 * 1000;
   private readonly capabilities = new Map<string, string>();
   private static ownWindowsStart: string | null = null;
   private static inspectionFailure: string | null = null;
@@ -129,6 +132,7 @@ export class FencingAndAgentManager {
         ON CONFLICT(id) DO UPDATE SET name=excluded.name, client=excluded.client, pid=excluded.pid,
           pid_start_time=excluded.pid_start_time, pgid=excluded.pgid, status='active',
           worktree_path=COALESCE(agents.worktree_path, excluded.worktree_path),
+          branch=CASE WHEN agents.worktree_path IS NOT NULL THEN COALESCE(agents.branch, excluded.branch) ELSE excluded.branch END,
           shadow_tree_sha=NULL, last_seen_event_id=excluded.last_seen_event_id,
           registered_at=excluded.registered_at, last_heartbeat_at=excluded.last_heartbeat_at,
           lease_expires_at=excluded.lease_expires_at
@@ -153,10 +157,18 @@ export class FencingAndAgentManager {
     const agent = this.getAgent(agentId);
     const session = this.coordDb.db.prepare('SELECT token_hash, epoch FROM agent_sessions WHERE agent_id = ?')
       .get(agentId) as SessionRow | undefined;
-    if (!agent || agent.status !== 'active' || agent.lease_expires_at <= Date.now() || !session ||
+    const now = Date.now();
+    if (!agent || agent.status !== 'active' || !session ||
         !sessionToken || this.hash(sessionToken) !== session.token_hash ||
         !FencingAndAgentManager.isProcessAlive(agent.pid, agent.pid_start_time)) {
       throw new SessionOwnershipError(agentId);
+    }
+    if (agent.lease_expires_at <= now) {
+      if (!agentId.startsWith('auto-')) {
+        throw new SessionOwnershipError(agentId);
+      }
+      const extended = now + 30 * 60 * 1000;
+      this.coordDb.db.prepare('UPDATE agents SET last_heartbeat_at=?, lease_expires_at=? WHERE id=?').run(now, extended, agentId);
     }
     return session.epoch;
   }
@@ -193,14 +205,94 @@ export class FencingAndAgentManager {
       : 'SELECT * FROM agents ORDER BY registered_at DESC').all() as unknown as AgentRecord[];
   }
 
+  private lastIgnoredPurge = 0;
+
+  /** Fast SQLite probe so startup cleanup does zero Git work on clean repositories. */
+  public hasIgnoredCleanupTargets(): boolean {
+    const row = this.coordDb.db.prepare(`
+      SELECT (
+        EXISTS(SELECT 1 FROM conflicts)
+        OR EXISTS(SELECT 1 FROM locks WHERE lock_type = 'file')
+        OR EXISTS(SELECT 1 FROM contracts)
+        OR EXISTS(SELECT 1 FROM file_deps)
+      ) AS any_rows
+    `).get() as { any_rows: number } | undefined;
+    return Boolean(row?.any_rows);
+  }
+
+  /**
+   * Drop recorded conflicts, file claims, and AST contract/dep rows on paths Git ignores
+   * (dev-server logs, traces, build output). Older versions recorded them; they must neither block
+   * a session nor survive an upgrade.
+   */
+  public purgeIgnoredClaims(force = false): { conflicts: number; locks: number } {
+    const now = Date.now();
+    if (!force && now - this.lastIgnoredPurge < 30_000) return { conflicts: 0, locks: 0 };
+    this.lastIgnoredPurge = now;
+    const db = this.coordDb.db;
+    const conflictRows = db.prepare('SELECT id, file_path FROM conflicts').all() as Array<{ id: string; file_path: string }>;
+    const lockRows = db.prepare("SELECT id, pattern FROM locks WHERE lock_type = 'file'").all() as Array<{ id: string; pattern: string }>;
+    const contractFiles = db.prepare('SELECT DISTINCT file_path FROM contracts').all() as Array<{ file_path: string }>;
+    const depRows = db.prepare('SELECT DISTINCT source_file, target_file FROM file_deps').all() as Array<{ source_file: string; target_file: string }>;
+    const lockFile = (pattern: string) => pattern.startsWith('file:') ? pattern.slice(5) : pattern;
+    const allPaths = [
+      ...conflictRows.map(r => r.file_path),
+      ...lockRows.map(r => lockFile(r.pattern)),
+      ...contractFiles.map(r => r.file_path),
+      ...depRows.flatMap(r => [r.source_file, r.target_file]),
+    ];
+    if (!allPaths.length) return { conflicts: 0, locks: 0 };
+    const ignored = ignoredPaths(this.coordDb.repoRoot, allPaths);
+    const conflicts = conflictRows.filter(r => ignored.has(r.file_path));
+    const locks = lockRows.filter(r => ignored.has(lockFile(r.pattern)));
+    const badContracts = contractFiles.filter(r => ignored.has(r.file_path)).map(r => r.file_path);
+    const badDeps = [...new Set(depRows.flatMap(r => [r.source_file, r.target_file]))].filter(p => ignored.has(p));
+    if (conflicts.length || locks.length || badContracts.length || badDeps.length) {
+      this.coordDb.withTransaction(() => {
+        for (const r of conflicts) db.prepare('DELETE FROM conflicts WHERE id = ?').run(r.id);
+        for (const r of locks) db.prepare('DELETE FROM locks WHERE id = ?').run(r.id);
+        for (const p of badContracts) db.prepare('DELETE FROM contracts WHERE file_path = ?').run(p);
+        for (const p of badDeps) db.prepare('DELETE FROM file_deps WHERE source_file = ? OR target_file = ?').run(p, p);
+      });
+    }
+    return { conflicts: conflicts.length, locks: locks.length };
+  }
+
   public reapDeadAgents(): string[] {
+    try { this.purgeIgnoredClaims(); } catch { /* Housekeeping must never block a session. */ }
+    const now = Date.now();
+    // A peer silent for this long, or past its lease, must not keep raising conflicts for others.
+    try {
+      this.coordDb.db.prepare(`DELETE FROM conflicts WHERE agent_a IN (SELECT id FROM agents WHERE last_heartbeat_at < ? OR lease_expires_at < ?)
+        OR agent_b IN (SELECT id FROM agents WHERE last_heartbeat_at < ? OR lease_expires_at < ?)`)
+        .run(now - FencingAndAgentManager.IDLE_CONFLICT_MS, now, now - FencingAndAgentManager.IDLE_CONFLICT_MS, now);
+    } catch { /* Housekeeping must never block a session. */ }
     const agents = this.coordDb.db.prepare("SELECT * FROM agents WHERE status='active'").all() as unknown as AgentRecord[];
     const liveness = new Map<string, boolean>();
+    const toExtend: string[] = [];
     const candidates = agents.filter((a) => {
       const key = `${a.pid}:${a.pid_start_time}`;
       if (!liveness.has(key)) liveness.set(key, FencingAndAgentManager.isProcessAlive(a.pid, a.pid_start_time));
-      return a.lease_expires_at <= Date.now() || !liveness.get(key);
+      const alive = Boolean(liveness.get(key));
+      if (!alive) return true;
+      if (a.lease_expires_at <= now) {
+        if (a.id.startsWith('auto-')) {
+          toExtend.push(a.id);
+          return false;
+        }
+        return true;
+      }
+      return false;
     });
+    if (toExtend.length) {
+      const nextExpiry = now + 30 * 60 * 1000;
+      this.coordDb.withTransaction(() => {
+        for (const id of toExtend) {
+          this.coordDb.db.prepare("UPDATE agents SET lease_expires_at=? WHERE id=? AND status='active'").run(nextExpiry, id);
+          this.coordDb.db.prepare('UPDATE locks SET expires_at=MAX(expires_at, ?) WHERE owner_agent_id=?').run(nextExpiry, id);
+        }
+      });
+    }
     if (!candidates.length) return [];
     return this.coordDb.withTransaction(() => {
       const reaped: string[] = [];
@@ -217,6 +309,29 @@ export class FencingAndAgentManager {
     });
   }
 
+  /**
+   * Operator escape hatch: release an agent's claims and mark it dead without its session token.
+   * Used by `kith session clear` for an auto-session whose capability was lost or is stuck.
+   */
+  public forceReclaimAgent(agentId: string, reason = 'manual_clear'): boolean {
+    return this.coordDb.withTransaction(() => {
+      const agent = this.getAgent(agentId);
+      if (!agent || agent.status !== 'active') return false;
+      this.reclaim(agentId, 'dead', reason);
+      return true;
+    });
+  }
+
+  /** Delete recorded conflicts involving `agentId`, or every conflict when omitted. */
+  public clearConflicts(agentId?: string): number {
+    return this.coordDb.withTransaction(() => {
+      const r = agentId
+        ? this.coordDb.db.prepare('DELETE FROM conflicts WHERE agent_a=? OR agent_b=?').run(agentId, agentId)
+        : this.coordDb.db.prepare('DELETE FROM conflicts').run();
+      return Number(r.changes);
+    });
+  }
+
   public completeAgentSession(agentId: string): void {
     this.coordDb.withTransaction(() => { this.assertSession(agentId); this.reclaim(agentId, 'completed', 'session_completed'); });
     this.capabilities.delete(agentId);
@@ -230,6 +345,8 @@ export class FencingAndAgentManager {
   private reclaim(agentId: string, status: 'dead' | 'completed', reason: string): void {
     const epoch = this.coordDb.nextFencingToken();
     const now = Date.now();
+    // Record what was in flight before the claims that describe it are released. Never let this block reclaim.
+    if (status === 'dead') { try { captureAbandoned(this.coordDb, agentId, reason); } catch { /* Best effort. */ } }
     this.coordDb.db.prepare('UPDATE agents SET status=?, last_heartbeat_at=? WHERE id=?').run(status, now, agentId);
     this.coordDb.db.prepare('DELETE FROM locks WHERE owner_agent_id=?').run(agentId);
     this.coordDb.db.prepare('DELETE FROM resources WHERE owner_agent_id=?').run(agentId);

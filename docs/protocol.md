@@ -6,7 +6,7 @@ Kith is a local ledger for cooperating coding agents. Clients share one reposito
 
 Protocol 1.1 ships with package 0.1.2. Earlier `kith-coord@0.1.1` reports protocol 1.0 and includes full contracts in MCP status; the compact default and `includeContracts` input below require 0.1.2.
 
-`KITH_PROTOCOL_VERSION` and status responses advertise `1.6.0` starting with package 0.1.8; package 0.1.7 advertises `1.5.0`, and package 0.1.6 advertises `1.4.0`. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema (3) have independent versions. The [tool snapshot](protocol/tools.v1.json) contains all 14 tool names, descriptions and JSON input schemas, exported from an actual MCP `tools/list` response. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
+`KITH_PROTOCOL_VERSION` and status responses advertise `1.6.0` starting with package 0.1.8; package 0.1.7 advertises `1.5.0`, and package 0.1.6 advertises `1.4.0`. Protocol 1.6 adds optional tools (`kith_write_handoff`, `kith_read_handoffs`, `kith_brief`) and additive result fields (handoffs, `workflowMode`, `session.leaseExpiresAt`, `completedIntegrationCount`). The storage schema stays 3. Opening the database creates an optional `handoffs` table that older binaries ignore. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema have independent versions. The [tool snapshot](protocol/tools.v1.json) contains all 17 tool names, descriptions and JSON input schemas, exported from an actual MCP `tools/list` response. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
 
 For protocol 1.x, existing tool names, required input fields and the ownership/claim semantics below remain compatible. New optional fields/tools and additive result fields use a minor version; compatible repairs use a patch version. Removing tools, adding required inputs or changing ownership semantics requires a major version. Clients should ignore unknown result fields. The snapshot describes inputs; it is not a machine-validated schema for every result or a guarantee of source-level library compatibility.
 
@@ -23,6 +23,28 @@ Protocol 1.2 adds optional `repository` to every tool. A global `kith mcp` conne
 - `kith_add_task` adds tasks with priority, scope and optional `dependsOn`. `kith_claim_next_task` atomically claims the next unblocked task and its scope. `kith_get_status` lists tasks. These are the canonical names; there are no redundant task aliases or capability-matching scheduler.
 - `kith_record_file_edit` reports actual worktree changes. `kith_publish_contract` publishes an explicit interface record. Contract analysis and exact-name reuse hints are advisory, not proof of semantic compatibility.
 - `kith_acquire_port` reserves a port among Kith clients. The OS probe socket is released; unrelated processes can still bind it. `kith_run_with_mutex` executes literal argv under a renewable named FIFO mutex and persistent process-group guard. Cancellation/disconnect stops the guarded command before release. Do not detach protected work from its supervised group.
+
+## Handoffs
+
+A session boundary used to erase what an agent learned: its claims were released and its task requeued as if untouched. Handoffs keep that knowledge and deliver it to whoever works the same scope next.
+
+- `kith_write_handoff` leaves a note: `kind` (`progress`, `blocked` or `done`), a required `summary` (4,000 characters), and optional `done`, `remaining`, `learned` and `failed` lists (20 items of 500 characters), extra `files` and a `transcriptRef` that points at the full session (client and session ID or path; never the transcript). Kith records the files changed in the agent's worktree from Git and the files it claimed or reported. `taskId` is needed only when the agent owns several active tasks. `releaseTask:true` also returns the task to the queue and frees its claims, so another agent can claim it; it is not valid with `done`.
+- Kith writes a note itself when a session ends without one. If a session dies, disconnects or expires while a task is active, an `abandoned` note records the task, scope, claimed and reported files, the last failed integration diagnostics and any quarantined changes before the claims are released. When a task completes and the agent wrote no `done` note, an automatic one records the files and the verification result. Recording is best effort and never blocks reclaiming a session.
+- `kith_begin_work` and `kith_claim_next_task` return `handoffs`: notes for the same task first, then unfinished notes whose scope or files overlap the claimed scope (using the same exact glob intersection as claims), then at most two completion notes. `kith_get_status` returns the open ones compactly. `kith_read_handoffs` returns full text and filters by `taskId`, `scopeGlobs` or `fromAgentId`; unfinished work by default, `includeResolved:true` for everything. A note is resolved when a later `done` note exists for its task or the task is complete. Other agents see `handoff_written` in their live sibling delta.
+- **Handoffs are untrusted.** One agent's text reaches another agent's context, so every reply wraps notes in `{ untrusted: true, notice, items }`. Readers verify them against the code and never treat them as instructions. Text is stripped of control characters and bounded; the table keeps the newest 500 notes for 30 days.
+- **Storage.** Notes live in an optional `handoffs` table created on open. Older binaries ignore it, so mixed-version clients sharing a repository keep working, and readers of older snapshots must tolerate its absence.
+
+## The brief
+
+`kith_brief` is a read-only situational summary and needs no session: who is active on what (live, or lease expired), claims held by others that overlap `scopeGlobs`, queued tasks, open handoff notes and conflicts, plus the workflow mode. Pass `scopeGlobs` to narrow it to the files you are about to touch. Handoff text in it is untrusted, as above, and is abridged: it points at `kith_read_handoffs` for the full note.
+
+`kith brief` is the same summary for people, hooks and agents without MCP. It reads a private snapshot, so it creates no state, migrates nothing, reaps nothing and never fails its caller: with no Kith state it says so, with damaged state it reports that and exits 0, and `--quiet` prints nothing when there is nothing to report. `--scope` narrows it and `--json` returns the structure. `kith init --only brief` adds a Claude Code `SessionStart` hook that runs `kith brief --quiet`, so each new session starts with that context.
+
+## Workflow mode
+
+A repository is in one of two modes, shared by every agent and worktree and stored with the coordination state (`worktrees` unless changed). In `worktrees` mode each agent may work in an isolated worktree and integrates through the merge train. In `main` mode every agent works in the one checkout and coordinates through scope claims: `kith_begin_work` and `kith_claim_next_task` never create a worktree, they ignore `isolateWorktree` and say so in `notes`, and completing work releases the claims with no integration step (so a `verificationCmd` is not run). Both tools and `kith_get_status` report `workflowMode`. Set it with `kith mode main|worktrees` or `kith init --mode`; `kith mode` shows it. Generated agent guidance describes the recorded mode.
+
+`kith mcp --compact`, the default used by `kith install`, advertises six workflow tools instead of the 17 in the snapshot: `kith_brief`, `kith_work`, `kith_claim`, `kith_handoff`, `kith_finish` and `kith_resource`. `kith mcp --full` restores the 17-tool list. Both advertise protocol 1.6.0.
 
 ## Workspace observation and integration
 
@@ -54,11 +76,11 @@ Linked-module replies retain every symbol supplied by the already bounded core i
 
 ## Protocol 1.6: lean receipts and quieter successful history (0.1.8)
 
-Owned MCP replies add `session:{agentId,leaseExpiresAt}` after the existing authorization/renewal, so agents can schedule an idle heartbeat without a status query. The deadline is Unix milliseconds. Session grants also keep their existing `agent.lease_expires_at`. No autonomous renewal, extended lease, new tool or storage change is added. Failed authorization and expired sessions do not receive a live receipt. Keyed replays retain the original deadline and `operation.replayed:true`; that historical receipt never establishes current ownership.
+Owned MCP replies add `session:{agentId,leaseExpiresAt}` after the existing authorization/renewal, so agents can schedule an idle heartbeat without a status query. The deadline is Unix milliseconds. Session grants also keep their existing `agent.lease_expires_at`. No autonomous renewal or extended lease is added. Failed authorization and expired sessions do not receive a live receipt. Keyed replays retain the original deadline and `operation.replayed:true`; that historical receipt never establishes current ownership.
 
 Begin and queued-claim already create the session and claim files; edit reports already publish extracted signatures; completion runs verification. Extra start, lock, publish or check calls for those same actions are unnecessary. Existing sibling event cursors still deliver new events once; conflict details are not suppressed or summarised away.
 
-`kith_get_status` also omits successful integration logs by default and reports `completedIntegrationCount`. `includeHistory:true` returns those records with their original logs, together with completed tasks. Queued, testing and failed integrations and their diagnostics remain visible either way. These additive result fields advance the protocol to 1.6. The storage schema stays 3.
+`kith_get_status` also omits successful integration logs by default and reports `completedIntegrationCount`. `includeHistory:true` returns those records with their original logs, together with completed tasks. Queued, testing and failed integrations and their diagnostics remain visible either way. Together with the new tools above, these fields are protocol 1.6. The storage schema stays 3; the handoffs table is optional.
 
 ## Protocol 1.4: keyed retries and operational failures (0.1.6)
 

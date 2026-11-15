@@ -269,6 +269,7 @@ export function inspectWorkspaceContracts(repoRoot: string, worktreeDir?: string
 }
 
 export function verifyCrossRepoImportsForFile(params: {repoRoot: string; worktreeDir?: string; filePath: string; content: string}): string[] {
+  if (!/\.(?:[cm]?[jt]sx?)$/i.test(params.filePath)) return [];
   if (Buffer.byteLength(params.content) > MAX_SOURCE_BYTES) return ['[CROSS-REPO UNAVAILABLE] Edited file exceeds inspection limit; use normal project verification.'];
   const imports = AstAnalyzer.extractImports(params.worktreeDir ?? params.repoRoot, params.filePath, params.content);
   const report = inspectWorkspaceContracts(params.repoRoot, params.worktreeDir, imports.map(i => i.rawSpecifier));

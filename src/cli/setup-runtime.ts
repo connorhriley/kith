@@ -52,14 +52,16 @@ export function setupRuntime(home: string, dryRun = false): string {
 }
 
 /** Verify the retained server without selecting a repository or creating project state. */
-export async function verifySetupRuntime(cli: string): Promise<void> {
+export async function verifySetupRuntime(cli: string, options: { compact?: boolean } = {}): Promise<void> {
   const {Client} = await import('@modelcontextprotocol/sdk/client/index.js');
   const {StdioClientTransport} = await import('@modelcontextprotocol/sdk/client/stdio.js');
   const client = new Client({name:'kith-setup-check',version:KITH_VERSION});
   const env = Object.fromEntries(Object.entries(process.env).filter(([key,value])=>value!==undefined && !key.startsWith('KITH_') && !key.startsWith('GIT_') && key!=='CLAUDE_PROJECT_DIR')) as Record<string,string>;
+  const args = options.compact ? [cli, 'mcp', '--compact'] : [cli, 'mcp'];
+  const expectedTool = options.compact ? 'kith_work' : 'kith_begin_work';
   try {
-    await client.connect(new StdioClientTransport({command:process.execPath,args:[cli,'mcp'],cwd:path.parse(cli).root,env,stderr:'ignore'}), {timeout:10000});
+    await client.connect(new StdioClientTransport({command:process.execPath,args,cwd:path.parse(cli).root,env,stderr:'ignore'}), {timeout:10000});
     const tools = await client.listTools(undefined, {timeout:10000});
-    if (!tools.tools.some(t=>t.name==='kith_begin_work') || client.getServerVersion()?.version!==KITH_VERSION) throw new Error('Retained Kith server did not pass MCP discovery; no client configuration was written.');
+    if (!tools.tools.some(t=>t.name===expectedTool) || client.getServerVersion()?.version!==KITH_VERSION) throw new Error('Retained Kith server did not pass MCP discovery; no client configuration was written.');
   } finally { await client.close(); }
 }

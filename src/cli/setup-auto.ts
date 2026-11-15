@@ -26,8 +26,10 @@ function object(value: unknown, label: string): Record<string, any> {
 function ownedLauncher(value: Record<string, any>): boolean {
   if (value.type !== undefined && value.type !== 'stdio') return false;
   if (typeof value.command !== 'string' || !/^node(?:\.exe)?$/i.test(path.basename(value.command)) ||
-      !Array.isArray(value.args) || value.args[1] !== 'mcp' ||
-      ![2, 4].includes(value.args.length) || value.args.length === 4 && value.args[2] !== '--repo') return false;
+      !Array.isArray(value.args) || value.args[1] !== 'mcp') return false;
+  const rest = value.args.slice(2);
+  const tail = rest[0] === '--compact' ? rest.slice(1) : rest;
+  if (!(tail.length === 0 || tail.length === 2 && tail[0] === '--repo')) return false;
   try {
     const entry = fs.realpathSync(value.args[0]);
     return path.basename(entry) === 'index.js' && path.basename(path.dirname(entry)) === 'cli' &&
@@ -36,12 +38,12 @@ function ownedLauncher(value: Record<string, any>): boolean {
 }
 
 /** Preflight all clients first. Reuse private setup ledgers; never change hooks or permissions. */
-export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = os.homedir(), options: { dryRun?: boolean; cliPath?: string; guidance?: boolean } = {}): ClientDetectionResult[] {
+export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = os.homedir(), options: { dryRun?: boolean; cliPath?: string; guidance?: boolean; compact?: boolean; globalOnly?: boolean } = {}): ClientDetectionResult[] {
   const target = physicalPath(targetWorkspace);
   const layout = target === path.parse(target).root ? undefined : discoverRepository(target);
   const workspace = layout?.checkoutRoot ?? target;
   home = physicalPath(home);
-  const server = { command: process.execPath, args: [options.cliPath ?? installedCliPath(), 'mcp'] };
+  const server = { command: process.execPath, args: [options.cliPath ?? installedCliPath(), 'mcp', ...(options.compact ? ['--compact'] : [])] };
   const projectServer = { ...server, args: [...server.args, '--repo', workspace] };
   const executable = (name: string) => (process.env.PATH ?? '').split(path.delimiter).some(dir =>
     [name, ...(process.platform === 'win32' ? [name+'.exe', name+'.cmd'] : [])].some(file => fs.existsSync(path.join(dir, file))));
@@ -111,14 +113,15 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
     results.push({ clientName: 'Codex', found: true, configPath: codex, configured,
       notes: configured ? `${options.dryRun ? 'Would configure' : 'Configured'} Kith for per-task repository selection; other TOML preserved` : 'Custom Kith server preserved; review its repository and launcher manually' });
   }
-  if (layout?.commonGitDir) jsonClient('Cursor', path.join(workspace, '.cursor/mcp.json'), workspace, true, true);
+  if (layout?.commonGitDir && !options.globalOnly) jsonClient('Cursor', path.join(workspace, '.cursor/mcp.json'), workspace, true, true);
   else jsonClient('Cursor', path.join(home, '.cursor/mcp.json'), home, fs.existsSync(path.join(home, '.cursor')) || executable('cursor') || macApp('Cursor'));
   const antigravity = path.join(home, '.gemini/config/mcp_config.json');
   jsonClient('Antigravity', antigravity, home, fs.existsSync(path.dirname(antigravity)) || macApp('Antigravity'));
 
-  if (options.guidance && layout?.commonGitDir) {
-    for (const [name, entry] of agentGuidance(workspace)) queue(workspace, path.join(workspace, name), entry.content);
-    results.push({clientName: 'Project instructions', found: true, configured: true, configPath: path.join(workspace, 'AGENTS.md'), notes: 'Scoped claims, isolated worktrees and verification guidance prepared for agents'});
+  if (options.guidance && !options.globalOnly && layout?.commonGitDir) {
+    const guidanceWarnings: string[] = [];
+    for (const [name, entry] of agentGuidance(workspace, { warnings: guidanceWarnings, mode: readCoordinationState(workspace, { coordinationOnly: true }).workflowMode })) queue(workspace, path.join(workspace, name), entry.content);
+    results.push({clientName: 'Project instructions', found: true, configured: true, configPath: path.join(workspace, 'AGENTS.md'), notes: ['Scoped claims, isolated worktrees and verification guidance prepared for agents', ...guidanceWarnings].join('; ')});
   }
 
   // Keep private backup material out of Git, using the same retained ignore rule as init.
@@ -134,12 +137,12 @@ export function autoConfigureAllClients(targetWorkspace = process.cwd(), home = 
   // Every parse and path check above completes before any client writes. Backups precede
   // writes under each root's setup lock. An interrupted setup retains exact original bytes.
   if (!options.dryRun && groups.size) {
-    if (layout?.commonGitDir) {
+    if (groups.has(workspace) && layout?.commonGitDir) {
       const state = readCoordinationState(workspace);
       if (state.state === 'unavailable') throw new Error(state.error);
       if (state.state === 'ready' && state.schemaVersion !== 3) throw new Error('Stop all Kith coordinators and back up their stopped state before upgrading; no client configuration was written.');
     }
-    const engine = layout?.commonGitDir ? new KithEngine(workspace) : undefined;
+    const engine = groups.has(workspace) && layout?.commonGitDir ? new KithEngine(workspace) : undefined;
     try {
       for (const [root, group] of groups) {
         fs.mkdirSync(group.coordDir, { recursive: true, mode: 0o700 });

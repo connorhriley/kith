@@ -39,10 +39,21 @@ it('refuses damaged backup encodings before restoring any configuration',()=>{
  Object.values(ledger.files).forEach((entry:any)=>{entry.before='not-valid-base64';});fs.writeFileSync(file,JSON.stringify(ledger));
  const before=fs.readFileSync(path.join(root,'.claude/settings.json'));expect(()=>uninstallKith(root)).toThrow('Damaged setup ledger');expect(fs.readFileSync(path.join(root,'.claude/settings.json'))).toEqual(before);
 });
-it('diagnoses missing inherited ownership when native hooks are installed without creating a session',()=>{
+it('reports a shell without a session as not participating, and one naming a session it lacks as broken, without creating state',()=>{
  initializeKithRepository(root,'kith',{integrations:['cursor']});
- const before=fs.readFileSync(path.join(root,'.coord/state.db')),report=doctorReport(root);
- expect(report.checks.find(c=>c.name==='session-environment')?.ok).toBe(false);expect(fs.readFileSync(path.join(root,'.coord/state.db'))).toEqual(before);
+ const saved={id:process.env.KITH_AGENT_ID,token:process.env.KITH_SESSION_TOKEN};
+ try {
+  delete process.env.KITH_AGENT_ID;delete process.env.KITH_SESSION_TOKEN;
+  const before=fs.readFileSync(path.join(root,'.coord/state.db')),report=doctorReport(root);
+  // Hooks pass through for a process with no identity, so this is information, not a fault.
+  expect(report.checks.find(c=>c.name==='session-environment')).toMatchObject({ok:true,detail:expect.stringContaining('allow everything')});
+  expect(fs.readFileSync(path.join(root,'.coord/state.db'))).toEqual(before);
+  process.env.KITH_AGENT_ID='nobody';process.env.KITH_SESSION_TOKEN='forged';
+  expect(doctorReport(root).checks.find(c=>c.name==='session-environment')?.ok).toBe(false);
+  expect(fs.readFileSync(path.join(root,'.coord/state.db'))).toEqual(before);
+ } finally {
+  for(const [key,value] of [['KITH_AGENT_ID',saved.id],['KITH_SESSION_TOKEN',saved.token]] as const) { if(value===undefined) delete process.env[key]; else process.env[key]=value; }
+ }
 });
 
 

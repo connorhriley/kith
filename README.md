@@ -29,6 +29,9 @@ Kith gives cooperating agents shared local state: who owns a task, which files a
 | Give agents separate working files | Git worktrees with an explicit integration step |
 | Check work before integration | Your project's verification command |
 | Share local tools | Port reservations and supervised command mutexes |
+| Know what is going on before you start | `kith brief`: who is active on what, overlapping claims, open handoffs and conflicts. Read-only, no session needed |
+| Work the way you do | Worktree isolation, or one shared checkout with scope claims (`kith mode main`) |
+| Keep what an agent learned | Handoff notes that survive a session boundary and reach whoever works the same scope next |
 | See what is happening | Session/task state through CLI/MCP; optional read-only editor and worktree views |
 
 Kith fits workflows where you already launch multiple coding agents and want them to coordinate. It does not choose models, write prompts, or launch a fleet for you. Worktrees separate files; Kith adds shared ownership and resource coordination.
@@ -41,7 +44,7 @@ Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workf
 
 Git recording and integration require a commit identity configured for the repository (`user.name` and `user.email`). Kith does not change your global Git identity.
 
-**Upgrading to 0.1.8:** Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. Version 0.1.8 does not change the storage schema. Databases already on schema 3, including those written by 0.1.6 and 0.1.7, open unchanged. An upgrade from schema 2 still applies the 0.1.6 migration to schema 3, which older binaries refuse. Existing custom launchers are preserved; review their pinned version before reconnecting. See [recovery guidance](docs/reliability.md#recovery).
+**Upgrading to 0.1.8:** Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. The storage schema stays 3. Databases already on schema 3 open without a version migration. The first open with 0.1.8 creates an optional `handoffs` table; binaries from 0.1.6 and 0.1.7 ignore that table and keep working, but they do not read or write handoff notes. An upgrade from schema 2 still applies the 0.1.6 migration to schema 3, which older binaries refuse. Hooks no longer block a process that has not joined a session, and integration refuses only dirty files the merge itself changes. Existing custom launchers are preserved; review their pinned version before reconnecting. On macOS, `kith install` and `kith setup` register a login LaunchAgent unless `--no-autostart` or `--no-radar` is passed. See [recovery guidance](docs/reliability.md#recovery).
 
 ### VS Code or Cursor
 
@@ -56,7 +59,7 @@ cursor --install-extension kith-coord.kith@0.1.8
 
 Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](extensions/editor/README.md#install) also links the published 0.1.8 VSIX.
 
-Open a trusted local Git checkout and approve Kith's MCP server through the editor. The extension bundles the coordination server, detects Node, and preserves existing MCP entries, hooks and tool permissions. **No global npm install is needed.** Each agent still needs to use Kith's tools; installing the extension does not enforce claims on other writers.
+Open a trusted local Git checkout and approve Kith's MCP server through the editor. The extension bundles the coordination server, detects Node, and preserves existing MCP entries, hooks and tool permissions. **No global npm install is needed.** It registers the compact tool profile (`kith.mcp.profile`, `compact` by default, or `full`), shows a read-only global hook status note in Output, and adds **Kith: Install Global Hooks & Autostart** (`kith.installGlobal`). The bundled extension does not include the macOS menu-bar helper; run `kith install` from the CLI on macOS for Radar login autostart. Each agent still needs to use Kith's tools; installing the extension alone does not enforce claims on other writers.
 
 Start with a scoped task:
 
@@ -70,17 +73,24 @@ The [extension guide](extensions/editor/README.md) covers settings and existing 
 
 ### CLI and other MCP clients
 
-One command from your Git checkout configures supported detected clients and adds project instructions:
+Published **0.1.7** configures detected clients and adds project instructions with:
 
 ```sh
 npx --yes --package kith-coord@0.1.8 kith setup
 ```
 
-Durable setup starts with **0.1.7**. Earlier versions need a persistent global npm installation before setup. [Client setup](docs/integrations.md#configure-detected-local-clients) covers configuration scope and advanced options.
+**`kith install`** is the one-command onboarding path. `kith setup` remains a compatible alias:
 
-Setup retains an exact self-contained runtime outside npx's cache, checks its MCP discovery, and backs up changes before writing them. **On macOS, setup opens read-only Radar automatically**; use `--no-radar` for headless or MCP-only setup. Existing custom Kith launchers, peer servers, hooks and permissions are preserved. From outside a Git checkout it configures global connections; pass a project path to add that project's guidance. Reconnect the client and approve its MCP server through the client's normal controls.
+- Configures global MCP servers with the concise **`--compact`** tool profile by default (`kith mcp --compact`, or `--full` for the complete surface).
+- Installs global silent-solo `--auto` hooks for **Claude Code** (`~/.claude/settings.json`) and **Cursor** (`~/.cursor/hooks.json`). Solo work stays zero-write (`Watching only`); when concurrent activity overlaps, hooks auto-join Kith and isolate writers into worktrees or leases.
+- On **macOS**, installs and starts a login `LaunchAgent` (`dev.kith.radar`) for background menu-bar Radar, and opens the read-only view. `--no-autostart` or `--no-radar` skips the login item. Repeat setup keeps the existing workspace.
+- **`kith uninstall`** removes the macOS `LaunchAgent`, global Kith hooks, global MCP entries, retained runtimes and launcher symlinks.
 
-Ask your agent to do the task using Kith. The view says **Watching only** until a task is actually recorded. A configured server is not a running task. `kith setup --dry-run` previews without writes; `kith doctor /absolute/checkout` diagnoses configuration.
+Note the platform and client boundaries: **Codex CLI** does not expose native pre/post tool hooks, so it coordinates through `--compact` MCP tools and Radar/watcher observations rather than automatic hook interception. **Linux and Windows** skip macOS menu-bar autostart and use `kith watch` for passive supervision.
+
+Durable setup starts with **0.1.7** (retaining an exact self-contained runtime outside npx's cache, verifying MCP discovery, and backing up modified files). Existing custom Kith launchers, peer servers, hooks and permissions are preserved. Reconnect the client and approve its MCP server through the client's normal controls.
+
+Day to day, run `kith` (a read-only status overview in a terminal), `kith status`, `kith brief`, `kith run`, `kith gc`, `kith doctor [path]`, or `kith help --all`. The view says **Watching only** until a task or concurrent overlap is recorded. `kith install --dry-run` and `kith setup --dry-run` preview without writes.
 
 For source installation and the disposable demo, use the pinned **pnpm 10.20.0**:
 
@@ -115,13 +125,15 @@ The implementation is in [examples/two-agents.mjs](examples/two-agents.mjs). Thi
 
 ### Client support
 
-The editor extension bundles the server and offers it through native MCP registration; no global npm install is needed. Installing an extension or writing configuration does not enforce claims on writers that do not use Kith. Existing custom Kith entries retain precedence.
+The editor extension bundles the server and offers it through native MCP registration; no global npm install is needed. Installing an extension or writing MCP configuration alone does not enforce claims on writers that do not call Kith tools unless global `--auto` hooks are installed for that client. Existing custom Kith entries retain precedence.
 
-| Client | Setup and validation |
+| Client | Setup and behavior |
 | --- | --- |
-| VS Code / Cursor | One-click marketplace extension; native MCP controls retain approval and trust |
-| Claude Code / Claude Desktop / Codex | Detected client configuration through `kith setup` |
-| Other MCP clients | stdio server via `kith mcp`; client-specific validation required |
+| VS Code / Cursor | Marketplace extension with `kith.mcp.profile` set to `compact` by default; **Kith: Install Global Hooks & Autostart** runs `kith install` |
+| Claude Code and Cursor | Detected client configuration through `kith install` or `kith setup`; silent-solo `--auto` hooks join when work overlaps |
+| Codex CLI | Detected global MCP configuration (`--compact` by default). Codex CLI has no native tool hooks, so coordination uses MCP tools and Radar or `kith watch` |
+| Claude Desktop | Detected MCP configuration via `kith install` / `kith setup` |
+| Other MCP clients | stdio server via `kith mcp` (`--compact` or `--full`); client-specific validation required |
 
 Native evidence is version-specific. See [client validation](docs/client-validation.md), [advanced integration setup](docs/integrations.md) and [session ownership](docs/sessions-and-mutexes.md). The npm package is **`kith-coord`** and the command is **`kith`**; the unrelated npm package `kith` is not this project.
 
@@ -139,9 +151,9 @@ See [dev-server launch and waiting claims](docs/usage.md#launch-a-dev-server-on-
 
 ## Read-only Radar
 
-From 0.1.8, macOS setup opens Radar in the menu bar for the selected checkout or workspace. It uses the retained installation, so clearing the npx cache does not break it. Repeat setup keeps an existing Radar workspace selected. Use **Switch Workspace** in its menu to change it.
+From 0.1.8, macOS `kith install` and `kith setup` load a `LaunchAgent` (`dev.kith.radar`) so menu-bar Radar runs in the background and restarts across logins for the selected checkout or workspace. It uses the retained installation, so clearing the npx cache does not break it. Repeat runs keep an existing Radar workspace selected. Use **Switch Workspace** in its menu to change it.
 
-`kith setup --no-radar` configures MCP without opening Radar (useful on headless machines); `--dry-run` never launches it. Linux and Windows skip the menu-bar view. Setup does not add a login item; after quitting, reopen with:
+`kith install --no-autostart` (or `--no-radar`) configures MCP and hooks without loading the macOS login agent (useful on headless machines); `--dry-run` never writes or launches anything. Linux and Windows skip the macOS menu-bar app and `LaunchAgent`, using `kith watch` for passive monitoring instead (external IDE `presence.db` discovery is opt-in via `--include-presence`). Remove the login item anytime with `kith uninstall`, or inspect manually with:
 
 ```sh
 kith watch /path/to/workspace --once --json
@@ -154,10 +166,12 @@ The menu and editor lead with recorded tasks, current file claims, shared-resour
 
 ## How a task moves through Kith
 
+0. **Look first.** `kith brief` (or `kith_brief`) shows who is active on what, claims that overlap your scope, open handoffs and conflicts. It is read-only and needs no session.
 1. **Begin through MCP.** Call `kith_begin_work` with a unique `agentId`, explicit `scopeGlobs`, and `isolateWorktree: true`. The connection retains session ownership; no shell exports are needed for this MCP-only workflow.
 2. **Claim a scope.** Cooperating clients receive a conflict when an exclusive claim overlaps another claim.
 3. **Do the work.** Edit the returned `worktree.worktreePath`, report edits with `kith_record_file_edit`, and use `kith_run_with_mutex` for serialized commands. Heartbeat before expiry and keep the owning connection open.
-4. **Verify and complete.** For a worktree, Kith checkpoints changes and integrates through a separate staging worktree. The target must be clean. Supply a verification command to check more than Git mergeability.
+4. **Leave a handoff.** When you finish, get blocked or must stop, call `kith_write_handoff` with what is done, what remains, what failed and what you learned. `releaseTask` hands the task back to the queue. If a session ends without a note, Kith records what it observed. The next agent on the same scope receives these notes from `kith_begin_work` or `kith_claim_next_task`, labelled as untrusted information to verify.
+5. **Verify and complete.** For a worktree, Kith checkpoints changes and integrates through a separate staging worktree. The target may hold unrelated uncommitted work, but not edits to files the integration changes. Supply a verification command to check more than Git mergeability.
 
 Failed verification leaves the target unchanged and keeps the worktree for repair. Successful integration also retains the worktree until explicit cleanup. External Git writers must still coordinate.
 

@@ -126,7 +126,9 @@ it('blocks generated edit hooks with missing, forged or completed session creden
   initializeKithRepository(root, `${quote(process.execPath)} ${quote(cli)}`, { integrations: ['claude'] });
   const start = run(['session', 'start', '--agent', 'worker']);
   const session = { id: 'worker', token: JSON.parse(start.stdout).sessionToken };
-  expect(run(['hook', 'pre', '--tool', 'Edit', '--file', 'file.ts']).status).toBe(2);
+  // A session that names itself without its capability is refused; a process with no identity at all is not governed.
+  expect(run(['hook', 'pre', '--tool', 'Edit', '--file', 'file.ts', '--agent', 'worker']).status).toBe(2);
+  expect(run(['hook', 'pre', '--tool', 'Edit', '--file', 'file.ts']).status).toBe(0);
   expect(run(['hook', 'pre', '--tool', 'Edit', '--file', 'file.ts'], { ...session, token: 'forged' }).status).toBe(2);
   expect(run(['hook', 'pre', '--tool', 'Edit', '--file', 'file.ts'], session).status).toBe(0);
   expect(run(['complete'], session).status).toBe(0);
