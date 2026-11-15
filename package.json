@@ -44,6 +44,7 @@
     "test:clients": "pnpm build && node scripts/validate-native-clients.mjs",
     "protocol:export": "pnpm build && node scripts/export-protocol.mjs",
     "protocol:check": "node scripts/export-protocol.mjs --check",
+    "release:check": "node scripts/check-release-manifest.mjs",
     "build:menubar": "node scripts/build-menubar.mjs",
     "test:menubar": "node scripts/test-menubar.mjs"
   },
@@ -86,5 +87,12 @@
     "access": "public",
     "registry": "https://registry.npmjs.org"
   },
-  "mcpName": "io.github.connorhriley/kith"
+  "mcpName": "io.github.connorhriley/kith",
+  "pnpm": {
+    "overrides": {
+      "@hono/node-server": "~2.1.8",
+      "fast-uri": "~3.1.9",
+      "hono": "~4.13.18"
+    }
+  }
 }

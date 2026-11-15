@@ -44,4 +44,10 @@ The public entrypoint is `src/index.ts`. `KithEngine` assembles storage, agent l
 
 `pnpm test:package` builds and packs the distribution, installs it in an empty consumer project, and checks the CLI, packaged supervised worker, and library API. It needs registry access for runtime dependencies.
 
-Native client checks are opt-in: see [client validation](docs/client-validation.md). They require installed authenticated clients and consume model usage. CI uses no model credentials. Establish monitored security contacts before public launch or configuring a release workflow.
+Native client checks are opt-in: see [client validation](docs/client-validation.md). They require installed authenticated clients and consume model usage. CI uses no model credentials.
+
+## Releasing
+
+Publish by pushing a `vX.Y.Z` tag after the release commit is on `main`. The release workflow checks that the tag, `package.json`, `src/version.ts`, and `server.json` agree, runs the same Linux, macOS, and Windows checks as pull requests, then publishes. It uses npm trusted publishing, so there is no `NPM_TOKEN`. The one-time npmjs.com values, the GitHub `release` environment, and the optional editor-marketplace secrets are in [RELEASING.md](RELEASING.md).
+
+Run `pnpm release:check` before tagging. Report security issues through [private vulnerability reporting](https://github.com/connorhriley/kith/security/advisories/new), as described in [SECURITY.md](SECURITY.md).
