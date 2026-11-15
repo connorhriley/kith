@@ -1,11 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.8 — 2026-11-15
 
-- Reduce repeated MCP discovery instructions while preserving repository/capability/retry boundaries. Owned replies report the existing lease deadline; guidance uses direct begin/claim, idle-only heartbeat, automatic edit publication and a single integration verification. No background renewal, event suppression, new tool or dependency.
-
+- Reduce repeated MCP discovery instructions while preserving repository/capability/retry boundaries. Owned replies add `session.leaseExpiresAt` (Unix milliseconds) for the existing lease; guidance uses direct begin/claim, idle-only heartbeat, automatic edit publication and a single integration verification. No background renewal, event suppression, new tool or dependency.
 - Open read-only Radar as part of macOS setup, using the retained runtime and an acknowledged native launch. Repeat setup keeps the existing view/workspace; a kernel-held instance lock prevents duplicate new views and releases on exit/crash. Add `--no-radar` for headless setup; dry runs and other platforms never launch it. No login item, model calls, dependency or ownership change.
-- Make generated guidance use status checks for blockers, changed coordination and recovery instead of routine polling; retain heartbeat and edit-reporting safeguards. Default status replies omit successful integration logs with an explicit count; the existing `includeHistory:true` restores them. Failed/current integration diagnostics remain visible.
+- Make generated guidance use status checks for blockers, changed coordination and recovery instead of routine polling; retain heartbeat and edit-reporting safeguards. Default status replies omit successful integration logs and report `completedIntegrationCount`; the existing `includeHistory:true` restores them. Failed/current integration diagnostics remain visible.
+- Stay on protocol 1.5 and storage schema 3. No storage migration, new runtime dependency or editor configuration change.
 
 ## 0.1.7 — 2026-10-24
 
@@ -122,9 +122,7 @@
 - Add an opt-in native Codex/Claude runner checking real editor/MCP workflows and resulting repository state, with redacted reports and bounded runs.
 - Add manually dispatched CI, retained JUnit evidence and installed-package/two-client demo validation across Linux/macOS and Node 22.13/22/24.
 
-## Unreleased
-
-- Reduce repeated MCP discovery instructions while preserving repository/capability/retry boundaries. Owned replies report the existing lease deadline; guidance uses direct begin/claim, idle-only heartbeat, automatic edit publication and a single integration verification. No background renewal, event suppression, new tool or dependency.
+### Notes later released in 0.1.7
 
 - One-command setup retains a self-contained runtime outside transient npx caches, checks MCP discovery and installs marked project guidance alongside detected client configuration. Repeat/interrupted setup retains recovery material and existing custom launchers; older live project schemas require the stopped-upgrade procedure.
 - Read-only menu and editor views show current recorded tasks/claims, resource waits and failed integrations with next steps. Saved work and review paths move into details; the default menu omits file timestamps. Missing/partial state stays explicit. No new coordination database, model calls or automatic cleanup.

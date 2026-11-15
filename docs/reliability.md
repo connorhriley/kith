@@ -107,3 +107,7 @@ The menu watches a selected workspace and stores recent selections. It does not 
 ### Compact MCP context (0.1.7)
 
 Compact replies preserve actionable context: all breaking contracts, linked exports within the core inspection bounds, changed contract receipts, warnings, failures and recovery instructions. They do not guess read dependencies from write scopes. Only ordinary contract previews are limited; omitted counts and a full-registry retrieval instruction are explicit. The text footer can group repeated signatures while retaining each downstream file/agent/distance relationship; machine-readable breaking alerts retain their established fields. `includeHistory:true` retrieves completed tasks, and lock identity, fencing and expiry remain visible. Savings come from formatting, repeated signatures and internal fingerprints rather than a semantic summarizer. No model calls or extra service are needed.
+
+### Quieter status and lease receipts (0.1.8)
+
+Default status omits successful integration logs and reports `completedIntegrationCount`. `includeHistory:true` restores those records. Failed and in-progress integration diagnostics stay visible. Owned replies include `session.leaseExpiresAt` for the current lease, so an idle heartbeat does not need a status poll. Replayed operation keys keep the historical deadline and do not renew ownership. Protocol 1.5 and storage schema 3 are unchanged; there is no migration.

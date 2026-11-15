@@ -41,20 +41,20 @@ Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workf
 
 Git recording and integration require a commit identity configured for the repository (`user.name` and `user.email`). Kith does not change your global Git identity.
 
-**Upgrading to 0.1.6:** Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. This release migrates storage schema 2 to 3, which older binaries refuse. Existing custom launchers are preserved; review their pinned version before reconnecting. See [recovery guidance](docs/reliability.md#recovery).
+**Upgrading to 0.1.8:** Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. Version 0.1.8 does not change the storage schema. Databases already on schema 3, including those written by 0.1.6 and 0.1.7, open unchanged. An upgrade from schema 2 still applies the 0.1.6 migration to schema 3, which older binaries refuse. Existing custom launchers are preserved; review their pinned version before reconnecting. See [recovery guidance](docs/reliability.md#recovery).
 
 ### VS Code or Cursor
 
 Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith). You can also search for `kith-coord.kith` in the editor's Extensions view.
 
-To select release **0.1.7** explicitly with an editor CLI already on your `PATH`:
+To select release **0.1.8** explicitly with an editor CLI already on your `PATH`:
 
 ```sh
-code --install-extension kith-coord.kith@0.1.7
-cursor --install-extension kith-coord.kith@0.1.7
+code --install-extension kith-coord.kith@0.1.8
+cursor --install-extension kith-coord.kith@0.1.8
 ```
 
-Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](extensions/editor/README.md#install) also links the published 0.1.7 VSIX.
+Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](extensions/editor/README.md#install) also links the published 0.1.8 VSIX.
 
 Open a trusted local Git checkout and approve Kith's MCP server through the editor. The extension bundles the coordination server, detects Node, and preserves existing MCP entries, hooks and tool permissions. **No global npm install is needed.** Each agent still needs to use Kith's tools; installing the extension does not enforce claims on other writers.
 
@@ -73,12 +73,12 @@ The [extension guide](extensions/editor/README.md) covers settings and existing 
 One command from your Git checkout configures supported detected clients and adds project instructions:
 
 ```sh
-npx --yes --package kith-coord@0.1.7 kith setup
+npx --yes --package kith-coord@0.1.8 kith setup
 ```
 
 Durable setup starts with **0.1.7**. Earlier versions need a persistent global npm installation before setup. [Client setup](docs/integrations.md#configure-detected-local-clients) covers configuration scope and advanced options.
 
-Setup retains an exact self-contained runtime outside npx's cache, checks its MCP discovery, and backs up changes before writing them. **On macOS, the next release also opens read-only Radar automatically**; use `--no-radar` for MCP-only setup. Existing custom Kith launchers, peer servers, hooks and permissions are preserved. From outside a Git checkout it configures global connections; pass a project path to add that project's guidance. Reconnect the client and approve its MCP server through the client's normal controls.
+Setup retains an exact self-contained runtime outside npx's cache, checks its MCP discovery, and backs up changes before writing them. **On macOS, setup opens read-only Radar automatically**; use `--no-radar` for headless or MCP-only setup. Existing custom Kith launchers, peer servers, hooks and permissions are preserved. From outside a Git checkout it configures global connections; pass a project path to add that project's guidance. Reconnect the client and approve its MCP server through the client's normal controls.
 
 Ask your agent to do the task using Kith. The view says **Watching only** until a task is actually recorded. A configured server is not a running task. `kith setup --dry-run` previews without writes; `kith doctor /absolute/checkout` diagnoses configuration.
 
@@ -127,7 +127,7 @@ Native evidence is version-specific. See [client validation](docs/client-validat
 
 ## Dev servers and shared config
 
-In version 0.1.4, `kith dev` runs a server with its allocated `PORT` and supports explicit `{port}` arguments. File claims also accept an optional bounded wait:
+`kith dev` runs a server with its allocated `PORT` and supports explicit `{port}` arguments. File claims also accept an optional bounded wait:
 
 ```sh
 kith dev --agent web-a -- npm run dev -- --port '{port}'
@@ -139,7 +139,7 @@ See [dev-server launch and waiting claims](docs/usage.md#launch-a-dev-server-on-
 
 ## Read-only Radar
 
-In the next release, macOS setup opens Radar in the menu bar for the selected checkout or workspace. It uses the retained installation, so clearing the npx cache does not break it. Repeat setup keeps an existing Radar workspace selected. Use **Switch Workspace** in its menu to change it.
+From 0.1.8, macOS setup opens Radar in the menu bar for the selected checkout or workspace. It uses the retained installation, so clearing the npx cache does not break it. Repeat setup keeps an existing Radar workspace selected. Use **Switch Workspace** in its menu to change it.
 
 `kith setup --no-radar` configures MCP without opening Radar (useful on headless machines); `--dry-run` never launches it. Linux and Windows skip the menu-bar view. Setup does not add a login item; after quitting, reopen with:
 
