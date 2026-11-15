@@ -110,4 +110,4 @@ Compact replies preserve actionable context: all breaking contracts, linked expo
 
 ### Quieter status and lease receipts (0.1.8)
 
-Default status omits successful integration logs and reports `completedIntegrationCount`. `includeHistory:true` restores those records. Failed and in-progress integration diagnostics stay visible. Owned replies include `session.leaseExpiresAt` for the current lease, so an idle heartbeat does not need a status poll. Replayed operation keys keep the historical deadline and do not renew ownership. Protocol 1.5 and storage schema 3 are unchanged; there is no migration.
+Default status omits successful integration logs and reports `completedIntegrationCount`. `includeHistory:true` restores those records. Failed and in-progress integration diagnostics stay visible. Owned replies include `session.leaseExpiresAt` for the current lease, so an idle heartbeat does not need a status poll. Replayed operation keys keep the historical deadline and do not renew ownership. These additive fields advance the protocol to 1.6. Storage schema 3 is unchanged; there is no migration.

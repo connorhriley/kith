@@ -5,7 +5,7 @@
 - Reduce repeated MCP discovery instructions while preserving repository/capability/retry boundaries. Owned replies add `session.leaseExpiresAt` (Unix milliseconds) for the existing lease; guidance uses direct begin/claim, idle-only heartbeat, automatic edit publication and a single integration verification. No background renewal, event suppression, new tool or dependency.
 - Open read-only Radar as part of macOS setup, using the retained runtime and an acknowledged native launch. Repeat setup keeps the existing view/workspace; a kernel-held instance lock prevents duplicate new views and releases on exit/crash. Add `--no-radar` for headless setup; dry runs and other platforms never launch it. No login item, model calls, dependency or ownership change.
 - Make generated guidance use status checks for blockers, changed coordination and recovery instead of routine polling; retain heartbeat and edit-reporting safeguards. Default status replies omit successful integration logs and report `completedIntegrationCount`; the existing `includeHistory:true` restores them. Failed/current integration diagnostics remain visible.
-- Stay on protocol 1.5 and storage schema 3. No storage migration, new runtime dependency or editor configuration change.
+- Advance the additive MCP protocol to 1.6 for `session.leaseExpiresAt` and `completedIntegrationCount`. Storage schema stays 3. No storage migration, new runtime dependency or editor configuration change.
 
 ## 0.1.7 — 2026-10-24
 
