@@ -18,7 +18,7 @@ Kith runs locally. There is no coordination server: CLI and MCP clients share `.
 | `brief.ts` | The read-only situational summary shared by the offline reader, the CLI and the MCP tool |
 | `mode.ts` | Repository workflow mode: `worktrees` or `main` |
 | `handoffs.ts`, `handoff-store.ts` | Notes that survive a session boundary: written by agents, recorded by Kith when a session ends without one, delivered by task and scope overlap; storage is DB-only so it is safe inside reclaim and completion transactions |
-| `bash-guard.ts` | Best-effort snapshots and quarantine recovery |
+| `bash-guard.ts` | Best-effort snapshots, quarantine recovery, and the shared-ref firewall |
 | `broker.ts` | Port reservations, FIFO mutex tickets, renewable command leases and process-group guards |
 
 `engine.ts` shares begin/complete orchestration across adapters. `src/cli` adapts commands and hook payloads. `src/mcp/server.ts` exposes tools. Library consumers use `src/index.ts` exports and close engines explicitly.

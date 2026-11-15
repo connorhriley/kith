@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { refUpdateResyncRoots } from '../core/bash-guard.js';
 import { formatBrief } from '../core/brief.js';
 import { KithEngine } from '../core/engine.js';
 import { FencingAndAgentManager, SessionOwnershipError } from '../core/fencing.js';
@@ -80,7 +81,9 @@ export function runHookPhase(params: {
 
   if (subCmd === 'post') {
     if (command && /\bupdate-ref\b/.test(command)) {
-      resyncStaleIndexEntries(engine.coordDb.repoRoot);
+      const agent = engine.fencing.getAgent(agentId);
+      const startDir = agent?.worktree_path ?? engine.coordDb.repoRoot;
+      for (const root of refUpdateResyncRoots(command, startDir)) resyncStaleIndexEntries(root);
     }
     const res = handler.handlePostToolUse({ agentId, toolName, filePath, command });
     const msg = [promotedNotice, ...res.warnings, res.deltaFooter].filter(Boolean).join('\n');

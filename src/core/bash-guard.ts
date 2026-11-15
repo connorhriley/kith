@@ -1,10 +1,11 @@
+import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
-import { physicalPath } from './repository.js';
+import { discoverRepository, isWithin, physicalPath } from './repository.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CoordDatabase } from './db.js';
 import { DependencyAndContractEngine } from './dep-graph.js';
-import { FencingAndAgentManager } from './fencing.js';
+import { FencingAndAgentManager, type AgentRecord } from './fencing.js';
 import { ignoredPaths, walkNonIgnoredFiles } from './git-ignore.js';
 import { LockEngine } from './locks.js';
 import { ShadowGitEngine } from './shadow-git.js';
@@ -37,6 +38,447 @@ export interface BashGuardPostReport {
 const GIT_PREFIX = String.raw`\bgit(?:\s+(?:-C|-c|--git-dir|--work-tree)(?:=|\s+)(?:"[^"]*"|'[^']*'|[^\s;&|]+)|\s+--(?:no-pager|literal-pathspecs|no-optional-locks))*\s+`;
 const DESTRUCTIVE_SHARED_TREE = new RegExp(GIT_PREFIX + String.raw`(?:reset|clean|checkout|restore|switch|stash|merge|rebase|pull|cherry-pick|revert|am)\b`);
 const DESTRUCTIVE_SHARED_REFS = new RegExp(GIT_PREFIX + String.raw`(?:update-ref|symbolic-ref|worktree\s+(?:remove|prune)|branch\s+(?:-[dDmMfF]|--(?:delete|move|force)))\b`);
+const SHARED_REF_REASON = 'Git operation can replace shared work or refs while peer agents are active. To commit only your own files safely while peers are active, run: kith commit -m "<message>" [files...]';
+
+const SAFE_GIT_GLOBALS = new Set([
+  '--no-pager', '-P', '--paginate', '-p',
+  '--literal-pathspecs', '--no-optional-locks', '--no-replace-objects',
+]);
+
+type ShellSep = '&&' | '||' | ';' | '|' | '&' | '\n' | 'end';
+
+type RefOp =
+  | { kind: 'block' }
+  | { kind: 'update-ref'; dir: string; ref: string; noDeref: boolean; stdin: boolean }
+  | { kind: 'symbolic-read' }
+  | { kind: 'symbolic-write'; dir: string; name: string; target: string | null; delete: boolean };
+
+interface IsolatedOwner {
+  worktree: string;
+  branch: string;
+  integrationBranch: string | null;
+}
+
+/**
+ * Checkouts whose index should be resynced after a command that ran `git update-ref`.
+ * Each directory is the worktree root of a classified `update-ref` (after `git -C` and `cd`).
+ * Unparsed commands and stdin batches yield nothing, so the post-hook does not reset an unrelated index.
+ */
+export function refUpdateResyncRoots(command: string, startDir: string): string[] {
+  const ops = parseRefOps(command, startDir);
+  if (!ops) return [];
+  let anchor: string | null = null;
+  try { anchor = discoverRepository(startDir).commonGitDir; } catch { anchor = null; }
+  const roots: string[] = [];
+  for (const op of ops) {
+    if (op.kind !== 'update-ref' || op.stdin) continue;
+    let checkout: string;
+    let common: string | null;
+    try {
+      const layout = discoverRepository(op.dir);
+      checkout = layout.checkoutRoot;
+      common = layout.commonGitDir;
+    } catch { continue; }
+    if (!common) continue;
+    if (anchor && common !== anchor) continue;
+    if (!roots.includes(checkout)) roots.push(checkout);
+  }
+  return roots;
+}
+
+function sharedRefUpdatesAreOwned(
+  command: string,
+  startDir: string,
+  agent: AgentRecord | null,
+  peers: AgentRecord[],
+): boolean {
+  const ops = parseRefOps(command, startDir);
+  if (!ops) return false;
+  if (ops.some(op => op.kind === 'block')) return false;
+  const needsOwner = ops.some(op => op.kind === 'update-ref' || op.kind === 'symbolic-write');
+  if (!needsOwner) return true;
+  if (!agent?.worktree_path || !agent.branch) return false;
+  const owner = isolatedOwner(agent, peers);
+  for (const op of ops) {
+    if (op.kind === 'update-ref' && !updateRefOwned(op, owner)) return false;
+    if (op.kind === 'symbolic-write' && !symbolicWriteOwned(op, owner)) return false;
+  }
+  return true;
+}
+
+function isolatedOwner(agent: AgentRecord, peers: AgentRecord[]): IsolatedOwner | null {
+  if (!agent.worktree_path || !agent.branch) return null;
+  let worktree: string;
+  try { worktree = physicalPath(agent.worktree_path); } catch { return null; }
+  const main = mainCheckout(worktree);
+  if (!main || main.path === worktree) return null;
+  if (main.branch && agent.branch === main.branch) return null;
+  for (const peer of peers) {
+    if (peer.branch === agent.branch) return null;
+    // A null worktree_path is the primary checkout: registration stores a path only for linked worktrees.
+    try {
+      if (physicalPath(peer.worktree_path ?? main.path) === worktree) return null;
+    } catch { return null; }
+  }
+  return { worktree, branch: agent.branch, integrationBranch: main.branch };
+}
+
+function mainCheckout(cwd: string): { path: string; branch: string | null } | null {
+  let out: string;
+  try {
+    out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+    });
+  } catch { return null; }
+  const first = out.split(/\n\s*\n/)[0] ?? '';
+  let wt: string | null = null;
+  let branch: string | null = null;
+  let detached = false;
+  for (const line of first.split('\n')) {
+    if (line.startsWith('worktree ')) wt = line.slice('worktree '.length).trim();
+    else if (line.startsWith('branch ')) branch = line.slice('branch '.length).replace(/^refs\/heads\//, '').trim();
+    else if (line === 'detached' || line.startsWith('detached ')) detached = true;
+  }
+  if (!wt) return null;
+  try { return { path: physicalPath(wt), branch: detached ? null : branch }; }
+  catch { return null; }
+}
+
+function updateRefOwned(
+  op: { dir: string; ref: string; noDeref: boolean; stdin: boolean },
+  owner: IsolatedOwner | null,
+): boolean {
+  if (op.stdin || !owner || !directoryInside(op.dir, owner.worktree)) return false;
+  if (op.ref === 'HEAD') {
+    if (op.noDeref) return true;
+    const checked = checkedOutBranch(op.dir);
+    if (!checked.ok) return false;
+    if (checked.branch === null) return true;
+    return checked.branch === owner.branch && checked.branch !== owner.integrationBranch;
+  }
+  const branch = headsBranch(op.ref);
+  if (!branch || branch !== owner.branch || branch === owner.integrationBranch) return false;
+  const checked = checkedOutBranch(op.dir);
+  return checked.ok && checked.branch === branch;
+}
+
+/** A symbolic-ref write is safe only when it points this worktree's HEAD at the caller's own branch. */
+function symbolicWriteOwned(
+  op: { dir: string; name: string; target: string | null; delete: boolean },
+  owner: IsolatedOwner | null,
+): boolean {
+  if (op.delete || !op.target || !owner || op.name !== 'HEAD') return false;
+  if (!directoryInside(op.dir, owner.worktree)) return false;
+  if (owner.integrationBranch && owner.branch === owner.integrationBranch) return false;
+  return op.target === `refs/heads/${owner.branch}`;
+}
+
+function headsBranch(ref: string): string | null {
+  if (!ref.startsWith('refs/heads/')) return null;
+  const name = ref.slice('refs/heads/'.length);
+  if (!name || name.startsWith('/') || name.endsWith('/') || name.includes('@{') || name.includes('..')) return null;
+  return name;
+}
+
+function directoryInside(dir: string, worktree: string): boolean {
+  try {
+    const resolved = physicalPath(dir);
+    return resolved === worktree || isWithin(worktree, resolved);
+  } catch { return false; }
+}
+
+function checkedOutBranch(dir: string): { ok: true; branch: string | null } | { ok: false } {
+  try {
+    const out = execFileSync('git', ['symbolic-ref', '-q', '--short', 'HEAD'], {
+      cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+    }).trim();
+    return { ok: true, branch: out || null };
+  } catch (error) {
+    if ((error as { status?: number }).status === 1) return { ok: true, branch: null };
+    return { ok: false };
+  }
+}
+
+function parseRefOps(command: string, startDir: string): RefOp[] | null {
+  const segments = splitShellSegments(command);
+  if (!segments) return null;
+  let cwd = path.resolve(startDir);
+  let trusted = true;
+  const ops: RefOp[] = [];
+  for (const segment of segments) {
+    const words = shellWords(segment.raw);
+    const matched = DESTRUCTIVE_SHARED_REFS.test(segment.raw);
+    if (!words) {
+      if (matched) ops.push({ kind: 'block' });
+      if (continuesShell(segment.nextSep) && /\b(?:cd|pushd|popd|export|source)\b|\bGIT_DIR\b/.test(segment.raw)) trusted = false;
+      continue;
+    }
+    const { danger, argv } = stripLeadingEnv(words);
+    if (argv.length === 0) continue;
+    const head = argv[0];
+    if (head === 'cd') {
+      const next = applyCd(argv, cwd);
+      if (next && continuesShell(segment.nextSep)) cwd = next;
+      else if (!next && continuesShell(segment.nextSep)) trusted = false;
+      continue;
+    }
+    if (head === 'pushd' || head === 'popd' || head === 'source' || (head === '.' && argv.length > 1)) {
+      if (continuesShell(segment.nextSep)) trusted = false;
+      continue;
+    }
+    if (head === 'export') {
+      if (argv.slice(1).some(arg => dangerousGitEnv(arg.split('=')[0] ?? arg))) trusted = false;
+      continue;
+    }
+    if (!isGitBinary(head) || danger || !trusted) {
+      if (matched) ops.push({ kind: 'block' });
+      continue;
+    }
+    const parsed = parseGitInvocation(argv, cwd);
+    if (parsed.kind === 'unclassified') {
+      if (matched) ops.push({ kind: 'block' });
+      continue;
+    }
+    if (parsed.kind !== 'other') ops.push(parsed);
+  }
+  return ops;
+}
+
+function continuesShell(sep: ShellSep): boolean {
+  return sep === '&&' || sep === ';' || sep === '\n';
+}
+
+function splitShellSegments(command: string): Array<{ raw: string; nextSep: ShellSep }> | null {
+  const parts: Array<{ raw: string; nextSep: ShellSep }> = [];
+  let buf = '';
+  let quote: "'" | '"' | null = null;
+  const push = (sep: ShellSep) => {
+    const raw = buf.trim();
+    buf = '';
+    if (raw) parts.push({ raw, nextSep: sep });
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote === "'") {
+      buf += ch;
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '\\' && i + 1 < command.length) {
+        const next = command[i + 1];
+        if (next === '$' || next === '`' || next === '"' || next === '\\' || next === '\n') {
+          buf += ch + next;
+          i++;
+          continue;
+        }
+      }
+      buf += ch;
+      if (ch === '"') quote = null;
+      continue;
+    }
+    if (ch === '\\' && i + 1 < command.length) {
+      if (command[i + 1] === '\n') { i++; continue; }
+      buf += ch + command[i + 1];
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; buf += ch; continue; }
+    if (ch === '&' && command[i + 1] === '&') { push('&&'); i++; continue; }
+    if (ch === '|' && command[i + 1] === '|') { push('||'); i++; continue; }
+    if (ch === '\r' && command[i + 1] === '\n') { push('\n'); i++; continue; }
+    if (ch === '\n') { push('\n'); continue; }
+    if (ch === ';') { push(';'); continue; }
+    if (ch === '|') { push('|'); continue; }
+    if (ch === '&') { push('&'); continue; }
+    buf += ch;
+  }
+  if (quote) return null;
+  push('end');
+  return parts;
+}
+
+/** Words of one simple command. Null when expansion, substitution, or a redirect makes the argv unreliable. */
+function shellWords(segment: string): string[] | null {
+  const words: string[] = [];
+  let buf = '';
+  let quote: "'" | '"' | null = null;
+  let word = false;
+  const flush = () => {
+    if (word) words.push(buf);
+    buf = '';
+    word = false;
+  };
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      else { buf += ch; word = true; }
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '\\' && i + 1 < segment.length) {
+        const next = segment[i + 1];
+        if ('$`"\\'.includes(next)) { buf += next; word = true; i++; continue; }
+        if (next === '\n') { i++; continue; }
+      }
+      if (ch === '"') { quote = null; word = true; continue; }
+      if (ch === '`' || ch === '$') return null;
+      buf += ch;
+      word = true;
+      continue;
+    }
+    if (ch === '\\' && i + 1 < segment.length) { buf += segment[i + 1]; word = true; i++; continue; }
+    if (ch === "'" || ch === '"') { quote = ch; word = true; continue; }
+    if (ch === '`' || ch === '$' || ch === '(' || ch === ')' || ch === '<' || ch === '>') return null;
+    if (ch === '#' && !word) break;
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') { flush(); continue; }
+    buf += ch;
+    word = true;
+  }
+  if (quote) return null;
+  flush();
+  return words;
+}
+
+function stripLeadingEnv(argv: string[]): { danger: boolean; argv: string[] } {
+  let i = 0;
+  let danger = false;
+  while (i < argv.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[i])) {
+    if (dangerousGitEnv(argv[i].slice(0, argv[i].indexOf('=')))) danger = true;
+    i++;
+  }
+  return { danger, argv: argv.slice(i) };
+}
+
+function dangerousGitEnv(name: string): boolean {
+  return name === 'GIT_DIR' || name === 'GIT_WORK_TREE' || name === 'GIT_COMMON_DIR'
+    || name === 'GIT_NAMESPACE' || name === 'GIT_OBJECT_DIRECTORY' || name === 'GIT_ALTERNATE_OBJECT_DIRECTORIES'
+    || name === 'GIT_CONFIG_PARAMETERS' || name === 'GIT_CONFIG_COUNT' || name === 'GIT_CONFIG_GLOBAL'
+    || name === 'GIT_CONFIG_SYSTEM' || /^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name);
+}
+
+function applyCd(argv: string[], cwd: string): string | null {
+  let args = argv.slice(1);
+  if (args[0] === '--') args = args.slice(1);
+  if (args.length !== 1 || args[0] === '-' || args[0].startsWith('-') || args[0].startsWith('~')) return null;
+  return path.resolve(cwd, args[0]);
+}
+
+function isGitBinary(word: string): boolean {
+  const base = word.slice(Math.max(word.lastIndexOf('/'), word.lastIndexOf('\\')) + 1);
+  return base === 'git' || base.toLowerCase() === 'git.exe';
+}
+
+function parseGitInvocation(argv: string[], cwd: string): RefOp | { kind: 'other' } | { kind: 'unclassified' } {
+  let i = 1;
+  let dir = cwd;
+  while (i < argv.length) {
+    const token = argv[i];
+    if (token === '--') { i++; break; }
+    if (token === '-C') {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('~')) return { kind: 'unclassified' };
+      if (next !== '') dir = path.isAbsolute(next) ? next : path.resolve(dir, next);
+      i += 2;
+      continue;
+    }
+    if (token.startsWith('-C') && token.length > 2) {
+      const next = token.slice(2);
+      if (next.startsWith('~')) return { kind: 'unclassified' };
+      dir = path.isAbsolute(next) ? next : path.resolve(dir, next);
+      i++;
+      continue;
+    }
+    if (SAFE_GIT_GLOBALS.has(token)) { i++; continue; }
+    if (token.startsWith('-')) return { kind: 'unclassified' };
+    break;
+  }
+  const sub = argv[i];
+  if (!sub) return { kind: 'other' };
+  const args = argv.slice(i + 1);
+  if (sub === 'update-ref') return parseUpdateRef(dir, args);
+  if (sub === 'symbolic-ref') return parseSymbolicRef(dir, args);
+  if (sub === 'worktree') return args.some(arg => arg === 'remove' || arg === 'prune')
+    ? { kind: 'block' }
+    : { kind: 'other' };
+  if (sub === 'branch') return branchArgsAreDestructive(args) ? { kind: 'block' } : { kind: 'other' };
+  return { kind: 'other' };
+}
+
+function branchArgsAreDestructive(args: string[]): boolean {
+  for (const arg of args) {
+    if (arg === '--') break;
+    if (arg === '--delete' || arg === '--move' || arg === '--force') return true;
+    if (arg.startsWith('--delete') || arg.startsWith('--move') || arg.startsWith('--force')) return true;
+    if (arg.startsWith('-') && !arg.startsWith('--') && /[dDmMfF]/.test(arg.slice(1))) return true;
+  }
+  return false;
+}
+
+function parseUpdateRef(dir: string, args: string[]): RefOp | { kind: 'unclassified' } {
+  let noDeref = false;
+  let deleteRef = false;
+  let stdin = false;
+  let end = false;
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!end && arg === '--') { end = true; continue; }
+    if (!end && arg.startsWith('-')) {
+      if (arg === '--no-deref') { noDeref = true; continue; }
+      if (arg === '--deref') { noDeref = false; continue; }
+      if (arg === '--create-reflog' || arg === '--no-create-reflog' || arg === '--no-stdin') continue;
+      if (arg === '--stdin' || arg === '-z') { stdin = true; continue; }
+      if (arg === '-d') { deleteRef = true; continue; }
+      if (arg === '-m' || arg === '--message') {
+        if (args[i + 1] === undefined) return { kind: 'unclassified' };
+        i++;
+        continue;
+      }
+      if (arg.startsWith('-m') && arg.length > 2) continue;
+      if (arg.startsWith('--message=')) continue;
+      return { kind: 'unclassified' };
+    }
+    positionals.push(arg);
+  }
+  if (stdin) return { kind: 'update-ref', dir, ref: '', noDeref, stdin: true };
+  const expected = deleteRef ? [1, 2] : [2, 3];
+  if (!expected.includes(positionals.length) || !positionals[0]) return { kind: 'unclassified' };
+  return { kind: 'update-ref', dir, ref: positionals[0], noDeref, stdin: false };
+}
+
+function parseSymbolicRef(dir: string, args: string[]): RefOp | { kind: 'unclassified' } {
+  let deleteRef = false;
+  let end = false;
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!end && arg === '--') { end = true; continue; }
+    if (!end && arg.startsWith('-')) {
+      if (arg === '-q' || arg === '--quiet' || arg === '--no-quiet' || arg === '--short' || arg === '--no-short') continue;
+      if (arg === '--recurse' || arg === '--no-recurse') continue;
+      if (arg === '-d' || arg === '--delete') { deleteRef = true; continue; }
+      if (arg === '--no-delete') { deleteRef = false; continue; }
+      if (arg === '-m' || arg === '--message') {
+        if (args[i + 1] === undefined) return { kind: 'unclassified' };
+        i++;
+        continue;
+      }
+      if (arg.startsWith('-m') && arg.length > 2) continue;
+      if (arg.startsWith('--message=')) continue;
+      return { kind: 'unclassified' };
+    }
+    positionals.push(arg);
+  }
+  if (deleteRef) {
+    if (positionals.length !== 1) return { kind: 'unclassified' };
+    return { kind: 'symbolic-write', dir, name: positionals[0], target: null, delete: true };
+  }
+  if (positionals.length === 1) return { kind: 'symbolic-read' };
+  if (positionals.length === 2) return { kind: 'symbolic-write', dir, name: positionals[0], target: positionals[1], delete: false };
+  return { kind: 'unclassified' };
+}
 
 const WRITE_PRIMITIVE_RE = /(?:>>?|\b(?:tee|rm|mv|cp|dd|patch|truncate|touch|unlink|writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream)\b|\bsed\s+(?:-[a-zA-Z]*i|--in-place)|\bperl\s+-[a-zA-Z]*i|\.write_(?:text|bytes)\(|open\([^)]*['"][wa+])/u;
 const READ_ONLY_CMD_RE = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s+)*(?:ls|tail|head|cat|less|more|grep|egrep|fgrep|rg|find|fd|wc|stat|file|du|df|pwd|echo|printf|true|false|which|whereis|type|uname|whoami|id|date|env|printenv|ps|lsof|jq|awk|cut|sort|uniq|tr|diff|shasum|sha256sum|md5|git\s+(?:status|diff|log|show|branch|rev-parse|ls-files|check-ignore| blame)\b|kith\s+(?:status|brief|doctor|mode|lock\s+list|task\s+list|handoff\s+list)\b|(?:node\s+)?(?:\S*\/)?stack\.mjs\s+status\b)/u;
@@ -91,16 +533,20 @@ export class BashMerkleGuard {
     inIsolatedWorktree?: boolean;
   }): { safe: boolean; reason?: string } {
     this.fencing.assertSession(params.agentId);
-    const root = physicalPath(this.fencing.getAgent(params.agentId)?.worktree_path ?? this.coordDb.repoRoot);
+    const agent = this.fencing.getAgent(params.agentId);
+    const repoRoot = this.coordDb.repoRoot;
+    const root = physicalPath(agent?.worktree_path ?? repoRoot);
     const peers = this.fencing.listAgents(true).filter(a => a.id !== params.agentId);
-    const sharesCheckout = peers.some(a => physicalPath(a.worktree_path ?? this.coordDb.repoRoot) === root);
-    if (peers.length && DESTRUCTIVE_SHARED_REFS.test(params.command) || sharesCheckout && DESTRUCTIVE_SHARED_TREE.test(params.command)) {
-      return {
-        safe: false,
-        reason: 'Git operation can replace shared work or refs while peer agents are active. To commit only your own files safely while peers are active, run: kith commit -m "<message>" [files...]',
-      };
+    const sharesCheckout = peers.some(a => physicalPath(a.worktree_path ?? repoRoot) === root);
+    // Ref updates are refused while any peer is active, except update-ref (and a clearly local
+    // symbolic-ref) of a ref that belongs only to this agent's isolated worktree.
+    if (peers.length && DESTRUCTIVE_SHARED_REFS.test(params.command)
+      && !sharedRefUpdatesAreOwned(params.command, agent?.worktree_path ?? repoRoot, agent, peers)) {
+      return { safe: false, reason: SHARED_REF_REASON };
     }
-
+    if (sharesCheckout && DESTRUCTIVE_SHARED_TREE.test(params.command)) {
+      return { safe: false, reason: SHARED_REF_REASON };
+    }
     return { safe: true };
   }
 
