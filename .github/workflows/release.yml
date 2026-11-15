@@ -1,0 +1,193 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    name: Verify release manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check tag, versions, changelog, and server.json
+        env:
+          KITH_REQUIRE_RELEASE_TAG: '1'
+        run: node scripts/check-release-manifest.mjs
+
+  ci:
+    name: CI
+    needs: verify
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  windows-archive:
+    name: Windows package
+    needs: verify
+    permissions:
+      contents: read
+    uses: ./.github/workflows/windows.yml
+    with:
+      package_source: archive
+
+  publish-npm:
+    name: Publish npm package
+    needs: [ci, windows-archive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # Do not set registry-url. setup-node would write an _authToken line, and
+      # an empty token takes precedence over trusted publishing. publishConfig
+      # already selects the public registry.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check tag, versions, changelog, and server.json
+        env:
+          KITH_REQUIRE_RELEASE_TAG: '1'
+        run: node scripts/check-release-manifest.mjs
+      - name: Publish with trusted publishing
+        run: |
+          set -euo pipefail
+          unset NPM_TOKEN NODE_AUTH_TOKEN
+          if [ -f .npmrc ] && grep -q '_authToken' .npmrc; then
+            echo "Refusing to publish: .npmrc contains an npm token. Trusted publishing uses GitHub OIDC."
+            exit 1
+          fi
+          node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 14)) { console.error("npm trusted publishing requires Node >= 22.14.0, got " + process.versions.node); process.exit(1); }'
+          npm install -g npm@11.21.2
+          node -e 'const [major, minor, patch] = process.argv[1].split(".").map(Number); const ok = major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1))); if (!ok) { console.error("npm " + process.argv[1] + " is below 11.5.1"); process.exit(1); } console.log("Using npm " + process.argv[1]);' "$(npm --version)"
+          npm publish --provenance --access public
+
+  github-release:
+    name: GitHub release
+    needs: publish-npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create the GitHub release
+        env:
+          KITH_REQUIRE_RELEASE_TAG: '1'
+        run: |
+          set -euo pipefail
+          node scripts/check-release-manifest.mjs --print-notes > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Kith ${GITHUB_REF_NAME#v}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+
+  mcp-registry:
+    name: Publish MCP Registry
+    needs: publish-npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          version=1.8.9
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSL -o "$archive" "https://github.com/modelcontextprotocol/registry/releases/download/v${version}/${archive}"
+          echo "4d527ca8f1ced0394c962dc925c2a4a4addef441cbefd62501c875e9481823a8  $archive" | sha256sum -c -
+          tar -xzf "$archive" mcp-publisher
+          chmod +x mcp-publisher
+      - name: Publish server.json
+        run: |
+          set -euo pipefail
+          ./mcp-publisher login github-oidc
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if ./mcp-publisher publish; then
+              exit 0
+            fi
+            echo "MCP Registry publish attempt ${attempt} failed. The registry checks the npm package that was just published."
+            if [ "$attempt" -eq 8 ]; then
+              exit 1
+            fi
+            sleep 15
+          done
+
+  windows-registry:
+    name: Windows registry package
+    needs: publish-npm
+    permissions:
+      contents: read
+    uses: ./.github/workflows/windows.yml
+    with:
+      package_source: registry
+
+  editor:
+    name: Editor marketplaces
+    needs: [ci, windows-archive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Detect marketplace tokens
+        id: tokens
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -n "$VSCE_PAT" ]; then echo "vsce=true" >> "$GITHUB_OUTPUT"; else echo "vsce=false" >> "$GITHUB_OUTPUT"; fi
+          if [ -n "$OVSX_PAT" ]; then echo "ovsx=true" >> "$GITHUB_OUTPUT"; else echo "ovsx=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Package the editor extension
+        if: steps.tokens.outputs.vsce == 'true' || steps.tokens.outputs.ovsx == 'true'
+        run: |
+          npm --prefix extensions/editor ci --ignore-scripts --no-audit --no-fund
+          npm --prefix extensions/editor run package
+      - name: Publish to the VS Code Marketplace
+        if: steps.tokens.outputs.vsce == 'true'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        working-directory: extensions/editor
+        run: npx vsce publish --no-dependencies --packagePath ../../artifacts/kith-editor.vsix
+      - name: Publish to Open VSX
+        if: steps.tokens.outputs.ovsx == 'true'
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx --yes ovsx@1.4.0 publish --packagePath artifacts/kith-editor.vsix
+      - name: Marketplace tokens are not configured
+        if: steps.tokens.outputs.vsce != 'true' && steps.tokens.outputs.ovsx != 'true'
+        run: echo "VSCE_PAT and OVSX_PAT are unset, so the editor extension was not published."

@@ -1,8 +1,21 @@
 name: Windows validation
 on:
   push:
+    # A matching v$version tag installs kith-coord from the npm registry. The
+    # release workflow publishes that version first, then calls this workflow.
+    # Starting it on the tag push itself would look up a version that is not
+    # published yet.
+    branches:
+      - '**'
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      package_source:
+        description: 'archive packs this checkout; registry installs the published version; auto uses the registry only on a matching v$version tag.'
+        required: false
+        type: string
+        default: auto
 permissions:
   contents: read
 concurrency:
@@ -11,7 +24,7 @@ concurrency:
 jobs:
   workflows:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -29,22 +42,41 @@ jobs:
       - run: pnpm build
       - name: Install a clean package consumer
         shell: pwsh
+        env:
+          KITH_PACKAGE_SOURCE: ${{ inputs.package_source || 'auto' }}
         run: |
           $releaseManifest = Get-Content package.json -Raw | ConvertFrom-Json
-          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -eq "v$($releaseManifest.version)") {
+          $requested = if ([string]::IsNullOrWhiteSpace($env:KITH_PACKAGE_SOURCE)) { 'auto' } else { $env:KITH_PACKAGE_SOURCE.Trim() }
+          $tagMatches = $env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -eq "v$($releaseManifest.version)"
+          if ($requested -eq 'registry' -or ($requested -eq 'auto' -and $tagMatches)) {
             $packageSource = "$($releaseManifest.name)@$($releaseManifest.version)"
             $sourceKind = 'registry'
-          } else {
+          } elseif ($requested -eq 'archive' -or $requested -eq 'auto') {
             $packed = npm pack --ignore-scripts --json --pack-destination $env:RUNNER_TEMP | ConvertFrom-Json
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             $packageSource = Join-Path $env:RUNNER_TEMP $packed[0].filename
             $sourceKind = 'archive'
+          } else {
+            Write-Error "KITH_PACKAGE_SOURCE must be auto, archive, or registry."
+            exit 1
           }
           $consumer = Join-Path $env:RUNNER_TEMP 'kith clean consumer'
-          $cache = Join-Path $env:RUNNER_TEMP 'kith clean npm cache'
-          New-Item -ItemType Directory -Force $consumer | Out-Null
-          npm install --prefix $consumer --cache $cache --registry https://registry.npmjs.org --ignore-scripts --no-audit --no-fund $packageSource
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # npm can take a minute to serve a version that was just published.
+          # Each attempt uses a fresh cache so a 404 is not reused.
+          $attempts = if ($sourceKind -eq 'registry') { 20 } else { 1 }
+          $installed = $false
+          for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+            if (Test-Path $consumer) { Remove-Item -Recurse -Force $consumer }
+            New-Item -ItemType Directory -Force $consumer | Out-Null
+            $cache = Join-Path $env:RUNNER_TEMP "kith clean npm cache $attempt"
+            npm install --prefix $consumer --cache $cache --registry https://registry.npmjs.org --ignore-scripts --no-audit --no-fund $packageSource
+            if ($LASTEXITCODE -eq 0) { $installed = $true; break }
+            if ($attempt -lt $attempts) {
+              Write-Host "Registry install of $packageSource failed (attempt $attempt of $attempts). Waiting 15 seconds for npm."
+              Start-Sleep -Seconds 15
+            }
+          }
+          if (-not $installed) { exit 1 }
           $installedCli = Join-Path $consumer "node_modules/$($releaseManifest.name)/dist/cli/index.js"
           "KITH_VALIDATION_CLI=$installedCli" >> $env:GITHUB_ENV
           "KITH_VALIDATION_SOURCE=$sourceKind" >> $env:GITHUB_ENV
