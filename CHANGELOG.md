@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The Bash firewall allows `git update-ref` of `HEAD` or the caller's own branch when that caller is alone in an isolated worktree, so a temporary-index commit (`git commit-tree` then compare-and-swap `git update-ref`) works there while a peer is active elsewhere. Updates to the integration branch, another agent's branch, or `HEAD` in a shared checkout stay blocked, as do `update-ref -d` of a ref the caller does not own, `--stdin` batches, and ref commands the parser cannot classify. `symbolic-ref` stays blocked except for a read or for pointing the caller's `HEAD` at the caller's own branch. `worktree remove`/`prune` and forced branch updates are unchanged. The post-hook index resync after `update-ref` uses the checkout that command targeted.
+
 ## 0.1.8 — 2026-11-15
 
 - Handoffs. Coordination state used to lose everything an agent learned when its session ended: claims were released and the task requeued as if untouched. `kith_write_handoff` (and `kith handoff write`) leaves a note with what is done, what remains, what failed and what was learned, plus the files changed from Git and a pointer to the full transcript; `releaseTask` hands the task back to the queue. Kith records an `abandoned` note itself when a session dies or disconnects mid-task (claimed files, last failed integration, quarantined changes) and a completion note when none was written. `kith_begin_work` and `kith_claim_next_task` return relevant notes by task and exact scope overlap, `kith_get_status` lists open ones, `kith_read_handoffs` returns full text, and siblings see new notes in their live delta. Notes are labelled untrusted, stripped of control characters and bounded. A note is superseded only by a later completion that exists. Abandoned notes point at the branch, and its worktree when that still exists.

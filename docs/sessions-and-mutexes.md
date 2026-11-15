@@ -47,15 +47,29 @@ kith session clear --conflicts              # only delete recorded conflicts, ke
 
 When a client with `--auto` hooks also registers an MCP session (`kith_begin_work` or `kith_work`), Kith automatically binds the MCP capability to the parent client's `presence.db` session and transfers any locks held by its `auto-*` agent ID so subsequent hook calls and MCP calls share a single session.
 
-## Committing in a shared checkout (`kith commit`)
+## Committing while other sessions are active
 
-When multiple sessions share a single checkout (`kith mode main`), the Bash guard blocks raw `git update-ref`, `git reset`, and `git checkout` while peers are active so one session cannot overwrite or sweep another session's uncommitted work. To commit only your own files safely while peers are active, run:
+The Bash guard refuses Git commands that can replace another session's checkout or refs.
+
+In a shared checkout (`kith mode main`, or any checkout another active session is also using), raw `git update-ref`, `git reset`, `git checkout`, and the other recognized checkout-rewriting commands are blocked while a peer is active. To commit only your own files there, run:
 
 ```sh
 kith commit -m "feat: scoped change" [files...]
 ```
 
 If `[files...]` is omitted, `kith commit` collects the caller session's recorded modified files (from active file/narrow-glob locks, `presence.db` touched files, and active task scopes), verifies no target file is locked by another live agent, stages only those paths in a temporary index under `.coord/commit.lock`, advances `HEAD` with compare-and-swap `git update-ref`, and runs `git reset -q HEAD -- <files>` so `.git/index` stays synchronized with `HEAD` without touching peers' dirty files. You can also run `kith commit` inside `kith_run_with_mutex` / `kith_resource` (`action: "mutex"`) or pass `commitMessage` (and optional `commitFiles`) to `kith_finish`.
+
+In an isolated worktree the guard allows `git update-ref` when the ref belongs only to the caller. That means the caller has `worktree_path`, the ref is `HEAD` or `refs/heads/<that worktree's branch>` checked out in the worktree, and no other active agent shares the worktree or the branch. A temporary-index commit in that worktree (`git commit-tree`, then `git update-ref HEAD <new> <old>`) is allowed, including with `-m <msg>`, `--no-deref`, and `--create-reflog`. `git -C <dir>` is resolved from the worktree; a `-C` or `cd` that leaves the worktree does not count as owned. `git update-ref -d` is allowed only for a ref the caller owns.
+
+These stay blocked while a peer is active:
+
+- updates to the integration branch (the branch checked out in the primary checkout), or to another agent's branch
+- `HEAD` updates in a shared checkout, including an update that would move that branch by following `HEAD`
+- `git update-ref --stdin` batches, and any ref command the parser cannot classify
+- `git symbolic-ref`, except a read or pointing the caller's own `HEAD` at `refs/heads/<the caller's branch>`
+- `git worktree remove`, `git worktree prune`, and `git branch` `-d`/`-D`/`-m`/`-M`/`-f`/`--delete`/`--move`/`--force`
+
+After `update-ref`, the post-hook resyncs the index of the checkout that command ran in: the caller's worktree, or the directory selected with `-C` when that checkout belongs to the same repository.
 
 ## MCP ownership
 
