@@ -117,7 +117,7 @@
     "test:host": "node scripts/test-host.mjs"
   },
   "devDependencies": {
-    "@types/node": "^22.13.0",
+    "@types/node": "^26.6.6",
     "@types/vscode": "1.102.0",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "4.0.0",
