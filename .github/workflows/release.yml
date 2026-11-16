@@ -46,6 +46,9 @@ jobs:
 
   publish-npm:
     name: Publish npm package
+    # A skipped publish step still succeeds this job. The GitHub release, MCP
+    # Registry, and Windows registry jobs depend on the job, so they still run
+    # when kith-coord@<version> was published manually before the tag.
     needs: [ci, windows-archive]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -70,7 +73,26 @@ jobs:
         env:
           KITH_REQUIRE_RELEASE_TAG: '1'
         run: node scripts/check-release-manifest.mjs
+      - name: See whether this version is already on npm
+        id: npm-registry
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if published="$(npm view "kith-coord@${version}" version --registry https://registry.npmjs.org 2>/dev/null)"; then
+            published="$(printf '%s' "$published" | tr -d '[:space:]')"
+          else
+            published=""
+          fi
+          if [ "$published" = "$version" ]; then
+            echo "skip_publish=true" >> "$GITHUB_OUTPUT"
+            echo "kith-coord@${version} is already on the registry. Skipping npm publish."
+          else
+            echo "skip_publish=false" >> "$GITHUB_OUTPUT"
+            echo "kith-coord@${version} is not on the registry. The next step publishes it."
+          fi
       - name: Publish with trusted publishing
+        if: steps.npm-registry.outputs.skip_publish != 'true'
         run: |
           set -euo pipefail
           unset NPM_TOKEN NODE_AUTH_TOKEN

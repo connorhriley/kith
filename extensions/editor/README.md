@@ -6,16 +6,16 @@ One extension connects your editor's agent to Kith and adds a small read-only st
 
 ## Install
 
-**Upgrading to 0.1.8:** Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. The storage schema stays 3. Databases already on schema 3 open without a version migration. The first open with 0.1.8 creates an optional `handoffs` table; binaries from 0.1.6 and 0.1.7 ignore that table and keep working, but they do not read or write handoff notes. An upgrade from schema 2 still applies the 0.1.6 migration to schema 3, which older binaries refuse. Hooks no longer block a process that has not joined a session. Existing custom launchers are preserved; review their pinned version before reconnecting. See [recovery guidance](../../docs/reliability.md#recovery).
+**Upgrading to 0.1.9:** Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. The storage schema stays 3 and the protocol stays 1.6.0. Databases already on schema 3 open without a version migration. The first open on 0.1.8 or later creates an optional `handoffs` table; binaries from 0.1.6 and 0.1.7 ignore that table and keep working, but they do not read or write handoff notes. An upgrade from schema 2 still applies the 0.1.6 migration to schema 3, which older binaries refuse. After upgrading, run `kith install` so hooks and client entries use this runtime. `kith doctor` reports a hook or MCP entry still pinned to an older runtime. Existing custom launchers are preserved; review their pinned version before reconnecting. See [recovery guidance](../../docs/reliability.md#recovery).
 
-Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith), or search for the extension ID in your editor. To select **0.1.8** explicitly when a marketplace lookup selects an older release, use your editor's CLI if it is on `PATH`:
+Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith), or search for the extension ID in your editor. To select **0.1.9** explicitly when a marketplace lookup selects an older release, use your editor's CLI if it is on `PATH`:
 
 ```sh
-code --install-extension kith-coord.kith@0.1.8
-cursor --install-extension kith-coord.kith@0.1.8
+code --install-extension kith-coord.kith@0.1.9
+cursor --install-extension kith-coord.kith@0.1.9
 ```
 
-Use the command for your editor. Without the CLI, download the [published 0.1.8 VSIX](https://open-vsx.org/api/kith-coord/kith/0.1.8/file/kith-coord.kith-0.1.8.vsix) and select it through **Extensions → Install from VSIX**.
+Use the command for your editor. Without the CLI, download the [published 0.1.9 VSIX](https://open-vsx.org/api/kith-coord/kith/0.1.9/file/kith-coord.kith-0.1.9.vsix) and select it through **Extensions → Install from VSIX**.
 
 Open a trusted local Git workspace with Node.js **22.13+ on 22.x or 24+** installed. Kith detects Node automatically; **Kith: Node Path** in user settings can select a different installation.
 

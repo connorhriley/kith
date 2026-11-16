@@ -1,6 +1,6 @@
 # Releasing Kith
 
-Pushing a `vX.Y.Z` tag publishes that commit. `main` is protected; merge the release commit first, then tag the merge commit. Do not publish with an npm token. The [release workflow](.github/workflows/release.yml) publishes through npm trusted publishing and attaches provenance.
+Pushing a `vX.Y.Z` tag runs the release workflow on that commit. `main` is protected; merge the release commit first, then tag the merge commit. Do not publish with an npm token. When that version is not already on npm, the [release workflow](.github/workflows/release.yml) publishes through npm trusted publishing and attaches provenance. When `npm view kith-coord@X.Y.Z version` already prints `X.Y.Z`, the workflow skips `npm publish` and still creates the GitHub release, publishes to the MCP Registry, and installs that version from the registry on Windows.
 
 The tag must point at a commit that already contains `.github/workflows/release.yml`. GitHub runs the workflow from the tagged commit.
 
@@ -29,12 +29,29 @@ The workflow then:
 
 1. Checks the tag, versions, changelog section, and `server.json` against the current MCP Registry schema.
 2. Runs the CI workflow and the Windows workflow against a tarball packed from the tag. These finish before publish. They do not install `kith-coord` from the registry.
-3. Publishes to npm with `npm publish --provenance --access public`. The publish job uses Node 24 and npm 11.21.2. Trusted publishing requires Node 22.14.0 or newer and npm 11.5.1 or newer; the package itself still runs on Node 22.13.0.
-4. Creates the GitHub release from the matching changelog section, publishes `server.json` with `mcp-publisher` 1.8.9 using GitHub OIDC, and runs Windows validation again by installing `kith-coord@X.Y.Z` from the registry.
+3. Publishes to npm with `npm publish --provenance --access public`, unless that exact version is already on the public registry. The check is `npm view kith-coord@X.Y.Z version` against `https://registry.npmjs.org`. A matching version skips only that step. The publish job still succeeds, so the jobs that follow it are not skipped. The publish job uses Node 24 and npm 11.21.2 when it does publish. Trusted publishing requires Node 22.14.0 or newer and npm 11.5.1 or newer; the package itself still runs on Node 22.13.0.
+4. Creates the GitHub release from the matching changelog section, publishes `server.json` with `mcp-publisher` 1.8.9 using GitHub OIDC, and runs Windows validation again by installing `kith-coord@X.Y.Z` from the registry. These three run whether or not step 3 published.
 
-That second Windows run is the existing registry check. It is a separate job after publish because a tag push used to start it immediately, and the registry did not have the new version yet. The Windows workflow retries a fresh npm install for about five minutes to cover registry propagation.
+That second Windows run is the existing registry check. It is a separate job after the npm job because a tag push used to start it immediately, and the registry did not have the new version yet. The Windows workflow retries a fresh npm install for about five minutes to cover registry propagation. When the version was published before the tag, that install is the copy already on npm.
 
 Publishing jobs use the GitHub environment `release`. No job reads `NPM_TOKEN`.
+
+## Already on npm
+
+0.1.9 is published manually, from the merged release commit, before `v0.1.9` is pushed. The npm trusted publisher is not configured yet, so the tag must not be the thing that first publishes that version. After `npm view kith-coord@0.1.9 version` prints `0.1.9`, push the tag. The workflow then skips `npm publish` and still creates the GitHub release, publishes `server.json` with `mcp-publisher` (GitHub OIDC), and runs the Windows job that installs `kith-coord@0.1.9` from the registry.
+
+Publish the same commit you tag. The earlier Windows job tests a tarball packed from the tag. The later Windows job installs `kith-coord@0.1.9` from the registry and validates that copy.
+
+```sh
+git checkout main
+git pull
+npm publish --access public
+npm view kith-coord@0.1.9 version
+git tag v0.1.9
+git push origin v0.1.9
+```
+
+Do not put an npm token in GitHub. The same skip applies to any later version that is already on the registry. A tag whose version is absent still runs `npm publish` through trusted publishing, once that publisher exists. Creating the publisher and then pushing a tag that skips publish does not count as its first successful publish.
 
 ## One-time npm trusted publisher
 
@@ -59,9 +76,11 @@ After that first publish succeeds, set the package's **Publishing access** to **
 
 ## GitHub environment
 
-Create an environment named `release` under **Settings → Environments** before the first tag. Use that exact name: it is part of the npm publisher above, and the npm, MCP Registry, GitHub release, and editor jobs all select it.
+The npm publish, MCP Registry, GitHub release, and editor jobs select an environment named `release`. Use that exact name: it is part of the npm publisher above.
 
-Leave required reviewers unset for an unattended tag. Adding a reviewer makes those four jobs wait for approval. The test jobs do not use the environment, so they still run first.
+You do not have to create that environment before the tag. GitHub creates an environment the first time a workflow job references a name that does not exist yet. The created environment has no protection rules and no secrets, so the jobs are not waiting on a `release` environment that has not been set up. That is not an implicit Pages build, which is the case where GitHub would add a branch rule on its own. Only a repository admin can add rules or secrets afterward.
+
+Leave required reviewers unset for an unattended tag. Adding a reviewer makes those four jobs wait for approval. The test jobs do not use the environment, so they still run first. The Windows job that installs the published package does not use the environment either.
 
 The workflow's `GITHUB_TOKEN` creates the GitHub release. Actions permissions need write access to contents. The default token for this repository can do that.
 
@@ -78,6 +97,6 @@ Store them as repository secrets or as secrets on the `release` environment. The
 
 ## MCP Registry
 
-`server.json` uses namespace `io.github.connorhriley` and schema `2025-12-11`, which is the schema the registry documents. `package.json` `mcpName` is `io.github.connorhriley/kith`. The registry reads that field from the published npm package, so the MCP Registry job runs only after npm publish.
+`server.json` uses namespace `io.github.connorhriley` and schema `2025-12-11`, which is the schema the registry documents. `package.json` `mcpName` is `io.github.connorhriley/kith`. The registry reads that field from the published npm package, so the MCP Registry job runs only after the npm job. That job has either just published the version or found the same version already on the registry.
 
 `pnpm release:check` compares the versions and validates `server.json` against that schema. Pull-request CI runs the same check.
