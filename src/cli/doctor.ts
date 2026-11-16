@@ -6,6 +6,7 @@ import { parse as parseToml } from 'smol-toml';
 import { isWithin, physicalPath } from '../core/repository.js';
 import { readCoordinationState } from '../core/observation.js';
 import { launchAgentPath } from './autostart.js';
+import { claudeDesktopConfigPath, runtimeVersionCheck } from './runtime-pin.js';
 
 /** Diagnostics read files and inspect a snapshot; they never initialize state, trust projects, install packages or run configured hooks. */
 export function doctorReport(directory=process.cwd(), home=os.homedir()) {
@@ -28,10 +29,7 @@ export function doctorReport(directory=process.cwd(), home=os.homedir()) {
       catch { return false; }
     });
   };
-  const desktop = process.platform === 'win32'
-    ? path.join(home === os.homedir() ? process.env.APPDATA ?? path.join(home, 'AppData/Roaming') : path.join(home, 'AppData/Roaming'), 'Claude/claude_desktop_config.json')
-    : process.platform === 'darwin' ? path.join(home, 'Library/Application Support/Claude/claude_desktop_config.json')
-    : path.join(home, '.config/Claude/claude_desktop_config.json');
+  const desktop = claudeDesktopConfigPath(home);
   const files = [
     ['claude',path.join(root,'.mcp.json'),false,root], ['cursor',path.join(root,'.cursor/mcp.json'),false,root],
     ['codex',path.join(root,'.codex/config.toml'),true,root], ['claude-global',path.join(home,'.claude.json'),false,home],
@@ -85,6 +83,8 @@ export function doctorReport(directory=process.cwd(), home=os.homedir()) {
       check('global-cursor-hooks', false, `Cannot parse ${globalCursorHooks}`);
     }
   }
+  const runtime = runtimeVersionCheck(realHome, root);
+  if (runtime) check('runtime-version', runtime.ok, runtime.detail);
   if (checks.some(c => c.name === 'codex-global-mcp' && c.ok)) {
     check('codex-hooks', true, 'Codex CLI does not expose pre/post tool hooks; protection uses --compact MCP and passive watcher/Radar alerts');
   }

@@ -25,6 +25,94 @@ import {
   resolvePersistentOwnerPid,
 } from './auto-session.js';
 import { enforcementMode, HookHandler } from './hook-handler.js';
+import { newerGlobalKithVersion, staleRuntimeNotice } from './runtime-pin.js';
+
+/** Model-facing hook text, including notices and warnings. The delta footer has its own smaller cap. */
+export const HOOK_MESSAGE_BUDGET = 2000;
+export const HOOK_TRUNCATION_HINT = '… truncated; run `kith status`';
+
+/** Cut ordinary text on a line boundary, then point at `kith status`. A first line with no break is sliced. */
+function truncateAtLine(message: string, budget: number): string {
+  const room = budget - HOOK_TRUNCATION_HINT.length - 1;
+  if (room <= 0) return HOOK_TRUNCATION_HINT.slice(0, budget);
+  let kept = message.slice(0, room);
+  const lineBreak = kept.lastIndexOf('\n');
+  if (lineBreak >= 0) kept = kept.slice(0, lineBreak);
+  const out = kept.length > 0 ? `${kept}\n${HOOK_TRUNCATION_HINT}` : HOOK_TRUNCATION_HINT;
+  return out.length <= budget ? out : out.slice(0, budget);
+}
+
+/**
+ * Keep whole lines that fit in `budget`, then a one-line pointer to `kith status`.
+ * A ready-to-run `kith commit` command is its own line and is never sliced: other text is
+ * dropped first. A command longer than the budget is returned whole, because cutting it
+ * would make the suggested command wrong.
+ */
+export function boundHookMessage(message: string, budget = HOOK_MESSAGE_BUDGET): string {
+  if (message.length <= budget) return message;
+  const commands: string[] = [];
+  const prose: string[] = [];
+  for (const line of message.split('\n')) {
+    const at = line.search(/\bkith commit\b/);
+    if (at < 0) {
+      prose.push(line);
+      continue;
+    }
+    const command = line.slice(at).trim();
+    if (command && !commands.includes(command)) commands.push(command);
+    const head = line.slice(0, at).replace(/\s+$/g, '').replace(/\s+run:\s*$/i, '').trimEnd();
+    if (head) prose.push(head);
+  }
+  if (!commands.length) return truncateAtLine(message, budget);
+
+  const commandBlock = commands.join('\n');
+  if (commandBlock.length > budget) return commandBlock;
+
+  const assemble = (includeHint: boolean): string | null => {
+    const hintPart = includeHint ? `\n${HOOK_TRUNCATION_HINT}` : '';
+    const room = budget - commandBlock.length - 1 - hintPart.length;
+    if (room < 0) return null;
+    const kept: string[] = [];
+    let size = 0;
+    for (const line of prose) {
+      const add = line.length + (kept.length ? 1 : 0);
+      if (size + add <= room) {
+        kept.push(line);
+        size += add;
+        continue;
+      }
+      if (!kept.length && room > 0) kept.push(line.slice(0, room));
+      break;
+    }
+    const head = kept.join('\n');
+    const body = head ? `${head}\n${commandBlock}` : commandBlock;
+    const out = `${body}${hintPart}`;
+    return out.length <= budget ? out : null;
+  };
+  return assemble(true) ?? assemble(false) ?? commandBlock;
+}
+
+function runtimeNotice(): string | null {
+  try {
+    const globalVersion = newerGlobalKithVersion();
+    if (!globalVersion) return null;
+    const pid = resolvePersistentOwnerPid();
+    return staleRuntimeNotice({
+      home: resolveHomeDir(),
+      pid,
+      pidStart: FencingAndAgentManager.getProcessStartTime(pid),
+      globalVersion,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Prepend the once-per-session stale-runtime line, then apply the total cap. */
+export function presentHookMessage(message: string): string {
+  const notice = runtimeNotice();
+  return boundHookMessage([notice, message].filter(Boolean).join('\n'));
+}
 
 const HOOK_SUBCOMMANDS = ['pre', 'post', 'pre-commit', 'session-start', 'stop'] as const;
 
@@ -67,7 +155,7 @@ export function runHookPhase(params: {
 
   if (subCmd === 'pre') {
     const res = handler.handlePreToolUse({ agentId, toolName, filePath, command });
-    const msg = [res.message, res.allowed ? promotedNotice : undefined].filter(Boolean).join('\n');
+    const msg = presentHookMessage([res.message, res.allowed ? promotedNotice : undefined].filter(Boolean).join('\n'));
     if (flags.client === 'cursor') {
       console.log(JSON.stringify({ permission: res.allowed ? 'allow' : 'deny', ...(msg ? { user_message: msg, agent_message: msg } : {}) }));
     } else if (!res.allowed) {
@@ -94,7 +182,7 @@ export function runHookPhase(params: {
     const res = handler.handlePostToolUse({ agentId, toolName, filePath, command });
     const allowed = res.allowed && !settledReverted;
     const exitCode = settledReverted ? 2 : res.exitCode;
-    const msg = [promotedNotice, ...settledWarnings, ...res.warnings, res.deltaFooter].filter(Boolean).join('\n');
+    const msg = presentHookMessage([promotedNotice, ...settledWarnings, ...res.warnings, res.deltaFooter].filter(Boolean).join('\n'));
     if (flags.client === 'cursor') {
       console.log(JSON.stringify({ additional_context: msg }));
       process.exitCode = exitCode;
@@ -182,7 +270,7 @@ function handleSessionStartHook(flags: Record<string, string | boolean>): void {
         const formatted = formatBrief(brief, { quiet: true });
         if (formatted) childTexts.push(formatted);
       }
-      const text = childTexts.join('\n\n');
+      const text = childTexts.length ? presentHookMessage(childTexts.join('\n\n')) : '';
       if (flags.client === 'cursor') console.log(JSON.stringify({ additional_context: text }));
       else if (text) console.log(text);
       return;
@@ -213,8 +301,9 @@ function handleSessionStartHook(flags: Record<string, string | boolean>): void {
       if (flags.client === 'cursor') console.log(JSON.stringify({ additional_context: '' }));
       return;
     }
-    if (flags.client === 'cursor') console.log(JSON.stringify({ additional_context: text }));
-    else console.log(text);
+    const bounded = presentHookMessage(text);
+    if (flags.client === 'cursor') console.log(JSON.stringify({ additional_context: bounded }));
+    else console.log(bounded);
   } catch {
     if (flags.client === 'cursor') console.log(JSON.stringify({ additional_context: '' }));
   }
@@ -351,7 +440,7 @@ function handleAutoHook(subCmd: string, flags: Record<string, string | boolean>)
           LockEngine.patternsOverlap(requested, l.pattern)
         );
         if (conflict) {
-          const denyMsg = `[KITH LOCK GUARD] Write to '${relFile}' conflicts with a claim by '${conflict.owner_agent_id}' (${conflict.pattern}).`;
+          const denyMsg = presentHookMessage(`[KITH LOCK GUARD] Write to '${relFile}' conflicts with a claim by '${conflict.owner_agent_id}' (${conflict.pattern}).`);
           if (flags.client === 'cursor') {
             console.log(JSON.stringify({ permission: 'deny', user_message: denyMsg, agent_message: denyMsg }));
           } else {
@@ -361,7 +450,7 @@ function handleAutoHook(subCmd: string, flags: Record<string, string | boolean>)
           return;
         }
       }
-      const hint = `[kith] ${err.message}. Clear with: kith session clear ${sessionKey}`;
+      const hint = presentHookMessage(`[kith] ${err.message}. Clear with: kith session clear ${sessionKey}`);
       if (flags.client === 'cursor') {
         console.log(JSON.stringify(subCmd === 'pre' ? { permission: 'allow', user_message: hint, agent_message: hint } : { additional_context: hint }));
       } else {
