@@ -6,8 +6,9 @@ import { ancestorChain, listRepoPresence, ownedByCaller, resolveHomeDir } from '
 import type { KithEngine } from './engine.js';
 import { FencingAndAgentManager } from './fencing.js';
 import { resyncStaleIndexEntries } from './gc.js';
-import { ignoredPaths } from './git-ignore.js';
 import { LockEngine } from './locks.js';
+import { collectRecordedFiles, listDirtyFiles } from './recorded-files.js';
+import { waitForSharedRefLease } from './shared-ref-update.js';
 
 export interface CommitParams {
   agentId?: string;
@@ -69,31 +70,6 @@ function withCommitLock<T>(coordDir: string, fn: () => T, timeoutMs = 15_000): T
       try { fs.closeSync(fd); } catch { /* ignore */ }
     }
     try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
-  }
-}
-
-function listDirtyFiles(rootDir: string): string[] {
-  try {
-    const out = execFileSync('git', ['status', '--porcelain', '-z', '--untracked-files=all'], {
-      cwd: rootDir,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const tokens = out.split('\0');
-    const files: string[] = [];
-    for (let i = 0; i < tokens.length; i++) {
-      const entry = tokens[i];
-      if (!entry || entry.length < 4) continue;
-      const status = entry.slice(0, 2);
-      const file = entry.slice(3);
-      if (file) files.push(file);
-      if ((status.startsWith('R') || status.startsWith('C')) && i + 1 < tokens.length && tokens[i + 1]) {
-        files.push(tokens[++i]);
-      }
-    }
-    return Array.from(new Set(files));
-  } catch {
-    return [];
   }
 }
 
@@ -191,7 +167,6 @@ export function commitScopedFiles(engine: KithEngine, params: CommitParams): Com
     engine.coordDb.repoRoot;
 
   const dirtyFiles = listDirtyFiles(worktreeRoot);
-  const dirtySet = new Set(dirtyFiles);
   const activeLocks = engine.locks.listLocks();
 
   let targetFiles: string[] = [];
@@ -200,41 +175,14 @@ export function commitScopedFiles(engine: KithEngine, params: CommitParams): Com
       new Set(params.files.map((f) => LockEngine.normalizeFile(worktreeRoot, f)))
     );
   } else {
-    const collected = new Set<string>();
-    for (const lock of activeLocks) {
-      if (!callerAgentIds.has(lock.owner_agent_id)) continue;
-      if (lock.lock_type === 'file' || !/[?*]/.test(lock.pattern)) {
-        const rel = lock.pattern.startsWith('file:') ? lock.pattern.slice(5) : lock.pattern;
-        if (!rel.startsWith('symbol:')) collected.add(rel);
-      } else if (lock.pattern !== '**') {
-        for (const df of dirtyFiles) {
-          if (LockEngine.patternsOverlap(LockEngine.literalScope(df), lock.pattern)) {
-            collected.add(df);
-          }
-        }
-      }
-    }
-    for (const peer of presencePeers) {
-      for (const touched of peer.touchedFiles) {
-        try {
-          collected.add(LockEngine.normalizeFile(worktreeRoot, touched));
-        } catch { /* ignore invalid path */ }
-      }
-    }
-    for (const task of engine.intents.listTasks()) {
-      if (task.status !== 'active' || !task.owner_agent_id || !callerAgentIds.has(task.owner_agent_id)) continue;
-      for (const glob of task.scope_globs) {
-        if (glob === '**') continue;
-        for (const df of dirtyFiles) {
-          if (LockEngine.patternsOverlap(LockEngine.literalScope(df), glob)) {
-            collected.add(df);
-          }
-        }
-      }
-    }
-    const candidates = [...collected].filter((f) => dirtySet.has(f));
-    const ignored = candidates.length ? ignoredPaths(worktreeRoot, candidates) : new Set<string>();
-    targetFiles = candidates.filter((f) => !ignored.has(f));
+    targetFiles = collectRecordedFiles({
+      worktreeRoot,
+      callerAgentIds,
+      locks: activeLocks,
+      tasks: engine.intents.listTasks(),
+      presenceTouched: presencePeers.flatMap((peer) => peer.touchedFiles),
+      dirtyFiles,
+    });
   }
 
   if (targetFiles.length === 0) {
@@ -267,6 +215,19 @@ export function commitScopedFiles(engine: KithEngine, params: CommitParams): Com
         };
       }
     }
+  }
+
+  const leaseError = waitForSharedRefLease(engine.coordDb.coordDir, primaryAgentId);
+  if (leaseError) {
+    return {
+      ok: false,
+      commit: null,
+      branch: null,
+      files: [],
+      agentId: primaryAgentId,
+      message,
+      error: leaseError,
+    };
   }
 
   return withCommitLock(engine.coordDb.coordDir, () => {
