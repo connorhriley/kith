@@ -119,9 +119,16 @@ jobs:
           persist-credentials: false
       - name: Create the GitHub release
         env:
+          GH_TOKEN: ${{ github.token }}
           KITH_REQUIRE_RELEASE_TAG: '1'
         run: |
           set -euo pipefail
+          # A release created by hand, or a rerun of this job, must succeed
+          # without creating a second release for the same tag.
+          if gh release view "$GITHUB_REF_NAME"; then
+            echo "GitHub release ${GITHUB_REF_NAME} already exists. Skipping creation."
+            exit 0
+          fi
           node scripts/check-release-manifest.mjs --print-notes > "$RUNNER_TEMP/release-notes.md"
           gh release create "$GITHUB_REF_NAME" \
             --title "Kith ${GITHUB_REF_NAME#v}" \
