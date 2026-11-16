@@ -80,20 +80,28 @@ export function runHookPhase(params: {
   }
 
   if (subCmd === 'post') {
+    let settledWarnings: string[] = [];
+    let settledReverted = false;
     if (command && /\bupdate-ref\b/.test(command)) {
       const agent = engine.fencing.getAgent(agentId);
       const startDir = agent?.worktree_path ?? engine.coordDb.repoRoot;
+      // Revert an unsafe deferred update-ref before resyncing the index to the restored HEAD.
+      const settled = engine.bashGuard.settleDeferredRefUpdate({ agentId, command });
+      settledWarnings = settled.warnings;
+      settledReverted = settled.reverted;
       for (const root of refUpdateResyncRoots(command, startDir)) resyncStaleIndexEntries(root);
     }
     const res = handler.handlePostToolUse({ agentId, toolName, filePath, command });
-    const msg = [promotedNotice, ...res.warnings, res.deltaFooter].filter(Boolean).join('\n');
+    const allowed = res.allowed && !settledReverted;
+    const exitCode = settledReverted ? 2 : res.exitCode;
+    const msg = [promotedNotice, ...settledWarnings, ...res.warnings, res.deltaFooter].filter(Boolean).join('\n');
     if (flags.client === 'cursor') {
       console.log(JSON.stringify({ additional_context: msg }));
-      process.exitCode = res.exitCode;
+      process.exitCode = exitCode;
       return;
     }
     if (msg) {
-      if (!res.allowed) {
+      if (!allowed) {
         console.error(msg);
       } else {
         console.log(JSON.stringify({
@@ -102,7 +110,7 @@ export function runHookPhase(params: {
         }));
       }
     }
-    process.exitCode = res.exitCode;
+    process.exitCode = exitCode;
     return;
   }
 

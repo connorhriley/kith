@@ -2,11 +2,12 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runHookPhase } from '../src/cli/hook-commands.js';
 import { HookHandler } from '../src/cli/hook-handler.js';
 import { refUpdateResyncRoots } from '../src/core/bash-guard.js';
 import { discoverRepository } from '../src/core/repository.js';
+import { waitForSharedRefLease } from '../src/core/shared-ref-update.js';
 import { KithEngine } from '../src/index.js';
 
 const q = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
@@ -227,6 +228,203 @@ describe('Bash firewall owned ref updates', () => {
     expect(git(root, 'rev-parse', 'HEAD').trim()).toBe(old);
     expect(git(root, 'diff', '--cached', '--name-only').trim()).toBe('src/b.ts');
     expect(git(root, 'show', ':src/b.ts')).toBe('export const staged = 1;\n');
+  });
+
+  function useSharedCheckout() {
+    engine.coordDb.db.prepare('UPDATE agents SET worktree_path=NULL, branch=NULL WHERE id=?').run('owner');
+  }
+
+  function commitTree(parent: string, message: string, files: Record<string, string | null>, parents = [parent]): string {
+    const index = path.join(os.tmpdir(), `kith-idx-${process.pid}-${Date.now()}`);
+    const env = { ...process.env, GIT_INDEX_FILE: index };
+    try {
+      execFileSync('git', ['read-tree', parent], { cwd: root, env, stdio: 'ignore' });
+      for (const [file, contents] of Object.entries(files)) {
+        if (contents === null) {
+          execFileSync('git', ['rm', '-f', '--ignore-unmatch', '--', file], { cwd: root, env, stdio: 'ignore' });
+          continue;
+        }
+        const abs = path.join(root, file);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, contents);
+        execFileSync('git', ['add', '--', file], { cwd: root, env, stdio: 'ignore' });
+      }
+      const tree = execFileSync('git', ['write-tree'], { cwd: root, env, encoding: 'utf8' }).trim();
+      return execFileSync('git', ['commit-tree', tree, ...parents.flatMap((item) => ['-p', item]), '-m', message], {
+        cwd: root, env, encoding: 'utf8',
+      }).trim();
+    } finally {
+      fs.rmSync(index, { force: true });
+    }
+  }
+
+  it('allows a shared-checkout temporary-index commit of the caller files while a peer is active', () => {
+    fs.writeFileSync(path.join(root, 'src/peer.ts'), 'export const peer = 1;\n');
+    git(root, 'add', 'src/peer.ts');
+    git(root, 'commit', '-m', 'add peer file');
+    useSharedCheckout();
+    engine.locks.acquireLocks({ agentId: 'owner', patterns: ['src/a.ts'], lockType: 'file' });
+    engine.locks.acquireLocks({ agentId: 'peer', patterns: ['src/peer.ts'], lockType: 'file' });
+    fs.writeFileSync(path.join(root, 'src/peer.ts'), 'export const peer = 2;\n');
+
+    const old = git(root, 'rev-parse', 'HEAD').trim();
+    const sha = commitTree(old, 'temp index commit', { 'src/a.ts': 'export const a = 2;\n' });
+    const command = `git update-ref -m 'commit: temp index commit' --create-reflog HEAD ${sha} ${old}`;
+    expect(safety(command).safe).toBe(true);
+    expect(safety(command).deferred).toBeUndefined();
+    expect(safety(`git update-ref --no-deref refs/heads/${mainBranch} ${sha} ${old}`).safe).toBe(true);
+
+    execFileSync('sh', ['-c', command], { cwd: root, stdio: 'pipe' });
+    expect(git(root, 'rev-parse', 'HEAD').trim()).toBe(sha);
+    const previousExit = process.exitCode;
+    runHookPhase({
+      engine,
+      subCmd: 'post',
+      flags: {},
+      stdinPayload: { tool_name: 'Bash', tool_input: { command } },
+      agentId: 'owner',
+    });
+    expect(process.exitCode ?? 0).toBe(0);
+    process.exitCode = previousExit;
+
+    expect(git(root, 'show', 'HEAD:src/a.ts')).toBe('export const a = 2;\n');
+    expect(git(root, 'show', 'HEAD:src/peer.ts')).toBe('export const peer = 1;\n');
+    expect(git(root, 'diff', '--cached', '--name-only', 'HEAD').trim()).toBe('');
+    expect(git(root, 'status', '--porcelain', '-uno').trim()).toBe('M src/peer.ts');
+  });
+
+  it('blocks a shared-checkout update-ref that touches a peer path, omits the old value, or is not a one-commit fast-forward', () => {
+    fs.writeFileSync(path.join(root, 'src/peer.ts'), 'export const peer = 1;\n');
+    fs.writeFileSync(path.join(root, 'src/other.ts'), 'export const other = 1;\n');
+    git(root, 'add', 'src/peer.ts', 'src/other.ts');
+    git(root, 'commit', '-m', 'add shared files');
+    useSharedCheckout();
+    engine.locks.acquireLocks({ agentId: 'owner', patterns: ['src/a.ts'], lockType: 'file' });
+    engine.locks.acquireLocks({ agentId: 'peer', patterns: ['src/peer.ts'], lockType: 'file' });
+    fs.writeFileSync(path.join(root, 'src/a.ts'), 'export const a = 2;\n');
+
+    const old = git(root, 'rev-parse', 'HEAD').trim();
+    const peerSha = commitTree(old, 'temp index commit', { 'src/peer.ts': 'export const peer = 9;\n' });
+    const peerUpdate = safety(`git update-ref -m 'commit: temp index commit' HEAD ${peerSha} ${old}`);
+    expect(peerUpdate.safe).toBe(false);
+    expect(peerUpdate.reason).toContain('path src/peer.ts is claimed by agent peer');
+    const suggestion = peerUpdate.reason?.split('run: ')[1] ?? '';
+    expect(suggestion).toContain('kith commit -m "temp index commit"');
+    expect(suggestion).toContain('src/a.ts');
+    expect(suggestion).not.toContain('src/peer.ts');
+    expect(git(root, 'rev-parse', 'HEAD').trim()).toBe(old);
+
+    const ownSha = commitTree(old, 'temp index commit', { 'src/a.ts': 'export const a = 2;\n' });
+    const missingOld = safety(`git update-ref HEAD ${ownSha}`);
+    expect(missingOld.safe).toBe(false);
+    expect(missingOld.reason).toContain('No compare-and-swap old value');
+    const missingOldVar = safety('git update-ref HEAD "$NEW"');
+    expect(missingOldVar.safe).toBe(false);
+    expect(missingOldVar.deferred).toBeUndefined();
+    expect(missingOldVar.reason).toContain('No compare-and-swap old value');
+
+    const renamed = commitTree(old, 'rename peer', { 'src/peer.ts': null, 'src/renamed.ts': 'export const peer = 1;\n' });
+    expect(safety(`git update-ref HEAD ${renamed} ${old}`).reason).toContain('path src/peer.ts is claimed by agent peer');
+
+    const unclaimed = commitTree(old, 'other', { 'src/other.ts': 'export const other = 2;\n' });
+    expect(safety(`git update-ref HEAD ${unclaimed} ${old}`).reason).toContain('path src/other.ts is not claimed, locked, or recorded by this session');
+
+    const first = commitTree(old, 'first', { 'src/a.ts': 'export const a = 2;\n' });
+    const second = commitTree(first, 'second', { 'src/a.ts': 'export const a = 3;\n' });
+    expect(safety(`git update-ref HEAD ${second} ${old}`).reason).toContain('not a one-commit fast-forward');
+
+    const side = commitTree(old, 'side', { 'src/a.ts': 'export const a = 4;\n' });
+    const mergeTree = git(root, 'rev-parse', `${side}^{tree}`).trim();
+    const merge = execFileSync('git', ['commit-tree', mergeTree, '-p', old, '-p', side, '-m', 'merge'], {
+      cwd: root, encoding: 'utf8',
+    }).trim();
+    expect(safety(`git update-ref HEAD ${merge} ${old}`).reason).toContain('merge');
+
+    const wrongOld = safety(`git update-ref HEAD ${ownSha} ${first}`);
+    expect(wrongOld.safe).toBe(false);
+    expect(wrongOld.reason).toContain('does not equal');
+    expect(safety(`git update-ref refs/heads/kith/peer ${ownSha} ${old}`).safe).toBe(false);
+    expect(safety('git update-ref --stdin').reason).toContain('stdin');
+    expect(safety(`git update-ref --no-deref HEAD ${ownSha} ${old}`).reason).toContain('--no-deref');
+    expect(safety('git branch -D other').safe).toBe(false);
+    expect(safety('git reset --hard').safe).toBe(false);
+    expect(git(root, 'rev-parse', 'HEAD').trim()).toBe(old);
+  });
+
+  it('verifies a shell-variable temporary-index commit after it runs and reverts a peer path', () => {
+    fs.writeFileSync(path.join(root, 'src/peer.ts'), 'export const peer = 1;\n');
+    git(root, 'add', 'src/peer.ts');
+    git(root, 'commit', '-m', 'add peer file');
+    useSharedCheckout();
+    engine.locks.acquireLocks({ agentId: 'owner', patterns: ['src/a.ts'], lockType: 'file' });
+    engine.locks.acquireLocks({ agentId: 'peer', patterns: ['src/peer.ts'], lockType: 'file' });
+
+    const index = path.join(os.tmpdir(), `kith-var-idx-${process.pid}`);
+    const script = (file: string, message: string) => `set -e
+OLD=$(git rev-parse HEAD)
+export GIT_INDEX_FILE=${q(index)}
+git read-tree HEAD
+git add -- ${file}
+TREE=$(git write-tree)
+NEW=$(git commit-tree "$TREE" -p "$OLD" -m ${q(message)})
+git update-ref -m ${q(`commit: ${message}`)} HEAD "$NEW" "$OLD"`;
+
+    const own = script('src/a.ts', 'temp index commit');
+    fs.writeFileSync(path.join(root, 'src/a.ts'), 'export const a = 2;\n');
+    const before = git(root, 'rev-parse', 'HEAD').trim();
+    const preview = safety(own);
+    expect(preview.safe).toBe(true);
+    expect(preview.deferred).toBe(true);
+    expect(git(root, 'rev-parse', 'HEAD').trim()).toBe(before);
+    expect(safety('git commit -m "meanwhile"', 'peer').safe).toBe(false);
+    expect(safety('git commit -m "meanwhile"', 'peer').reason).toContain('verifying');
+    expect(waitForSharedRefLease(engine.coordDb.coordDir, 'peer', 80)).toMatch(/Timed out/);
+    expect(waitForSharedRefLease(engine.coordDb.coordDir, 'owner', 80)).toBeNull();
+
+    execFileSync('sh', ['-c', own], { cwd: root, stdio: 'pipe' });
+    const committed = git(root, 'rev-parse', 'HEAD').trim();
+    expect(committed).not.toBe(before);
+    const previousExit = process.exitCode;
+    runHookPhase({
+      engine, subCmd: 'post', flags: {}, stdinPayload: { tool_name: 'Bash', tool_input: { command: own } }, agentId: 'owner',
+    });
+    expect(process.exitCode ?? 0).toBe(0);
+    process.exitCode = previousExit;
+    expect(git(root, 'rev-parse', 'HEAD').trim()).toBe(committed);
+    expect(git(root, 'log', '-1', '--format=%s').trim()).toBe('temp index commit');
+    expect(git(root, 'diff', '--cached', '--name-only', 'HEAD').trim()).toBe('');
+
+    const steal = script('src/peer.ts', 'steal peer');
+    fs.writeFileSync(path.join(root, 'src/peer.ts'), 'export const peer = 9;\n');
+    const head = git(root, 'rev-parse', 'HEAD').trim();
+    expect(safety(steal).deferred).toBe(true);
+    execFileSync('sh', ['-c', steal], { cwd: root, stdio: 'pipe' });
+    expect(git(root, 'rev-parse', 'HEAD').trim()).not.toBe(head);
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((message?: unknown) => {
+      errors.push(String(message ?? ''));
+    });
+    try {
+      runHookPhase({
+        engine, subCmd: 'post', flags: {}, stdinPayload: { tool_name: 'Bash', tool_input: { command: steal } }, agentId: 'owner',
+      });
+      expect(process.exitCode).toBe(2);
+      expect(errors.join('\n')).toContain('path src/peer.ts is claimed by agent peer');
+      expect(errors.join('\n')).toContain('Reverted HEAD');
+      expect(errors.join('\n')).toContain('kith commit -m "steal peer"');
+    } finally {
+      spy.mockRestore();
+      process.exitCode = previousExit;
+    }
+    expect(git(root, 'rev-parse', 'HEAD').trim()).toBe(head);
+    expect(git(root, 'log', '-1', '--format=%s').trim()).toBe('temp index commit');
+    fs.rmSync(index, { force: true });
+  });
+
+  it('resolves variable update-ref resync roots and still ignores an update-ref with no old value', () => {
+    const worktreeRoot = discoverRepository(worktree).checkoutRoot;
+    expect(refUpdateResyncRoots('git update-ref HEAD "$NEW" "$OLD"', worktree)).toEqual([worktreeRoot]);
+    expect(refUpdateResyncRoots('git update-ref HEAD $(echo abc)', worktree)).toEqual([]);
   });
 
   it('uses the same ownership rule when the engine is opened inside the worktree', () => {

@@ -51,7 +51,7 @@ When a client with `--auto` hooks also registers an MCP session (`kith_begin_wor
 
 The Bash guard refuses Git commands that can replace another session's checkout or refs.
 
-In a shared checkout (`kith mode main`, or any checkout another active session is also using), raw `git update-ref`, `git reset`, `git checkout`, and the other recognized checkout-rewriting commands are blocked while a peer is active. To commit only your own files there, run:
+In a shared checkout (`kith mode main`, or any checkout another active session is also using), `git reset`, `git checkout`, and the other recognized checkout-rewriting commands are blocked while a peer is active. A compare-and-swap `git update-ref` of `HEAD` or `refs/heads/<the current branch>` is allowed when the pre-hook can prove it is a fast-forward of exactly one commit and every changed path belongs to the caller. The same shape with shell variables is checked after the command and reverted if that proof fails. Anything else, including an `update-ref` with no old value, stays blocked. To commit only your own files there, run:
 
 ```sh
 kith commit -m "feat: scoped change" [files...]
@@ -61,15 +61,27 @@ If `[files...]` is omitted, `kith commit` collects the caller session's recorded
 
 In an isolated worktree the guard allows `git update-ref` when the ref belongs only to the caller. That means the caller has `worktree_path`, the ref is `HEAD` or `refs/heads/<that worktree's branch>` checked out in the worktree, and no other active agent shares the worktree or the branch. A temporary-index commit in that worktree (`git commit-tree`, then `git update-ref HEAD <new> <old>`) is allowed, including with `-m <msg>`, `--no-deref`, and `--create-reflog`. `git -C <dir>` is resolved from the worktree; a `-C` or `cd` that leaves the worktree does not count as owned. `git update-ref -d` is allowed only for a ref the caller owns.
 
+In a shared checkout the same temporary-index shape is allowed only after the pre-hook checks all of the following, before the command runs:
+
+- the command is `git update-ref` with optional `-m`, `--no-deref`, and `--create-reflog`, and the ref is `HEAD` or `refs/heads/<the branch checked out in that directory>`
+- `<old>` is present and resolves to the ref's current value (a compare-and-swap)
+- `<new>` resolves to a commit with exactly one parent, and that parent is `<old>` (one fast-forward commit; merges and history rewrites are refused)
+- every path in `git diff-tree -r --name-only` from `<old>` to `<new>`, including deletions and both sides of a rename, is a file the caller has claimed, locked, or recorded the way `kith commit` records files (active file and narrow-glob locks, `presence.db` touched files, and active task scopes; a `**` lock does not count). No changed path may be locked or claimed by another active agent
+
+`<new>` and `<old>` may be literal SHAs or other revisions that resolve at check time. Shell variables and command substitutions such as `$(git commit-tree ...)` are not executed during the pre-hook, so the commit they will create cannot be read yet. When the command is still exactly that compare-and-swap shape, the pre-hook records the current ref value and lets the command run. The post-hook then applies the same parent and path checks to the commit that landed. If they fail, it compare-and-swaps the ref back to the recorded value and prints the reason, including a `kith commit -m "<message>" <files>` command built from the caller's recorded files. A short lease keeps other agents from moving the same ref until that post-hook finishes: their ref-moving commands are refused, and `kith commit` waits, so a peer does not build on a commit that is about to be reverted. If the reverting compare-and-swap loses to a later update, the hook reports that and does not force the ref.
+
+A blocked command keeps the existing `kith commit` guidance and adds the specific reason, for example `No compare-and-swap old value` or `path src/x.ts is claimed by agent peer`. When the caller has recorded dirty files, the message includes a ready-to-run `kith commit -m "<message>" <those files>`.
+
 These stay blocked while a peer is active:
 
-- updates to the integration branch (the branch checked out in the primary checkout), or to another agent's branch
-- `HEAD` updates in a shared checkout, including an update that would move that branch by following `HEAD`
-- `git update-ref --stdin` batches, and any ref command the parser cannot classify
+- updates to the integration branch from an isolated worktree, or to another agent's branch
+- a shared-checkout `update-ref` with no `<old>`, a merge or multi-commit jump, a path the caller does not own, or a path another agent claims
+- `HEAD` updates that are not the one-commit fast-forward above, including `--no-deref` on a symbolic `HEAD` (that would retarget the symlink instead of the branch)
+- `git update-ref --stdin` batches, `update-ref -d`, and any ref command the parser cannot classify
 - `git symbolic-ref`, except a read or pointing the caller's own `HEAD` at `refs/heads/<the caller's branch>`
 - `git worktree remove`, `git worktree prune`, and `git branch` `-d`/`-D`/`-m`/`-M`/`-f`/`--delete`/`--move`/`--force`
 
-After `update-ref`, the post-hook resyncs the index of the checkout that command ran in: the caller's worktree, or the directory selected with `-C` when that checkout belongs to the same repository.
+After `update-ref`, the post-hook resyncs the index of the checkout that command ran in: the caller's worktree, the directory selected with `-C` when that checkout belongs to the same repository, or the checkout named by a compare-and-swap `update-ref` whose values are shell variables.
 
 ## MCP ownership
 

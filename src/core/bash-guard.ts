@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import { discoverRepository, isWithin, physicalPath } from './repository.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,7 +9,22 @@ import { DependencyAndContractEngine } from './dep-graph.js';
 import { FencingAndAgentManager, type AgentRecord } from './fencing.js';
 import { ignoredPaths, walkNonIgnoredFiles } from './git-ignore.js';
 import { LockEngine } from './locks.js';
+import type { RecordedTask } from './recorded-files.js';
 import { ShadowGitEngine } from './shadow-git.js';
+import {
+  DESTRUCTIVE_SHARED_REFS,
+  DESTRUCTIVE_SHARED_TREE,
+  assessSharedCheckoutUpdate,
+  casCommandDirectories,
+  commandMovesSharedCheckout,
+  firewallReason,
+  foreignRefLease,
+  settleDeferredRefUpdate,
+  suggestKithCommit,
+  type RefHost,
+} from './shared-ref-update.js';
+
+const require = createRequire(import.meta.url);
 
 export interface FileSnapshotEntry {
   relPath: string;
@@ -35,11 +51,6 @@ export interface BashGuardPostReport {
   quarantinedViolations: QuarantineRecord[];
 }
 
-const GIT_PREFIX = String.raw`\bgit(?:\s+(?:-C|-c|--git-dir|--work-tree)(?:=|\s+)(?:"[^"]*"|'[^']*'|[^\s;&|]+)|\s+--(?:no-pager|literal-pathspecs|no-optional-locks))*\s+`;
-const DESTRUCTIVE_SHARED_TREE = new RegExp(GIT_PREFIX + String.raw`(?:reset|clean|checkout|restore|switch|stash|merge|rebase|pull|cherry-pick|revert|am)\b`);
-const DESTRUCTIVE_SHARED_REFS = new RegExp(GIT_PREFIX + String.raw`(?:update-ref|symbolic-ref|worktree\s+(?:remove|prune)|branch\s+(?:-[dDmMfF]|--(?:delete|move|force)))\b`);
-const SHARED_REF_REASON = 'Git operation can replace shared work or refs while peer agents are active. To commit only your own files safely while peers are active, run: kith commit -m "<message>" [files...]';
-
 const SAFE_GIT_GLOBALS = new Set([
   '--no-pager', '-P', '--paginate', '-p',
   '--literal-pathspecs', '--no-optional-locks', '--no-replace-objects',
@@ -65,17 +76,25 @@ interface IsolatedOwner {
  * Unparsed commands and stdin batches yield nothing, so the post-hook does not reset an unrelated index.
  */
 export function refUpdateResyncRoots(command: string, startDir: string): string[] {
+  const dirs: string[] = [];
   const ops = parseRefOps(command, startDir);
-  if (!ops) return [];
+  if (ops) {
+    for (const op of ops) {
+      if (op.kind === 'update-ref' && !op.stdin && op.ref) dirs.push(op.dir);
+    }
+  }
+  // A value like "$NEW" is not a word the strict parser can trust, so it contributes no
+  // directory. The compare-and-swap shape still names the checkout that should be resynced.
+  if (dirs.length === 0) dirs.push(...casCommandDirectories(command, startDir));
+  if (dirs.length === 0) return [];
   let anchor: string | null = null;
   try { anchor = discoverRepository(startDir).commonGitDir; } catch { anchor = null; }
   const roots: string[] = [];
-  for (const op of ops) {
-    if (op.kind !== 'update-ref' || op.stdin) continue;
+  for (const dir of dirs) {
     let checkout: string;
     let common: string | null;
     try {
-      const layout = discoverRepository(op.dir);
+      const layout = discoverRepository(dir);
       checkout = layout.checkoutRoot;
       common = layout.commonGitDir;
     } catch { continue; }
@@ -531,23 +550,79 @@ export class BashMerkleGuard {
     agentId: string;
     command: string;
     inIsolatedWorktree?: boolean;
-  }): { safe: boolean; reason?: string } {
+  }): { safe: boolean; reason?: string; deferred?: boolean } {
     this.fencing.assertSession(params.agentId);
     const agent = this.fencing.getAgent(params.agentId);
     const repoRoot = this.coordDb.repoRoot;
     const root = physicalPath(agent?.worktree_path ?? repoRoot);
     const peers = this.fencing.listAgents(true).filter(a => a.id !== params.agentId);
     const sharesCheckout = peers.some(a => physicalPath(a.worktree_path ?? repoRoot) === root);
-    // Ref updates are refused while any peer is active, except update-ref (and a clearly local
-    // symbolic-ref) of a ref that belongs only to this agent's isolated worktree.
+    const startDir = agent?.worktree_path ?? repoRoot;
+    const refuse = (specific?: string) => ({
+      safe: false as const,
+      reason: firewallReason(suggestKithCommit(this.refHost(params.agentId), params.command), specific),
+    });
+    if (peers.length && sharesCheckout && commandMovesSharedCheckout(params.command)) {
+      const foreign = foreignRefLease(this.coordDb.coordDir, params.agentId);
+      if (foreign) {
+        return refuse(`Agent ${foreign.agentId} is verifying a shared-checkout commit; retry shortly.`);
+      }
+    }
+    // Ref updates are refused while any peer is active, except a ref that belongs only to this
+    // agent's isolated worktree, or a proved one-commit fast-forward of the caller's own files.
     if (peers.length && DESTRUCTIVE_SHARED_REFS.test(params.command)
-      && !sharedRefUpdatesAreOwned(params.command, agent?.worktree_path ?? repoRoot, agent, peers)) {
-      return { safe: false, reason: SHARED_REF_REASON };
+      && !sharedRefUpdatesAreOwned(params.command, startDir, agent, peers)) {
+      try {
+        const decision = assessSharedCheckoutUpdate(this.refHost(params.agentId), params.command, startDir);
+        if (decision.action === 'allow') return { safe: true };
+        if (decision.action === 'defer') return { safe: true, deferred: true };
+        if (decision.action === 'block' && decision.reason) return { safe: false, reason: decision.reason };
+      } catch {
+        return refuse('The shared-checkout update could not be verified.');
+      }
+      return refuse();
     }
     if (sharesCheckout && DESTRUCTIVE_SHARED_TREE.test(params.command)) {
-      return { safe: false, reason: SHARED_REF_REASON };
+      return refuse();
     }
     return { safe: true };
+  }
+
+  /**
+   * Post-hook half of a deferred shared-checkout update-ref. Literal SHAs are decided in
+   * checkCommandSafety; shell variables are checked against the commit that landed.
+   */
+  public settleDeferredRefUpdate(params: { agentId: string; command: string }): { warnings: string[]; reverted: boolean } {
+    return settleDeferredRefUpdate(this.refHost(params.agentId), params.command);
+  }
+
+  private refHost(agentId: string): RefHost {
+    const agent = this.fencing.getAgent(agentId);
+    return {
+      repoRoot: this.coordDb.repoRoot,
+      coordDir: this.coordDb.coordDir,
+      agentId,
+      agent,
+      locks: this.lockEngine.listLocks(),
+      tasks: this.recordedTasks(),
+      presenceTouched: presenceTouchedFor(this.coordDb.commonGitDir, agent),
+      logEvent: (id, type, payload) => this.coordDb.logEvent(id, type, payload),
+    };
+  }
+
+  private recordedTasks(): RecordedTask[] {
+    try {
+      const rows = this.coordDb.db.prepare(
+        `SELECT owner_agent_id, status, scope_globs_json FROM tasks`,
+      ).all() as Array<{ owner_agent_id: string | null; status: string; scope_globs_json: string }>;
+      return rows.map((row) => ({
+        owner_agent_id: row.owner_agent_id,
+        status: row.status,
+        scope_globs: parseScopeGlobs(row.scope_globs_json),
+      }));
+    } catch {
+      return [];
+    }
   }
 
   private getSnapshotFilePath(agentId: string): string {
@@ -849,5 +924,36 @@ export class BashMerkleGuard {
     return this.coordDb.db
       .prepare(`SELECT * FROM quarantine ORDER BY created_at DESC`)
       .all() as unknown as QuarantineRecord[];
+  }
+}
+
+function parseScopeGlobs(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Touched paths from presence.db for this agent. A single process-tree match is included even
+ * when the presence row's agent id differs, matching the caller discovery `kith commit` uses.
+ * Loaded lazily so the guard does not import the auto-session module during engine startup.
+ */
+function presenceTouchedFor(commonGitDir: string | null, agent: AgentRecord | null): string[] {
+  if (!commonGitDir || !agent) return [];
+  try {
+    const { listRepoPresence, ownedByCaller } = require('../cli/auto-session.js') as typeof import('../cli/auto-session.js');
+    const peers = listRepoPresence(undefined, commonGitDir);
+    const touched = new Set<string>();
+    for (const peer of peers) {
+      if (peer.agentId === agent.id) for (const file of peer.touchedFiles) touched.add(file);
+    }
+    const byPid = peers.filter((peer) => ownedByCaller(peer.pid, agent.pid));
+    if (byPid.length === 1) for (const file of byPid[0]!.touchedFiles) touched.add(file);
+    return [...touched];
+  } catch {
+    return [];
   }
 }
