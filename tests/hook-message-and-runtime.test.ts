@@ -90,11 +90,13 @@ describe('hook message budget', () => {
     const engine = new KithEngine(root);
     const previousExit = process.exitCode;
     const logs: string[] = [];
+    // Register while ps is still on PATH. macOS reads the process start time with ps;
+    // Linux reads /proc. The stub below only hides a newer `kith` during the hook.
+    engine.fencing.registerAgent({ id: 'me' });
     vi.spyOn(console, 'log').mockImplementation((line?: unknown) => { logs.push(String(line ?? '')); });
     vi.stubEnv('PATH', path.join(root, 'empty-path'));
     fs.mkdirSync(path.join(root, 'empty-path'));
     try {
-      engine.fencing.registerAgent({ id: 'me' });
       const notice = 'n'.repeat(8_000);
       for (const subCmd of ['pre', 'post'] as const) {
         logs.length = 0;
