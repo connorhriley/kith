@@ -29,6 +29,9 @@ export function formatInstallHuman(report: InstallReport): string {
   if (report.autostart?.configured) {
     lines.push(`  + Autostart (${report.autostart.configPath}): ${report.autostart.notes}`);
   }
+  if (report.prunedRuntimes?.length) {
+    lines.push(`  * Removed ${report.prunedRuntimes.length} unreferenced runtime${report.prunedRuntimes.length === 1 ? '' : 's'}.`);
+  }
   lines.push(`  * ${report.radar.notes}`);
   for (const warning of report.warnings) lines.push(`  ! ${warning}`);
   lines.push('');

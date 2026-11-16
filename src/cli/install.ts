@@ -6,6 +6,7 @@ import { discoverRepository, physicalPath } from '../core/repository.js';
 import { autoConfigureAllClients, type ClientDetectionResult } from './setup-auto.js';
 import { installAutostart, waitForHostAutostartRunning, type AutostartResult } from './autostart.js';
 import { applySetupPlan } from './setup-ledger.js';
+import { kithPackageRoot, pruneUnreferencedRuntimes } from './runtime-pin.js';
 import { setupRuntime, verifySetupRuntime } from './setup-runtime.js';
 import { startRadar } from './radar.js';
 
@@ -48,6 +49,8 @@ export interface InstallReport {
     notes: string;
   };
   warnings: string[];
+  /** Retained runtime directories removed because no live config still names them. */
+  prunedRuntimes: string[];
 }
 
 function quoteCommand(value: string): string {
@@ -322,6 +325,20 @@ export async function installKith(options: InstallOptions = {}): Promise<Install
     notes: options.noRadar ? 'Skipped (--no-radar).' : 'Radar is only available on macOS.',
   };
 
+  let prunedRuntimes: string[] = [];
+  if (!dryRun) {
+    try {
+      const keep = kithPackageRoot(cliPath);
+      const runtimeDir = keep && path.basename(path.dirname(keep)) === 'runtimes' ? keep : null;
+      prunedRuntimes = pruneUnreferencedRuntimes(home, {
+        extraRoots: [targetDir],
+        keepDirs: runtimeDir ? [runtimeDir] : [],
+      });
+    } catch (err) {
+      warnings.push(`Could not remove unreferenced Kith runtimes: ${(err as Error).message}`);
+    }
+  }
+
   if (!options.noRadar && process.platform === 'darwin') {
     const helper = path.resolve(path.dirname(cliPath), '../../bin/kith-menubar');
     if (dryRun) {
@@ -370,5 +387,6 @@ export async function installKith(options: InstallOptions = {}): Promise<Install
     autostart,
     radar,
     warnings,
+    prunedRuntimes,
   };
 }

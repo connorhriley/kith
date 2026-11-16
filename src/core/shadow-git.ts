@@ -1,11 +1,22 @@
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { CoordDatabase } from './db.js';
 import { FencingAndAgentManager } from './fencing.js';
 import { LockEngine } from './locks.js';
 import { ignoredPaths } from './git-ignore.js';
+
+function isGitBlob(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{40,64}$/i.test(value);
+}
+
+function sameIdSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const have = new Set(left);
+  return right.every((id) => have.has(id));
+}
 
 export interface ConflictRecord {
   id: string;
@@ -243,6 +254,12 @@ export class ShadowGitEngine {
       return { clean: true, mergedTreeSha: null, conflicts: [] };
     }
 
+    // Do not skip a peer because it shares this process's pid. Claude Code subagents record
+    // the same owner pid on purpose, and so does every agent registered in one process
+    // (the default anchor is process.pid). A missing, zero, or null pid is not an identity
+    // either: treating those as equal would hide a real conflict. 0.1.8 already drops a
+    // side that matches HEAD at probe time, which is what made a temporary-index commit
+    // look like a merge conflict.
     const activeAgents = this.fencing
       .listAgents(true)
       .filter((a) => a.id !== agentId && a.shadow_tree_sha);
@@ -423,8 +440,196 @@ export class ShadowGitEngine {
     return removed;
   }
 
+  /** Counts from the most recent {@link pruneFalseConflicts} call. Tests assert the probe budget. */
+  public lastConflictHygiene: { mergeFileProbes: number; headReads: number; removed: number; probeDir: string | null } = {
+    mergeFileProbes: 0, headReads: 0, removed: 0, probeDir: null,
+  };
+
+  /**
+   * Drop stored conflicts that are no longer real. 0.1.8 already refuses to record a side equal
+   * to HEAD, or two identical sides, while probing. Rows written before that commit, or before
+   * HEAD moved, stay until something reads them. `git merge-file` runs only for triples not
+   * already settled, at most `maxMergeProbes` per call, and the decision is cached by HEAD sha
+   * plus conflict id so a later status read does not spawn those processes again. Probe files
+   * live in the system temp directory and are removed before this returns.
+   */
+  public pruneFalseConflicts(maxMergeProbes = 100): number {
+    const stats = { mergeFileProbes: 0, headReads: 0, removed: 0, probeDir: null as string | null };
+    this.lastConflictHygiene = stats;
+    const rows = this.coordDb.db.prepare('SELECT * FROM conflicts').all() as Array<Record<string, unknown>>;
+    if (!rows.length) return 0;
+
+    const parsed = rows.map((row) => {
+      let details: ConflictRecord['details'] = { reason: '' };
+      try { details = JSON.parse(String(row.details_json)) as ConflictRecord['details']; } catch { /* Keep unreadable rows. */ }
+      return {
+        id: String(row.id),
+        file: String(row.file_path),
+        severity: String(row.severity),
+        details,
+      };
+    });
+    const doomed = new Set<string>();
+    for (const row of parsed) {
+      const { blobA, blobB } = row.details;
+      if (row.severity === 'text_conflict' && isGitBlob(blobA) && blobA === blobB) doomed.add(row.id);
+    }
+
+    const cache = this.readHygieneCache();
+    const head = this.getHeadCommit();
+    const headChecked = new Set(cache.head === head ? cache.headChecked : []);
+    const mergeSettled = new Set(cache.mergeSettled);
+    const needHead = parsed.filter((row) => !doomed.has(row.id) && row.severity === 'text_conflict'
+      && (isGitBlob(row.details.blobA) || isGitBlob(row.details.blobB)) && !headChecked.has(row.id));
+    if (needHead.length) {
+      const atHead = head ? this.blobsAtCommit(head, [...new Set(needHead.map((row) => row.file))], stats) : null;
+      if (atHead) {
+        for (const row of needHead) {
+          const committed = atHead.get(row.file) ?? null;
+          if (committed && (row.details.blobA === committed || row.details.blobB === committed)) doomed.add(row.id);
+          headChecked.add(row.id);
+        }
+      }
+    }
+
+    const needMerge = parsed.filter((row) => !doomed.has(row.id) && row.severity === 'text_conflict'
+      && isGitBlob(row.details.baseBlob) && isGitBlob(row.details.blobA) && isGitBlob(row.details.blobB)
+      && !mergeSettled.has(row.id));
+    const batch = needMerge.slice(0, Math.max(0, maxMergeProbes));
+    if (batch.length) {
+      const dir = fs.mkdtempSync(path.join(this.mergeProbeParent(), 'kith-merge-probe-'));
+      stats.probeDir = dir;
+      try {
+        for (const row of batch) {
+          stats.mergeFileProbes++;
+          const merged = this.blobsMergeCleanly(dir, row.details.baseBlob!, row.details.blobA!, row.details.blobB!);
+          if (merged === 'clean') doomed.add(row.id);
+          else if (merged === 'conflict') mergeSettled.add(row.id);
+        }
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    for (const row of parsed) {
+      if (doomed.has(row.id)) continue;
+      const probeable = row.severity === 'text_conflict'
+        && isGitBlob(row.details.baseBlob) && isGitBlob(row.details.blobA) && isGitBlob(row.details.blobB);
+      if (!probeable) mergeSettled.add(row.id);
+    }
+
+    if (doomed.size) {
+      this.coordDb.withTransaction(() => {
+        const del = this.coordDb.db.prepare('DELETE FROM conflicts WHERE id = ?');
+        for (const id of doomed) del.run(id);
+      });
+    }
+    stats.removed = doomed.size;
+    const remain = new Set(parsed.filter((row) => !doomed.has(row.id)).map((row) => row.id));
+    const nextCache = {
+      head,
+      headChecked: [...headChecked].filter((id) => remain.has(id)),
+      mergeSettled: [...mergeSettled].filter((id) => remain.has(id)),
+    };
+    if (doomed.size || !sameIdSet(cache.headChecked, nextCache.headChecked) || !sameIdSet(cache.mergeSettled, nextCache.mergeSettled) || cache.head !== head) {
+      this.writeHygieneCache(nextCache);
+    }
+    return doomed.size;
+  }
+
+  private blobsAtCommit(commit: string, files: string[], stats: { headReads: number }): Map<string, string | null> | null {
+    const found = new Map<string, string | null>();
+    try {
+      for (let offset = 0; offset < files.length; offset += 200) {
+        const chunk = files.slice(offset, offset + 200);
+        stats.headReads++;
+        const out = execFileSync('git', ['--literal-pathspecs', 'ls-tree', '-z', commit, '--', ...chunk], {
+          cwd: this.coordDb.repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 * 1024 * 1024,
+        });
+        for (const line of out.split('\0')) {
+          const match = /^\d+ blob ([0-9a-f]+)\t([\s\S]+)$/.exec(line);
+          if (match) found.set(match[2], match[1]);
+        }
+      }
+    } catch {
+      return null;
+    }
+    for (const file of files) if (!found.has(file)) found.set(file, null);
+    return found;
+  }
+
+  /** `conflict` is a real overlap. `error` is not cached, so a later read can retry the probe. */
+  private blobsMergeCleanly(dir: string, base: string, blobA: string, blobB: string): 'clean' | 'conflict' | 'error' {
+    const show = (sha: string, name: string) => {
+      const file = path.join(dir, name);
+      const bytes = execFileSync('git', ['cat-file', 'blob', sha], {
+        cwd: this.coordDb.repoRoot, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 * 1024 * 1024,
+      });
+      fs.writeFileSync(file, bytes);
+      return file;
+    };
+    try {
+      const ours = show(blobA, 'a');
+      const baseFile = show(base, 'base');
+      const theirs = show(blobB, 'b');
+      try {
+        execFileSync('git', ['merge-file', ours, baseFile, theirs], { cwd: dir, stdio: 'ignore' });
+        return 'clean';
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        return typeof status === 'number' && status > 0 ? 'conflict' : 'error';
+      }
+    } catch {
+      return 'error';
+    }
+  }
+
+  /** Prefer the system temp dir. If that lives inside this checkout, step outside it. */
+  private mergeProbeParent(): string {
+    const repo = fs.realpathSync(this.coordDb.repoRoot);
+    for (const candidate of [os.tmpdir(), '/tmp', os.homedir()]) {
+      try {
+        const real = fs.realpathSync(candidate);
+        const relative = path.relative(repo, real);
+        if (relative.startsWith('..') || path.isAbsolute(relative)) return real;
+      } catch { /* Try the next directory. */ }
+    }
+    return fs.realpathSync(os.tmpdir());
+  }
+
+  private hygieneCachePath(): string {
+    return path.join(this.coordDb.coordDir, 'conflict-hygiene.json');
+  }
+
+  private readHygieneCache(): { head: string | null; headChecked: string[]; mergeSettled: string[] } {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.hygieneCachePath(), 'utf8')) as {
+        head?: unknown; headChecked?: unknown; mergeSettled?: unknown;
+      };
+      const strings = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+      return {
+        head: typeof raw.head === 'string' || raw.head === null ? raw.head : null,
+        headChecked: strings(raw.headChecked),
+        mergeSettled: strings(raw.mergeSettled),
+      };
+    } catch {
+      return { head: null, headChecked: [], mergeSettled: [] };
+    }
+  }
+
+  private writeHygieneCache(cache: { head: string | null; headChecked: string[]; mergeSettled: string[] }): void {
+    const file = this.hygieneCachePath();
+    const tmp = `${file}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(cache));
+      fs.renameSync(tmp, file);
+    } catch {
+      try { fs.unlinkSync(tmp); } catch { /* Best effort. */ }
+    }
+  }
+
   public listConflicts(): ConflictRecord[] {
     this.fencing.reapDeadAgents();
+    try { this.pruneFalseConflicts(); } catch { /* Hygiene must never break a read. */ }
     const rows = this.coordDb.db
       .prepare(`SELECT * FROM conflicts ORDER BY detected_at DESC`)
       .all() as Array<Record<string, unknown>>;

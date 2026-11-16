@@ -106,7 +106,11 @@ export class KithEngine {
   }
 
   public commit(params: CommitParams): CommitResult {
-    return commitScopedFiles(this, params);
+    const result = commitScopedFiles(this, params);
+    if (result.ok) {
+      try { this.shadowGit.pruneFalseConflicts(); } catch { /* Hygiene must not fail a commit that already landed. */ }
+    }
+    return result;
   }
 
   /** Read-only situational summary from live state: who is active on what, open handoffs, conflicts, claims that overlap a scope. */
