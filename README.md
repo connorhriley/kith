@@ -3,23 +3,87 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/connorhriley/kith/actions/workflows/ci.yml"><img src="https://github.com/connorhriley/kith/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <a href="https://github.com/connorhriley/kith/actions/workflows/windows.yml"><img src="https://github.com/connorhriley/kith/actions/workflows/windows.yml/badge.svg" alt="Windows validation"></a>
   <a href="https://www.npmjs.com/package/kith-coord"><img src="https://img.shields.io/npm/v/kith-coord" alt="npm version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-22C55E" alt="MIT license"></a>
+  <a href="https://www.npmjs.com/package/kith-coord"><img src="https://img.shields.io/npm/dm/kith-coord" alt="npm downloads"></a>
+  <a href="https://github.com/connorhriley/kith/actions/workflows/ci.yml"><img src="https://github.com/connorhriley/kith/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/connorhriley/kith/actions/workflows/windows.yml"><img src="https://github.com/connorhriley/kith/actions/workflows/windows.yml/badge.svg" alt="Windows validation"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-22C55E" alt="MIT licence"></a>
+  <a href="https://registry.modelcontextprotocol.io/v0.1/servers/io.github.connorhriley%2Fkith/versions/latest"><img src="https://img.shields.io/badge/MCP%20Registry-io.github.connorhriley%2Fkith-6b4fbb" alt="MCP Registry"></a>
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick start</a> · <a href="https://marketplace.visualstudio.com/items?itemName=kith-coord.kith">VS Code</a> · <a href="https://open-vsx.org/extension/kith-coord/kith">Cursor / Open VSX</a> · <a href="#see-it-work">Demo</a> · <a href="docs/integrations.md">Integrations</a> · <a href="docs/usage.md">CLI &amp; API</a> · <a href="CONTRIBUTING.md">Contribute</a>
+  <a href="#quick-start">Quick start</a> · <a href="#demo">Demo</a> · <a href="#why-not-just-git-worktrees">Why not worktrees</a> · <a href="https://marketplace.visualstudio.com/items?itemName=kith-coord.kith">VS Code</a> · <a href="https://open-vsx.org/extension/kith-coord/kith">Cursor / Open VSX</a> · <a href="docs/integrations.md">Integrations</a> · <a href="docs/usage.md">CLI &amp; API</a> · <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
-**Local coordination for cooperating coding agents.**
+Kith is vendor-neutral local coordination for cooperating coding agents: scoped work claims, isolated Git worktrees, shared local resource mutexes, and verified integration, with no hosted service.
 
-Claim work, isolate changes with Git worktrees, share local resources, and verify integration—without a hosted service.
+Several agents editing one repository clobber each other's files, dev-server ports, databases, and commits. One agent changes an interface while another is building against it. Two agents write the same file. Separate Git worktrees still race for a port or a package install.
 
-One agent changes an interface while another builds against it. Two agents edit the same file. Separate worktrees still compete for a dev-server port or a package install.
+## Quick start
 
-Kith gives cooperating agents shared local state: who owns a task, which files are claimed, and which commands need to wait. Agents use its MCP server; CLI commands support local inspection and maintenance. Coordination lives in SQLite on your machine; Kith itself needs no hosted service or model API key.
+Requires **Git 2.38+** and **Node.js 22.13+ on 22.x, or Node.js 24+**.
+
+```sh
+npm i -g kith-coord && kith install
+```
+
+`kith install` puts `kith` on your `PATH` and keeps that runtime outside the npx cache. It writes a global MCP entry for each detected client, using the compact tool profile (`kith mcp --compact`), and installs silent-solo `--auto` hooks for Claude Code and Cursor. One agent stays at **Watching only** and does not write coordination state. When another writer overlaps, the hooks join Kith and isolate that work into a worktree or a claim. On macOS it also loads a login LaunchAgent (`dev.kith.radar`) unless you pass `--no-autostart` or `--no-radar`. It does not claim any files. An agent claims when it starts a task.
+
+Codex CLI has no native tool hooks, so it uses the MCP tools. Linux and Windows skip the menu bar; use `kith watch`.
+
+Directories that scan a repository for an MCP server read the committed [`.mcp.json`](.mcp.json): `npx -y kith-coord mcp` over stdio. That entry does not pin a checkout and does not install hooks. Editor install, the pinned `npx` setup, and upgrade notes are under [Install details](#install-details).
+
+## Demo
+
+![auth claims src/auth.mjs, billing is refused, auth commits, and kith status lists the claim](assets/demo/claims.gif)
+
+Recorded from the real `kith` CLI in a temporary repository. `auth` (Claude Code) claims `src/auth.mjs`. `billing` (Cursor) claims the same path and is refused. `auth` edits the file and `kith commit` records only that file. `kith status` lists both sessions and the claim. Both sessions use this terminal's process id, because the CLI is driving them; two editor processes would show two ids. The claim is still per agent: `billing` does not receive the lock.
+
+The tape pipes `kith begin` through [`claim.jq`](assets/demo/claim.jq), which prints the claim fields and leaves out the session token. Reproduce it from a built checkout:
+
+```sh
+pnpm build && vhs assets/demo/claims.tape
+```
+
+## How it works
+
+Each agent has an id and claims the paths it will change. Kith stores that claim in SQLite under the repository (`.coord/`). An exclusive claim that overlaps a live claim is refused, and no lock is taken. In the default worktrees mode, `--worktree` (MCP `isolateWorktree: true`) checks out a separate Git worktree for the task. `kith mode main` keeps every agent in the shared checkout and still enforces the claims.
+
+Ports and other shared local resources are separate from file claims. `kith dev` reserves a port. `kith mutex` runs one command at a time under a named lock, for a package install or a database. `kith commit` commits only the calling session's files, through a temporary Git index, so a shared checkout does not pick up another agent's edits.
+
+Finishing a worktree task checkpoints the work and integrates through a staging worktree. You can pass the project's verification command. If it fails, the integration target is left unchanged and the worktree remains for repair. Claims coordinate clients that call Kith, or whose auto hooks have joined. They are not a sandbox for every process on the machine.
+
+```mermaid
+sequenceDiagram
+  participant A as Agent A
+  participant K as Kith
+  participant B as Agent B
+  A->>K: claim src/auth.mjs
+  K-->>A: exclusive claim, optional worktree
+  B->>K: claim src/auth.mjs
+  K-->>B: refused, overlap
+  A->>K: kith commit, then verify
+  K-->>A: integrate, or leave the target unchanged
+```
+
+Coordination stays on this machine. Kith does not call a model API and does not run a hosted service.
+
+## Why not just git worktrees?
+
+A Git worktree gives each agent a directory and a branch. It does not record who owns a path, so two agents can edit the same files and only collide when someone merges. It does not reserve a dev-server port, serialise a package install, or hold a shared database. It does not run your verification command before the result is integrated, and it does not carry a note to the next session.
+
+Kith still uses worktrees when you want separate files. The extra state is the claim, the mutex, and the checked integration. `kith mode main` is the same claims without a worktree, for a checkout you would rather share.
+
+| | Git worktrees | Kith |
+| --- | --- | --- |
+| Separate working files | One directory and branch per checkout | Optional worktree per task. `kith mode main` stays in one checkout |
+| Overlapping edits | Found when you merge | Exclusive claim refused before the second agent edits |
+| Dev-server ports | Not handled | `kith port` and `kith dev` reserve a port |
+| Shared commands and databases | Not handled | `kith mutex` serialises them |
+| Check before integration | You arrange it | Your verification command. Failure leaves the target unchanged |
+| Who is working | `git worktree list` | `kith status` and `kith brief`: claims, waits, handoffs |
+| Next session | Nothing carried across | Handoff notes for the same scope |
+| Hosted service | None | None |
 
 ## What Kith does
 
@@ -38,13 +102,15 @@ Kith fits workflows where you already launch multiple coding agents and want the
 
 The [reliability contract](docs/reliability.md) defines ownership, verification, recovery and enforcement boundaries. Claims coordinate cooperating clients; hooks do not sandbox filesystem access. Scope matching follows a [documented grammar](docs/path-and-scope-rules.md). Contract-change reports and exact-name reuse hints are advisory.
 
-## Quick start
+## Install details
 
 Requires **Git 2.38+** and **Node.js 22.13+ on 22.x or Node.js 24+**. Full workflows target macOS and Linux. Native Windows MCP checks cover claims, worktrees, ports, integration and recovery; supervised mutex commands and shell hooks require macOS/Linux or WSL. See the [support evidence](docs/client-validation.md#native-windows).
 
 Git recording and integration require a commit identity configured for the repository (`user.name` and `user.email`). Kith does not change your global Git identity.
 
-**Upgrading to 0.1.9:** Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. The storage schema stays 3 and the protocol stays 1.6.0. Databases already on schema 3 open without a version migration. The first open on 0.1.8 or later creates an optional `handoffs` table; binaries from 0.1.6 and 0.1.7 ignore that table and keep working, but they do not read or write handoff notes. An upgrade from schema 2 still applies the 0.1.6 migration to schema 3, which older binaries refuse. After upgrading, run `kith install` so hooks and client entries use this runtime. `kith doctor` reports a hook or MCP entry still pinned to an older runtime. Existing custom launchers are preserved; review their pinned version before reconnecting. On macOS, `kith install` and `kith setup` register a login LaunchAgent unless `--no-autostart` or `--no-radar` is passed. See [recovery guidance](docs/reliability.md#recovery).
+### Upgrading
+
+Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. The storage schema stays 3 and the protocol stays 1.6.0. Databases already on schema 3 open without a version migration. The first open on 0.1.8 or later creates an optional `handoffs` table; binaries from 0.1.6 and 0.1.7 ignore that table and keep working, but they do not read or write handoff notes. An upgrade from schema 2 still applies the 0.1.6 migration to schema 3, which older binaries refuse. After upgrading, run `kith install` so hooks and client entries use this runtime. `kith doctor` reports a hook or MCP entry still pinned to an older runtime. Existing custom launchers are preserved; review their pinned version before reconnecting. On macOS, `kith install` and `kith setup` register a login LaunchAgent unless `--no-autostart` or `--no-radar` is passed. See [recovery guidance](docs/reliability.md#recovery).
 
 ### VS Code or Cursor
 
@@ -92,6 +158,8 @@ Durable setup starts with **0.1.7** (retaining an exact self-contained runtime o
 
 Day to day, run `kith` (a read-only status overview in a terminal), `kith status`, `kith brief`, `kith run`, `kith gc`, `kith doctor [path]`, or `kith help --all`. The view says **Watching only** until a task or concurrent overlap is recorded. `kith install --dry-run` and `kith setup --dry-run` preview without writes.
 
+[`.mcp.json`](.mcp.json) is the directory discovery entry: `npx -y kith-coord mcp`. It is not a pin to this repository. `kith install` does not read or edit it, and `kith doctor` only reports that the launcher file is present; neither command starts the server or creates `.coord` state. A client that loads project MCP config, such as Claude Code, can start that published package from the file. Because `--repo` is omitted, the process does not pin this checkout or open the database until a tool call names one. `kith init` still replaces the `kith` server in a project `.mcp.json` with a launcher for the machine you are on; do not commit that rewrite over the discovery entry.
+
 For source installation and the disposable demo, use the pinned **pnpm 10.20.0**:
 
 ```sh
@@ -103,6 +171,8 @@ pnpm build
 ```
 
 ### See it work
+
+The [recording above](#demo) is the CLI. This example is two real MCP clients:
 
 ```sh
 pnpm demo

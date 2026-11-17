@@ -1,7 +1,7 @@
 {
   "name": "kith-coord",
   "version": "0.1.9",
-  "description": "Local coordination for cooperating coding agents: work claims, isolated worktrees, shared resources, and verified integration without a hosted service.",
+  "description": "Vendor-neutral local coordination for cooperating coding agents: scoped work claims, isolated Git worktrees, shared resource mutexes, and verified integration, with no hosted service.",
   "type": "module",
   "bin": {
     "kith": "./dist/cli/index.js",
@@ -26,6 +26,7 @@
     "CODE_OF_CONDUCT.md",
     "CHANGELOG.md",
     "assets/brand",
+    "assets/demo",
     "bin/kith-menubar"
   ],
   "engines": {
@@ -49,16 +50,15 @@
     "test:menubar": "node scripts/test-menubar.mjs"
   },
   "keywords": [
-    "ai-agents",
-    "parallel-agents",
     "mcp",
+    "mcp-server",
     "claude-code",
-    "codex",
-    "antigravity",
     "cursor",
+    "codex",
+    "ai-agents",
+    "multi-agent",
     "git-worktree",
-    "coordination",
-    "multi-agent"
+    "coordination"
   ],
   "license": "MIT",
   "dependencies": {
