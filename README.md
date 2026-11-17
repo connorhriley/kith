@@ -39,7 +39,7 @@ Directories that scan a repository for an MCP server read the committed [`.mcp.j
 
 Recorded from the real `kith` CLI in a temporary repository. `auth` (Claude Code) claims `src/auth.mjs`. `billing` (Cursor) claims the same path and is refused. `auth` edits the file and `kith commit` records only that file. `kith status` lists both sessions and the claim. Both sessions use this terminal's process id, because the CLI is driving them; two editor processes would show two ids. The claim is still per agent: `billing` does not receive the lock.
 
-The tape pipes `kith begin` through [`claim.jq`](assets/demo/claim.jq), which prints the claim fields and leaves out the session token. Reproduce it from a built checkout:
+Each `kith begin` is one line from the CLI's claim fields ([`claim.jq`](assets/demo/claim.jq)); the session token is not printed. The owner pid, client, and title are set in the hidden setup, so the typed commands stay short. Reproduce it from a built checkout:
 
 ```sh
 pnpm build && vhs assets/demo/claims.tape
