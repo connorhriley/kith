@@ -71,7 +71,7 @@
     "@types/node": "^22.13.0",
     "@types/picomatch": "^4.0.0",
     "tsup": "^8.4.0",
-    "vitest": "^3.0.7",
+    "vitest": "^5.1.0",
     "typescript": "^5.8.2"
   },
   "packageManager": "pnpm@10.20.0",
