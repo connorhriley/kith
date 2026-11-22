@@ -165,6 +165,15 @@ export function commitScopedFiles(engine: KithEngine, params: CommitParams): Com
   const worktreeRoot =
     (primaryAgentId ? engine.fencing.getAgent(primaryAgentId)?.worktree_path : null) ??
     engine.coordDb.repoRoot;
+  if (primaryAgentId) {
+    const adoption = engine.worktrees.liveAdoption(engine.fencing.getAgent(primaryAgentId));
+    if (adoption?.commitError) {
+      return {
+        ok: false, commit: null, branch: null, files: [], agentId: primaryAgentId, message,
+        error: adoption.commitError,
+      };
+    }
+  }
 
   const dirtyFiles = listDirtyFiles(worktreeRoot);
   const activeLocks = engine.locks.listLocks();

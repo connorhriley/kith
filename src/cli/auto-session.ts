@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { DatabaseSync as SqliteDatabaseSync } from 'node:sqlite';
 import { KithEngine } from '../core/engine.js';
+import { transferWorktreeRegistration } from '../core/worktree-adopt.js';
 import { FencingAndAgentManager } from '../core/fencing.js';
 import { isWithin, physicalPath, type RepositoryLayout } from '../core/repository.js';
 
@@ -597,6 +598,8 @@ export function bindMcpSessionToAutoPresence(
       engine.coordDb.withTransaction(() => {
         engine.coordDb.db.prepare('DELETE FROM locks WHERE owner_agent_id = ? AND pattern IN (SELECT pattern FROM locks WHERE owner_agent_id = ?)').run(staleId, params.agentId);
         engine.coordDb.db.prepare('UPDATE locks SET owner_agent_id = ? WHERE owner_agent_id = ?').run(params.agentId, staleId);
+        // The Claude Code plugin hook adopts onto the auto-session. The MCP agent is the same session afterwards.
+        transferWorktreeRegistration(engine.coordDb, staleId, params.agentId);
       });
       engine.fencing.forceReclaimAgent(staleId, 'promoted_to_mcp_session');
     }

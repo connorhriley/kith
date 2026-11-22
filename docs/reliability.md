@@ -9,7 +9,7 @@ Scope intersection is exact within the documented grammar; unsupported scopes ar
 - Conflicting exclusive file locks and task claims have unique owners under simultaneous process contention.
 - Port reservations are rechecked atomically after asynchronous OS probes; exhaustion returns an error.
 - Setup previews without writes, preserves unrelated JSON settings, and rejects malformed config before writing selected configuration.
-- Worktree creation refuses an existing path or branch; removal refuses local, untracked, or ignored changes.
+- Worktree creation refuses an existing path or branch; removal refuses local, untracked, or ignored changes. An adopted worktree is not deleted or pruned by garbage collection or `kith worktree remove`. Explicit `--delete-adopted` still refuses a dirty tree. Integration of an adopted branch stays behind the verification command; a detached HEAD and a branch checked out elsewhere are refused before that command runs.
 - Integration refuses a dirty target and concurrent Kith integrations; failed or mutating verification preserves the target and source worktree for retry. Checks cannot change the candidate commit, tracked/index contents, or leave new nonignored files behind.
 - Unresolved Git conflicts fail integration without custom source/JSON rewriting. Source and target work remain available for explicit repair and retry.
 - Shadow-tree deletions reach Git; invalid merge inputs surface errors.

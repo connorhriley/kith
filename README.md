@@ -100,22 +100,22 @@ Most multi-agent tools solve the problem by keeping agents apart: a worktree, a 
 
 | If you use… | It gives you | Kith adds |
 | --- | --- | --- |
-| [Claude Code `--worktree`](https://code.claude.com/docs/en/worktrees) | A worktree per session, and messages between sessions | File claims shared with Codex, Cursor and other MCP clients; port and command locks; a worktree integrates only after the check you supply passes |
-| [Orca](https://github.com/stablyai/orca), [Orchestrator.inc](https://github.com/OrchestratorInc/agent-orchestrator), [Claude Squad](https://github.com/smtg-ai/claude-squad), [CCManager](https://github.com/kbwo/ccmanager) | An app or TUI that launches agents, each in its own worktree | Ownership of files *across* those worktrees, so an overlapping claim is refused before the second cooperating agent edits, rather than found at merge |
+| [Claude Code `--worktree`](https://code.claude.com/docs/en/worktrees) | A worktree per session under `.claude/worktrees/<name>`, and messages between sessions | That checkout, adopted instead of a second worktree. File claims shared with Codex, Cursor and other MCP clients; port and command locks; integration only after the check you supply passes |
+| [Orca](https://github.com/stablyai/orca), [Orchestrator.inc](https://github.com/OrchestratorInc/agent-orchestrator), [Claude Squad](https://github.com/smtg-ai/claude-squad), [CCManager](https://github.com/kbwo/ccmanager) | An app or TUI that launches agents, each in its own worktree | Adoption of each linked worktree, then ownership of files *across* them, so an overlapping claim is refused before the second cooperating agent edits |
 | [container-use](https://github.com/dagger/container-use) | A container and branch per agent | The same claims and checked integration, without containers. container-use isolates more strongly; Kith only binds agents that cooperate |
 | [claude-bulkhead](https://github.com/dooly6276/claude-bulkhead) | Hooks that block cross-session kills, port clashes, `git add -A` sweeps and RAM overload | Exclusive file claims, a per-agent `kith commit` that records only that session's files, and checked integration. bulkhead covers process and machine safety that Kith does not; they work side by side |
 | [MCP Agent Mail](https://github.com/Dicklesworthstone/mcp_agent_mail_rust) | Agent identities, inboxes and advisory file reservations through a local server | Enforced claims through hooks, worktree isolation and checked integration, with no coordination server to leave running. Agent Mail does messaging; Kith does not |
 
-What Kith isn't: it does not launch agents, choose models or provide a control dashboard, and it is not a sandbox. The menu bar and editor views are read-only status. Claims bind agents that call Kith or whose hooks have joined. Native edit-blocking hooks are for Claude Code and Cursor; other clients use the MCP tools. Kith does not adopt a worktree another tool has already created. A claim is on the repository path, and isolation uses a worktree Kith creates.
+What Kith isn't: it does not launch agents, choose models or provide a control dashboard, and it is not a sandbox. The menu bar and editor views are read-only status. Claims bind agents that call Kith or whose hooks have joined. Native edit-blocking hooks are for Claude Code and Cursor; other clients use the MCP tools. Kith adopts a worktree another tool already created when that session is inside it, or when you run `kith adopt`. It does not delete that directory. A claim stays on the repository path, so two worktrees cannot both own the same file. Kith can still create its own worktree when you ask it to.
 
-A port or command lock applies when the agent uses `kith dev`, `kith port`, or `kith mutex` (or the optional package-manager shims). The hook does not take that lock for an ordinary shell command. With no check supplied, worktree integration still requires a clean Git merge and leaves the target unchanged when that merge conflicts.
+A port or command lock applies when the agent uses `kith dev`, `kith port`, or `kith mutex` (or the optional package-manager shims). The hook does not take that lock for an ordinary shell command. With no check supplied, worktree integration still requires a clean Git merge and leaves the target unchanged when that merge conflicts. The commands are in [Adopt a worktree](docs/usage.md#adopt-a-worktree-that-already-exists).
 
 ## What Kith does
 
 | Need | Kith provides |
 | --- | --- |
 | Keep tasks from overlapping | Scoped claims with conflict responses |
-| Give agents separate working files | Git worktrees with an explicit integration step |
+| Give agents separate working files | A worktree Kith creates, or one it adopts from Claude Code, Claude Squad, CCManager, Orca, or Orchestrator.inc |
 | Check work before integration | Your project's check, when you supply one |
 | Share local tools | Port reservations and supervised command mutexes |
 | Know what is going on before you start | `kith brief`: who is active on what, overlapping claims, open handoffs and conflicts. Read-only, no session needed |

@@ -341,6 +341,22 @@ export class CoordDatabase {
         CREATE INDEX IF NOT EXISTS idx_handoffs_task ON handoffs(task_id);
         CREATE INDEX IF NOT EXISTS idx_handoffs_created ON handoffs(created_at DESC);
       `);
+      // Optional and additive, same as handoffs: older binaries ignore the table and schema stays 3.
+      // Rows record whether Kith created a worktree or adopted one it must not delete on its own.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS worktree_registrations (
+          agent_id TEXT PRIMARY KEY,
+          worktree_path TEXT NOT NULL,
+          provenance TEXT NOT NULL,
+          source TEXT NOT NULL,
+          branch TEXT,
+          head TEXT,
+          detached INTEGER NOT NULL DEFAULT 0,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          branch_elsewhere INTEGER NOT NULL DEFAULT 0,
+          registered_at INTEGER NOT NULL
+        );
+      `);
       if (version < 2) {
         // Legacy sessions have no capability. Invalidate coordination ownership, never files.
         this.db.exec(`

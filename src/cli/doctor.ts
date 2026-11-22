@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { parse as parseToml } from 'smol-toml';
+import { branchIsCheckedOutElsewhere, listGitWorktrees } from '../core/worktree-adopt.js';
 import { isWithin, physicalPath } from '../core/repository.js';
 import { readCoordinationState } from '../core/observation.js';
 import { launchAgentPath } from './autostart.js';
@@ -126,12 +127,44 @@ export function doctorReport(directory=process.cwd(), home=os.homedir()) {
     if(id||token) check('session-environment',Boolean(id&&token&&agent?.status==='active'&&agent.lease_expires_at>Date.now()),'This shell names a Kith session, so hooks enforce it: it needs both inherited session variables and a current recorded lease. Capability validity is checked on use');
     else check('session-environment',true,'No Kith session in this shell, so Kith hooks allow everything. Start one (kith session start) only if you want claims enforced for this client; MCP-only workflows need none.');
   }
+  let linked: ReturnType<typeof listGitWorktrees> = [];
+  if (state.state === 'ready') {
+    try { linked = listGitWorktrees(state.repository.root); } catch { linked = []; }
+  }
+  const registrations = state.worktreeRegistrations ?? [];
   for(const workspace of state.workspaces) {
     const name=`workspace:${workspace.agentId}`, gone=!workspace.available && !fs.existsSync(workspace.path);
+    const registration = registrations.find(row => row.agentId === workspace.agentId);
+    const adopted = registration?.provenance === 'adopted';
+    const detachedLive = Boolean(adopted && workspace.available && !workspace.branch);
+    const elsewhereLive = Boolean(adopted && workspace.branch && branchIsCheckedOutElsewhere(linked, workspace.path, workspace.branch));
+    const adoptedLabel = adopted ? `Adopted ${registration?.source ?? 'external'} worktree` : 'Worktree';
+    const adoptedDetail = adopted
+      ? `${detachedLive ? '; detached HEAD' : ''}${elsewhereLive || registration?.branchCheckedOutElsewhere ? '; branch checked out elsewhere' : ''}${registration?.dirty ? '; dirty when adopted' : ''}`
+      : '';
     // An ended session whose worktree was moved or removed is history, not a fault. Only a live session needs its worktree.
     if(gone && workspace.status!=='active') check(name,true,`Retired: this ${workspace.status} session's worktree no longer exists (${workspace.path}). Nothing to do; Kith keeps the record for history.`);
-    else if(gone) check(name,false,`Worktree is missing: ${workspace.path}. The session is still active; restore the directory or end the session.`);
-    else check(name,workspace.available && (!workspace.recordedBranch||workspace.recordedBranch===workspace.branch),workspace.error??`${workspace.path}; dirty files: ${workspace.dirtyFiles.length}`);
+    else if(gone) check(name,false,`${adoptedLabel} is missing: ${workspace.path}. The session is still active; restore the directory or end the session. Kith does not delete an adopted worktree.`);
+    else {
+      const identityOk = detachedLive || (workspace.available && (!workspace.recordedBranch || workspace.recordedBranch === workspace.branch));
+      check(name, identityOk, workspace.error ?? `${adoptedLabel}: ${workspace.path}; branch ${workspace.branch ?? 'detached'}; dirty files: ${workspace.dirtyFiles.length}${adoptedDetail}`);
+    }
+  }
+  const adoptedRows = registrations.filter(row => row.provenance === 'adopted');
+  if (adoptedRows.length) {
+    const missing = adoptedRows.filter(row => {
+      const agent = state.agents.find(agent => agent.id === row.agentId);
+      return agent?.status === 'active' && !fs.existsSync(row.worktreePath);
+    });
+    const detail = adoptedRows.map(row => {
+      const workspace = state.workspaces.find(item => item.agentId === row.agentId);
+      const detached = workspace ? workspace.available && !workspace.branch : row.detached;
+      const elsewhere = workspace?.branch ? branchIsCheckedOutElsewhere(linked, row.worktreePath, workspace.branch) : row.branchCheckedOutElsewhere;
+      return `${row.agentId}: adopted ${row.source} ${row.worktreePath}${row.branch ? ` (${row.branch})` : ''}${detached ? ', detached HEAD' : ''}${elsewhere ? ', branch checked out elsewhere' : ''}${row.dirty ? ', dirty when adopted' : ''}`;
+    }).join('; ');
+    check('adopted-worktrees', missing.length === 0, missing.length
+      ? `Adopted worktree missing for a live session. Kith will not recreate or delete it. ${detail}`
+      : `Adopted worktrees Kith did not create, and will not remove unless you pass --delete-adopted: ${detail}`);
   }
   return {ok:checks.every(c=>c.ok),repository:state.repository,checks};
 }

@@ -165,8 +165,14 @@ export function formatStatusHuman(state: Record<string, any>): string {
   ];
   if (activeAgents.length || extraPresence.length) {
     lines.push(`Active sessions (${activeAgents.length + extraPresence.length}):`);
+    const registrations = Array.isArray(state.worktreeRegistrations) ? state.worktreeRegistrations : [];
     for (const a of activeAgents) {
-      const wt = a.worktree_path ? ` · ${path.basename(a.worktree_path)}` : '';
+      const registration = registrations.find((row: { agentId?: string }) => row.agentId === a.id);
+      const wt = a.worktree_path
+        ? registration?.provenance === 'adopted'
+          ? ` · adopted ${registration.source} ${path.basename(a.worktree_path)}${registration.detached ? ' · detached HEAD' : ''}${registration.branchCheckedOutElsewhere ? ' · branch checked out elsewhere' : ''}`
+          : ` · ${path.basename(a.worktree_path)}`
+        : '';
       const peer = presencePeers.find(
         (p: any) =>
           p.pid === a.pid ||

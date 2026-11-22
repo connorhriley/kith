@@ -94,6 +94,14 @@
             "type": "boolean",
             "description": "Recommended: true, giving each parallel agent a separate Git worktree"
           },
+          "adoptWorktree": {
+            "type": "boolean",
+            "description": "Register an existing linked worktree instead of creating one. Pass worktreePath when this server is not already inside it."
+          },
+          "worktreePath": {
+            "type": "string",
+            "description": "Absolute path of an existing linked worktree to adopt, such as a Claude Code .claude/worktrees/<name> checkout"
+          },
           "waitTimeoutMs": {
             "type": "integer",
             "minimum": 0,
@@ -140,11 +148,56 @@
             "type": "boolean",
             "description": "Recommended: true, giving the claiming agent an isolated Git worktree"
           },
+          "adoptWorktree": {
+            "type": "boolean",
+            "description": "Register an existing linked worktree instead of creating one"
+          },
+          "worktreePath": {
+            "type": "string",
+            "description": "Absolute path of an existing linked worktree to adopt"
+          },
           "waitTimeoutMs": {
             "type": "integer",
             "minimum": 0,
             "maximum": 600000,
             "description": "Wait up to this many milliseconds for a queued task to become unblocked and claimable"
+          },
+          "operationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Unique key per mutation attempt; retry exact arguments/key after timeout. Not a credential. Use a new key after repair/backoff."
+          },
+          "repository": {
+            "type": "string",
+            "description": "Absolute original Git checkout; required without project context. Keep it unchanged for this task."
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "kith_adopt_worktree",
+      "description": "Register an existing linked Git worktree as this agent's workspace. Use this for Claude Code --worktree checkouts under .claude/worktrees/<name> and for any other git worktree list entry. Kith does not create, clean, or delete that directory.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": {
+            "type": "string"
+          },
+          "sessionToken": {
+            "type": "string"
+          },
+          "client": {
+            "type": "string"
+          },
+          "worktreePath": {
+            "type": "string",
+            "description": "Absolute path of the linked worktree. Defaults to the server cwd when that cwd is already the worktree."
           },
           "operationKey": {
             "type": "string",

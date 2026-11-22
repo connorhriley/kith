@@ -13,7 +13,8 @@ Kith runs locally. There is no coordination server: CLI and MCP clients share `.
 | `intents.ts` | Work declarations, task dependencies, transactional claims |
 | `ast-analyzer.ts`, `dep-graph.ts` | Advisory source-derived contracts and import relationships |
 | `shadow-git.ts` | Per-agent indexes, synthetic commits, dirty-tree merge probes |
-| `worktree-cow.ts` | Isolated worktree creation and dependency hydration |
+| `worktree-cow.ts` | Isolated worktree creation, dependency hydration, and removal of worktrees Kith created |
+| `worktree-adopt.ts` | Adopt an existing linked worktree (Claude Code's `.claude/worktrees/<name>` layout, or any `git worktree list` entry), and record created/adopted provenance |
 | `merge-train.ts` | Serialized integration through a disposable staging worktree |
 | `brief.ts` | The read-only situational summary shared by the offline reader, the CLI and the MCP tool |
 | `mode.ts` | Repository workflow mode: `worktrees` or `main` |
@@ -32,6 +33,8 @@ Git integration uses an exclusive local lock file and a unique staging directory
 Git clients launched from subdirectories, symlink aliases and linked checkouts discover the same physical common Git directory. Ordinary repositories retain the primary checkout's `.coord` directory; repositories using a separate Git directory store shared state in `<common-git-dir>/kith`. Git operations still target the selected checkout and its current branch. A new session started inside a linked checkout records that checkout as its working path. Non-Git directories use the explicitly selected directory. Existing checkout-local databases are refused rather than silently abandoned. See [path and scope rules](path-and-scope-rules.md).
 
 Session capabilities are held in each engine's memory and hashed in the separate `agent_sessions` table. Agent records/status do not expose them. Mutation boundaries assert ownership inside writer transactions where applicable. `mutex_waiters` preserves handoff order independently of a resource row, and `mutex_runs` preserves execution exclusion even if session/resource rows expire. A private IPC handshake records a worker process group before it can execute a command. See [session and command lifecycle](sessions-and-mutexes.md).
+
+A session that is already inside a linked worktree can register that checkout instead of creating one under `.coord/worktrees`. Hooks do this when the hook `cwd` is unambiguously that worktree. `kith adopt` and `kith_adopt_worktree` do it explicitly. The registration records whether Kith created the worktree. Garbage collection and `kith worktree remove` delete only worktrees Kith created; an adopted directory stays until `kith worktree remove --delete-adopted`. Integration of an adopted branch still goes through the merge train and the verification command. A detached HEAD and a branch checked out in another worktree are refused at that gate.
 
 Worktree edit reports read source bytes from the registered worktree and store repository-relative contracts. Git checkpoint/merge subprocesses receive the owning capability in their environment so generated pre-commit guards can authorize them. Generated pre-commit guards inspect the invoking Git checkout/index even when `--repo` selects shared state through another checkout.
 

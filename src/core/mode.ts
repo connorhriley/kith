@@ -8,6 +8,8 @@ export type WorkflowMode = (typeof WORKFLOW_MODES)[number];
 
 export const MAIN_MODE_NOTE = 'isolateWorktree was ignored: this repository works in the main checkout. Change the mode with `kith mode worktrees`.';
 
+export const ADOPT_MAIN_MODE_NOTE = 'Main-checkout mode: this adopted worktree is the workspace for claims and kith commit. Completion can run verification there and does not integrate the branch. Change the mode with `kith mode worktrees`.';
+
 /** Lenient: anything unrecognised, including absence, is the original behaviour. */
 export const workflowModeFrom = (value: unknown): WorkflowMode => (value === 'main' ? 'main' : 'worktrees');
 

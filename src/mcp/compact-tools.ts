@@ -61,12 +61,14 @@ export function registerCompactTools({ tool, disconnected, commands }: McpCompac
     'kith_work',
     'Start or claim coordinated work (action: begin | claim | heartbeat | add_task) and manage the agent session.',
     {
-      action: z.enum(['begin', 'claim', 'heartbeat', 'add_task']).optional(),
+      action: z.enum(['begin', 'claim', 'adopt', 'heartbeat', 'add_task']).optional(),
       agentId: z.string().optional(),
       sessionToken: z.string().optional(),
       title: z.string().optional(),
       scopeGlobs: z.array(z.string()).optional(),
       isolateWorktree: z.boolean().optional(),
+      adoptWorktree: z.boolean().optional(),
+      worktreePath: z.string().optional(),
       waitTimeoutMs: z.number().int().min(0).max(600000).optional(),
       dependsOn: z.array(z.string()).optional(),
       priority: z.number().optional(),
@@ -78,6 +80,11 @@ export function registerCompactTools({ tool, disconnected, commands }: McpCompac
         authorize({ agentId, sessionToken: args.sessionToken });
         const ok = engine.fencing.heartbeat(agentId);
         return formatReply(agentId, { ok, agent: engine.fencing.getAgent(agentId) });
+      }
+      if (action === 'adopt') {
+        const session = register({ agentId, sessionToken: args.sessionToken });
+        const worktree = engine.worktrees.adoptWorktree({ agentId, path: args.worktreePath, explicit: true });
+        return formatReply(agentId, { ok: true, worktree, workflowMode: engine.workflowMode(), sessionToken: session.sessionToken });
       }
       if (action === 'add_task') {
         const task = engine.intents.addTask({
@@ -97,12 +104,16 @@ export function registerCompactTools({ tool, disconnected, commands }: McpCompac
           : engine.claimNextTaskWhenAvailable({
             agentId,
             isolateWorktree: args.isolateWorktree,
+            adoptWorktree: args.adoptWorktree,
+            worktreePath: args.worktreePath,
             waitTimeoutMs: args.waitTimeoutMs,
             signal,
           });
         if (exec) commands.add(exec);
         try {
-          const res = exec ? await exec : engine.claimNextTask({ agentId, isolateWorktree: args.isolateWorktree });
+          const res = exec ? await exec : engine.claimNextTask({
+            agentId, isolateWorktree: args.isolateWorktree, adoptWorktree: args.adoptWorktree, worktreePath: args.worktreePath,
+          });
           const { publishedContracts, ...rest } = res;
           return formatReply(agentId, {
             ...rest,
@@ -122,6 +133,8 @@ export function registerCompactTools({ tool, disconnected, commands }: McpCompac
         intentSummary: title,
         scopeGlobs: args.scopeGlobs ?? ['**'],
         isolateWorktree: args.isolateWorktree,
+        adoptWorktree: args.adoptWorktree,
+        worktreePath: args.worktreePath,
       };
       const exec = args.waitTimeoutMs === undefined
         ? undefined

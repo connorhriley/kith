@@ -5,12 +5,13 @@ import { AGENT_HANDOFF_KINDS, handoffBlock, type WriteHandoffParams } from '../c
 import { parseWorkflowMode, WORKFLOW_MODES } from '../core/mode.js';
 import { extractRecentAgentFiles } from '../core/observation.js';
 import { listRepoPresence, resolveHomeDir } from './auto-session.js';
+import { primaryCheckoutOf } from '../core/worktree-adopt.js';
 import { interruptible } from './flags.js';
 import { formatStatusHuman, formatTasksHuman, shouldUseHumanOutput } from './format.js';
 
 const ENGINE_COMMANDS = [
   'session', 'status', 'begin', 'complete', 'heartbeat', 'task',
-  'lock', 'contract', 'worktree', 'port', 'dev', 'mutex', 'handoff', 'mode', 'commit',
+  'lock', 'contract', 'worktree', 'adopt', 'port', 'dev', 'mutex', 'handoff', 'mode', 'commit',
 ] as const;
 
 const SUBCOMMANDS: Record<string, string[]> = {
@@ -18,7 +19,7 @@ const SUBCOMMANDS: Record<string, string[]> = {
   task: ['add', 'claim', 'done', 'clear', 'list'],
   lock: ['acquire', 'release', 'list'],
   contract: ['publish', 'list'],
-  worktree: ['spawn', 'remove', 'list', 'preview'],
+  worktree: ['spawn', 'adopt', 'forget', 'remove', 'list', 'preview'],
   handoff: ['write', 'list'],
 };
 
@@ -44,7 +45,14 @@ export async function runEngineCommand(params: {
     return value === undefined ? 60000 : Number(value);
   };
 
-  const engine = new KithEngine(repoRoot);
+  const adopting = cmd === 'adopt'
+    || (cmd === 'worktree' && subCmd === 'adopt')
+    || (flags.adopt !== undefined && (cmd === 'begin' || (cmd === 'task' && subCmd === 'claim')));
+  let root = repoRoot;
+  if (adopting && typeof flags.repo !== 'string') {
+    try { root = primaryCheckoutOf(repoRoot); } catch { /* Keep the selected checkout when it is not a linked worktree. */ }
+  }
+  const engine = new KithEngine(root);
   const agentId = String(flags.agent ?? process.env.KITH_AGENT_ID ?? `cli-${process.pid}`);
   const sessionToken = cmd === 'session' && subCmd === 'start' && flags.new
     ? undefined
@@ -56,15 +64,25 @@ export async function runEngineCommand(params: {
     if (!sessionToken) throw new SessionOwnershipError(agentId);
     engine.fencing.resumeSession(agentId, sessionToken);
   };
-  const register = () => engine.fencing.registerAgent({
-    id: agentId,
-    client: String(flags.client ?? 'cli'),
-    pid: typeof flags['owner-pid'] === 'string'
-      ? Number(flags['owner-pid'])
-      : ['mutex', 'dev'].includes(cmd) && !sessionToken ? process.pid : process.ppid,
-    sessionToken,
-    leaseDurationMs: typeof flags['lease-ms'] === 'string' ? Number(flags['lease-ms']) : undefined,
-  });
+  const register = () => {
+    const session = engine.fencing.registerAgent({
+      id: agentId,
+      client: String(flags.client ?? 'cli'),
+      pid: typeof flags['owner-pid'] === 'string'
+        ? Number(flags['owner-pid'])
+        : ['mutex', 'dev'].includes(cmd) && !sessionToken ? process.pid : process.ppid,
+      sessionToken,
+      leaseDurationMs: typeof flags['lease-ms'] === 'string' ? Number(flags['lease-ms']) : undefined,
+    });
+    try { engine.worktrees.syncRegistration(agentId); } catch { /* Registration still stands when the checkout cannot be classified. */ }
+    return session;
+  };
+  const adoptPath = () => {
+    if (cmd === 'adopt') return positional[1] ? path.resolve(positional[1]) : process.cwd();
+    if (cmd === 'worktree' && subCmd === 'adopt') return positional[2] ? path.resolve(positional[2]) : process.cwd();
+    if (typeof flags.adopt === 'string') return path.resolve(flags.adopt);
+    return process.cwd();
+  };
 
   try {
     if (cmd === 'session') {
@@ -212,7 +230,9 @@ export async function runEngineCommand(params: {
         title,
         intentSummary: typeof flags.summary === 'string' ? flags.summary : title,
         scopeGlobs,
-        isolateWorktree: Boolean(flags.worktree),
+        isolateWorktree: Boolean(flags.worktree) && flags.adopt === undefined,
+        adoptWorktree: flags.adopt !== undefined,
+        worktreePath: flags.adopt !== undefined ? adoptPath() : undefined,
       };
       const res = flags.wait || flags['wait-ms'] !== undefined
         ? await interruptible((signal) => engine.beginWorkWhenAvailable({ ...options, signal, waitTimeoutMs: claimWaitTimeout() }))
@@ -253,7 +273,12 @@ export async function runEngineCommand(params: {
       }
       if (subCmd === 'claim') {
         const session = register();
-        const options = { agentId, isolateWorktree: Boolean(flags.worktree) };
+        const options = {
+          agentId,
+          isolateWorktree: Boolean(flags.worktree) && flags.adopt === undefined,
+          adoptWorktree: flags.adopt !== undefined,
+          worktreePath: flags.adopt !== undefined ? adoptPath() : undefined,
+        };
         const res = flags.wait || flags['wait-ms'] !== undefined
           ? await interruptible((signal) => engine.claimNextTaskWhenAvailable({ ...options, signal, waitTimeoutMs: claimWaitTimeout() }))
           : engine.claimNextTask(options);
@@ -339,7 +364,20 @@ export async function runEngineCommand(params: {
       return;
     }
 
+    if (cmd === 'adopt' || (cmd === 'worktree' && subCmd === 'adopt')) {
+      const session = register();
+      const worktree = engine.worktrees.adoptWorktree({ agentId, path: adoptPath(), explicit: true });
+      console.log(JSON.stringify({ ok: true, worktree, sessionToken: session.sessionToken }, null, 2));
+      return;
+    }
+
     if (cmd === 'worktree') {
+      if (subCmd === 'forget') {
+        authorize();
+        const forgotten = engine.worktrees.forgetWorktree(agentId);
+        console.log(JSON.stringify({ ok: true, forgotten }, null, 2));
+        return;
+      }
       if (subCmd === 'preview') {
         authorize();
         const result = engine.previewIntegration(agentId);
@@ -358,7 +396,7 @@ export async function runEngineCommand(params: {
       }
       if (subCmd === 'remove') {
         authorize();
-        engine.worktrees.removeWorktree(agentId);
+        engine.worktrees.removeWorktree(agentId, { deleteAdopted: Boolean(flags['delete-adopted']) });
         console.log(JSON.stringify({ ok: true }, null, 2));
         return;
       }

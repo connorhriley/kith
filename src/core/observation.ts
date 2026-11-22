@@ -12,6 +12,7 @@ import { observeWorkspaces } from './workspace-observation.js';
 import { LockEngine } from './locks.js';
 import { HANDOFF_SELECT, rowToHandoff, type HandoffRecord } from './handoff-store.js';
 import { workflowModeFrom, type WorkflowMode } from './mode.js';
+import { registrationFromRow, type WorktreeRegistration } from './worktree-adopt.js';
 import { buildBrief, type Brief } from './brief.js';
 
 export function extractRecentAgentFiles(
@@ -56,7 +57,8 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     conflicts: [] as Record<string,unknown>[], contracts: [] as Record<string,unknown>[], resources: [] as Record<string,unknown>[],
     mergeQueue: [] as Record<string,unknown>[], quarantined: [] as Record<string,unknown>[], mutexWaiters: [] as Record<string,unknown>[],
     commandGuards: [] as Record<string,unknown>[], events: [] as Record<string,unknown>[], recentAgentFiles: {} as Record<string, string[]>, workspaces: [] as ReturnType<typeof observeWorkspaces>,
-    handoffs: [] as HandoffRecord[], workflowMode: 'worktrees' as WorkflowMode, workflowModeConfigured: false };
+    handoffs: [] as HandoffRecord[], workflowMode: 'worktrees' as WorkflowMode, workflowModeConfigured: false,
+    worktreeRegistrations: [] as WorktreeRegistration[] };
   let scratch: string | undefined, db: Database | undefined;
   try {
     const file = path.join(layout.coordDir,'state.db');
@@ -94,6 +96,9 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
     const rawMode = (db.prepare("SELECT value FROM meta WHERE key='workflow_mode'").get() as { value: string } | undefined)?.value;
     const workflowModeConfigured = rawMode === 'main' || rawMode === 'worktrees';
     const workflowMode = workflowModeFrom(rawMode);
+    const worktreeRegistrations = hasTable('worktree_registrations')
+      ? (all<Parameters<typeof registrationFromRow>[0]>('SELECT agent_id, worktree_path, provenance, source, branch, head, detached, dirty, branch_elsewhere, registered_at FROM worktree_registrations ORDER BY registered_at')).map(registrationFromRow)
+      : [];
     const agents=all<AgentRecord>('SELECT * FROM agents ORDER BY registered_at DESC' + (options.coordinationOnly ? ' LIMIT 201' : ''));
     const recentAgentFiles = !options.ownersOnly
       ? extractRecentAgentFiles(all<{agent_id:string;event_type:string;payload_json:string}>("SELECT agent_id, event_type, payload_json FROM events WHERE event_type IN ('locks_acquired','contracts_updated','contract_breaking_change') ORDER BY id DESC LIMIT 200"))
@@ -108,11 +113,11 @@ export function readCoordinationState(directory = process.cwd(), options: { owne
       const sessionEpochs = Object.fromEntries(all<{agent_id:string;epoch:number}>('SELECT s.agent_id,s.epoch FROM agent_sessions s JOIN agents a ON s.agent_id=a.id ORDER BY a.registered_at DESC LIMIT 201').map(r=>[r.agent_id,r.epoch]));
       const conflicts = all('SELECT * FROM conflicts ORDER BY detected_at DESC LIMIT 51').map(({details_json,...r})=>({...r,details:JSON.parse(String(details_json))}));
       db.exec('COMMIT');
-      return {...empty,state:'ready' as const,schemaVersion,agents,sessionEpochs,tasks,locks,conflicts,handoffs,workflowMode,workflowModeConfigured,resources,mutexWaiters,commandGuards,mergeQueue,recentAgentFiles,
+      return {...empty,state:'ready' as const,schemaVersion,agents,sessionEpochs,tasks,locks,conflicts,handoffs,workflowMode,workflowModeConfigured,resources,mutexWaiters,commandGuards,mergeQueue,recentAgentFiles,worktreeRegistrations,
         truncated:[agents,tasks,resources,mutexWaiters,commandGuards,mergeQueue].some(rows=>rows.length>200)||locks.length>500};
     }
-    if (options.ownersOnly) { db.exec('COMMIT'); return { ...empty, state: 'ready' as const, schemaVersion, agents }; }
-    const state = { ...empty, state:'ready' as const, schemaVersion, handoffs, workflowMode, workflowModeConfigured,
+    if (options.ownersOnly) { db.exec('COMMIT'); return { ...empty, state: 'ready' as const, schemaVersion, agents, worktreeRegistrations }; }
+    const state = { ...empty, state:'ready' as const, schemaVersion, handoffs, workflowMode, workflowModeConfigured, worktreeRegistrations,
       fencingEpoch:Number((db.prepare("SELECT value FROM meta WHERE key='fencing_epoch'").get() as {value:string}).value), agents,
       tasks:all('SELECT * FROM tasks ORDER BY priority DESC,created_at').map(({depends_on_json,scope_globs_json,...r})=>({...r,depends_on:JSON.parse(String(depends_on_json)),scope_globs:JSON.parse(String(scope_globs_json))})),
       locks:all('SELECT * FROM locks ORDER BY acquired_at'),
