@@ -2,6 +2,8 @@
 
 For CLI-generated configuration, install Kith persistently or build and link the checkout first. On macOS/Linux, generated configurations use the `kith` executable already on PATH; they do not download an unverified package at hook execution time.
 
+Claude Code can load the same hooks and MCP server as a plugin (`/plugin marketplace add connorhriley/kith`, then `/plugin install kith@kith`). The plugin runs `npx -y kith-coord` and defers when `kith install` or `kith init` has already registered the Claude hook. Use one or both; `kith doctor` does not fail when both are present. Cursor, Codex, and the menu bar still come from `kith install`. See [which to use](install.md#which-to-use).
+
 | Selection | Files and behavior |
 | --- | --- |
 | `claude` | Merges Kith into `.mcp.json`; adds Claude edit hooks only when selected explicitly with `--only` and without `--mcp-only` |

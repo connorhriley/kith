@@ -6,6 +6,7 @@ import { discoverRepository, physicalPath } from '../core/repository.js';
 import { autoConfigureAllClients, type ClientDetectionResult } from './setup-auto.js';
 import { installAutostart, waitForHostAutostartRunning, type AutostartResult } from './autostart.js';
 import { applySetupPlan } from './setup-ledger.js';
+import { claudeInstallHookNote, claudeKithPluginStatus } from './claude-plugin.js';
 import { kithPackageRoot, pruneUnreferencedRuntimes } from './runtime-pin.js';
 import { setupRuntime, verifySetupRuntime } from './setup-runtime.js';
 import { startRadar } from './radar.js';
@@ -297,6 +298,9 @@ export async function installKith(options: InstallOptions = {}): Promise<Install
       notes: 'Skipped (--no-hooks).',
     }
     : configureClaudeGlobalHooks(home, cliPath, dryRun, warnings);
+  if (globalHooks.configured && claudeKithPluginStatus(home, targetDir).active) {
+    globalHooks.notes = claudeInstallHookNote(globalHooks.notes, true);
+  }
 
   const cursorHooks = options.noHooks
     ? {

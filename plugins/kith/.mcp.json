@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kith": {
+      "command": "npx",
+      "args": ["-y", "kith-coord", "mcp", "--compact"]
+    }
+  }
+}

@@ -203,3 +203,24 @@ Never include session tokens in issues, terminal recordings, or shared logs. See
 The read-only watcher excludes byte-identical dirty copies (including matching executable modes) across linked worktrees. Remaining shared dirty paths are advisories, not proven merge conflicts. Files over 8 MiB and non-file objects remain unverified rather than being treated as identical. The menu shows at most eight overlap rows; `kith watch --once` provides the full observations.
 
 Omit `--once` for continuous observation. `--notify=false` suppresses optional macOS notifications. From 0.1.8, macOS `kith install` and `kith setup` open Radar and register a login LaunchAgent unless `--no-radar` or `--no-autostart` is passed. Dry runs never launch it. An existing view keeps its selected workspace; choose **Switch Workspace** in its menu to change it. Radar polls local state without model calls or MCP conversation traffic. On macOS 12 or newer, `kith menubar /absolute/checkout` opens the same limited read-only view. The package includes an Intel/Apple Silicon executable, launched with this installation's Node and CLI paths; unavailable/failed scans remain visibly unavailable. Other platforms use `kith watch`. Source contributors can rebuild with `pnpm build:menubar` using Apple's command-line tools, and run the pipe/timeout regressions with `pnpm test:menubar`.
+
+## How a task moves through Kith
+
+0. **Look first.** `kith brief` (or `kith_brief`) shows who is active on what, claims that overlap your scope, open handoffs and conflicts. It is read-only and needs no session.
+1. **Begin through MCP.** Call `kith_begin_work` with a unique `agentId`, explicit `scopeGlobs`, and `isolateWorktree: true`. The connection retains session ownership; no shell exports are needed for this MCP-only workflow.
+2. **Claim a scope.** Cooperating clients receive a conflict when an exclusive claim overlaps another claim.
+3. **Do the work.** Edit the returned `worktree.worktreePath`, report edits with `kith_record_file_edit`, and use `kith_run_with_mutex` for serialised commands. Heartbeat before expiry and keep the owning connection open.
+4. **Leave a handoff.** When you finish, get blocked or must stop, call `kith_write_handoff` with what is done, what remains, what failed and what you learned. `releaseTask` hands the task back to the queue. If a session ends without a note, Kith records what it observed. The next agent on the same scope receives these notes from `kith_begin_work` or `kith_claim_next_task`, labelled as untrusted information to verify.
+5. **Verify and complete.** For a worktree, Kith checkpoints changes and integrates through a separate staging worktree. The target may hold unrelated uncommitted work, but not edits to files the integration changes. Supply a check to require more than Git mergeability. With no check, a clean merge is the gate.
+
+Failed verification leaves the target unchanged and keeps the worktree for repair. Successful integration also retains the worktree until explicit cleanup. External Git writers must still coordinate.
+
+Inspect through `kith_get_status` or `kith status`: worktree paths and branches, dirty-file overlap, ahead/behind, heartbeat and commit age, and FIFO waiters are included. Use `kith_preview_integrate` for committed-tree conflict paths before completing. Normal status may reap expired owners. For non-mutating recovery inspection use:
+
+```sh
+kith status --offline
+kith recover
+kith doctor
+```
+
+Optional Claude and Cursor hooks support `--enforcement block` (default), `warn` and `off`; see [setup and safe uninstall](integrations.md). The [versioned protocol](protocol.md) records the tool schemas and ownership semantics.

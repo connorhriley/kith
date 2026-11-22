@@ -1,0 +1,23 @@
+{
+  "name": "kith",
+  "description": "File ownership for the coding agents you already run.",
+  "owner": {
+    "name": "connorhriley",
+    "url": "https://github.com/connorhriley/kith"
+  },
+  "plugins": [
+    {
+      "name": "kith",
+      "source": "./plugins/kith",
+      "description": "File claims, port and command locks, and checked integration for Claude Code. Runs the published kith-coord package.",
+      "author": {
+        "name": "connorhriley",
+        "url": "https://github.com/connorhriley/kith"
+      },
+      "homepage": "https://github.com/connorhriley/kith#quick-start",
+      "repository": "https://github.com/connorhriley/kith",
+      "license": "MIT",
+      "keywords": ["kith", "claims", "coordination", "mcp"]
+    }
+  ]
+}
