@@ -9,6 +9,12 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # Engines are Node 22.13 or 24+. @types/node 23+ describes APIs those
+      # runtimes do not have, so a green typecheck would not mean the code runs.
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
   - package-ecosystem: npm
     directory: /extensions/editor
     schedule:
@@ -18,6 +24,14 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
+      # vsce refuses @types/vscode newer than engines.vscode (^1.102.0).
+      - dependency-name: "@types/vscode"
+        versions:
+          - ">= 1.103.0"
   - package-ecosystem: github-actions
     directory: /
     schedule:
