@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -46,6 +46,9 @@ export class FencingAndAgentManager {
   private readonly capabilities = new Map<string, string>();
   private static ownWindowsStart: string | null = null;
   private static inspectionFailure: string | null = null;
+  /** Confirmed start times. Heartbeats must not spawn `ps` on every 100ms tick: on macOS that blocks the event loop longer than a short mutex lease and the lease is lost before the command starts. */
+  private static confirmedStarts = new Map<number, { start: string; at: number }>();
+  private static rechecking = new Set<number>();
 
   constructor(private readonly coordDb: CoordDatabase) {}
 
@@ -63,7 +66,7 @@ export class FencingAndAgentManager {
     try {
       if (process.platform === 'linux') {
         const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-        return `linux:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+        return this.rememberStart(pid, `linux:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`);
       }
       if (process.platform === 'win32') {
         // Only our own identity is immutable for this process lifetime. Never cache other PIDs.
@@ -76,13 +79,13 @@ export class FencingAndAgentManager {
         if (!/^\d+$/.test(ticks)) { this.inspectionFailure = 'invalid kernel creation-time response'; return null; }
         const identity = `windows:${ticks}`;
         if (pid === process.pid) this.ownWindowsStart = identity;
-        return identity;
+        return this.rememberStart(pid, identity);
       }
       const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
         encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1500,
         env: { ...process.env, LC_ALL: 'C' },
       }).trim();
-      return out || null;
+      return out ? this.rememberStart(pid, out) : null;
     } catch (error) {
       const failure = error as NodeJS.ErrnoException & { status?: number; signal?: string };
       this.inspectionFailure = [failure.code, failure.status === undefined ? null : `exit ${failure.status}`, failure.signal].filter(Boolean).join(', ') || 'inspection unavailable';
@@ -90,13 +93,77 @@ export class FencingAndAgentManager {
     }
   }
 
+  /**
+   * Resolve a start time without blocking lease renewal. A just-forked pid can be
+   * invisible to `ps` for a moment, and a single timed-out `ps` must not abort the command.
+   */
+  public static async waitForProcessStartTime(pid: number, budgetMs: number, aborted?: () => boolean): Promise<string | null> {
+    const deadline = Date.now() + budgetMs;
+    while (!aborted?.() && Date.now() < deadline) {
+      try { process.kill(pid, 0); }
+      catch (err) { if ((err as NodeJS.ErrnoException).code === 'ESRCH') return null; }
+      const start = process.platform === 'darwin'
+        ? await this.readDarwinStartTime(pid, Math.min(800, Math.max(50, deadline - Date.now())))
+        : this.getProcessStartTime(pid);
+      if (start) return start;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return null;
+  }
+
   public static isProcessAlive(pid: number, expectedStartTime: string): boolean {
     if (!Number.isSafeInteger(pid) || pid <= 0) return false;
     try { process.kill(pid, 0); }
-    catch (err) { if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false; }
+    catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ESRCH') {
+        this.confirmedStarts.delete(pid);
+        return false;
+      }
+    }
+    const cached = this.confirmedStarts.get(pid);
+    if (cached?.start === expectedStartTime) {
+      this.scheduleStartRecheck(pid);
+      return true;
+    }
     const current = this.getProcessStartTime(pid);
     // Failure to inspect a live process is not evidence that its locks can be stolen.
-    return current === null || current === expectedStartTime;
+    if (current === null) return true;
+    if (current === expectedStartTime) return true;
+    this.confirmedStarts.delete(pid);
+    return false;
+  }
+
+  private static rememberStart(pid: number, start: string): string {
+    this.confirmedStarts.set(pid, { start, at: Date.now() });
+    return start;
+  }
+
+  /** Refresh identity in the background so a slow `ps` cannot stall mutex renewal. */
+  private static scheduleStartRecheck(pid: number): void {
+    const cached = this.confirmedStarts.get(pid);
+    if (!cached || this.rechecking.has(pid) || Date.now() - cached.at < 250) return;
+    this.rechecking.add(pid);
+    const finish = (start: string | null) => {
+      this.rechecking.delete(pid);
+      if (start) { this.rememberStart(pid, start); return; }
+      try { process.kill(pid, 0); }
+      catch (err) { if ((err as NodeJS.ErrnoException).code === 'ESRCH') this.confirmedStarts.delete(pid); }
+    };
+    if (process.platform === 'darwin') void this.readDarwinStartTime(pid, 800).then(finish);
+    else finish(this.getProcessStartTime(pid));
+  }
+
+  private static readDarwinStartTime(pid: number, timeoutMs: number): Promise<string | null> {
+    return new Promise((resolve) => {
+      const child = execFile('ps', ['-o', 'lstart=', '-p', String(pid)], {
+        encoding: 'utf8', timeout: timeoutMs, env: { ...process.env, LC_ALL: 'C' },
+      }, (err, stdout) => {
+        if (err) { resolve(null); return; }
+        const value = stdout.trim();
+        resolve(value ? this.rememberStart(pid, value) : null);
+      });
+      child.unref();
+    });
   }
 
   public registerAgent(params: {

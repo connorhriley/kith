@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { KithEngine } from '../src/index.js';
+import { FencingAndAgentManager } from '../src/core/fencing.js';
 
 let root: string;
 let a: KithEngine;
@@ -32,6 +33,21 @@ afterEach(async () => {
     if (row.worker_pid) { try { process.kill(-row.worker_pid, 'SIGKILL'); } catch {} }
   }
   a.close(); b.close(); fs.rmSync(root, { recursive: true, force: true });
+});
+
+it('renews a short lease while process inspection is still in flight', async () => {
+  const original = FencingAndAgentManager.waitForProcessStartTime;
+  const spy = vi.spyOn(FencingAndAgentManager, 'waitForProcessStartTime').mockImplementation(async (...args) => {
+    await delay(400);
+    return original.apply(FencingAndAgentManager, args);
+  });
+  try {
+    const result = await a.broker.executeWithMutex({
+      agentId: 'a', mutexName: 'slow-inspect', leaseDurationMs: 300,
+      command: [process.execPath, '-e', 'process.exit(0)'],
+    });
+    expect(result.exitCode).toBe(0);
+  } finally { spy.mockRestore(); }
 });
 
 it('renews across multiple lease periods and prevents a competing command from overlapping', async () => {
