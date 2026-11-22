@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.connorhriley/kith",
   "title": "Kith",
-  "description": "File ownership for coding agents you already run: claims, port and command locks, and checked integration.",
+  "description": "File ownership for coding agents you already run: claims, locks, checked integration.",
   "version": "0.1.9",
   "repository": {
     "url": "https://github.com/connorhriley/kith",
