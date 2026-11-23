@@ -4,14 +4,38 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CoordDatabase } from './db.js';
 import { FencingAndAgentManager } from './fencing.js';
+import {
+  adoptIfUnambiguous as adoptLinkedIfUnambiguous,
+  adoptWorktree as adoptLinkedWorktree,
+  clearRegistration,
+  forgetWorktree as forgetLinkedWorktree,
+  isKithOwnedWorktree,
+  listGitWorktrees,
+  listRegistrations as listStoredRegistrations,
+  liveAdoption as inspectLiveAdoption,
+  readRegistration,
+  recordCreatedWorktree,
+  syncRegistration as syncStoredRegistration,
+  type ListedWorktree,
+  type LiveAdoption,
+  type WorktreeBinding,
+  type WorktreeRegistration,
+} from './worktree-adopt.js';
 
 export interface SpawnedWorktree {
   agentId: string;
   worktreePath: string;
-  branch: string;
+  branch: string | null;
   hydrationMethod: 'apfs-cow' | 'reflink-cow' | 'copy' | 'none';
   hydratedDirs: string[];
   durationMs: number;
+  provenance?: WorktreeBinding['provenance'];
+  source?: WorktreeBinding['source'];
+  detached?: boolean;
+  dirty?: boolean;
+  branchCheckedOutElsewhere?: boolean;
+  alreadyRegistered?: boolean;
+  notes?: string[];
 }
 
 export class CoWWorktreeManager {
@@ -73,6 +97,10 @@ export class CoWWorktreeManager {
       }
     }
 
+    let head: string | null = null;
+    try {
+      head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktreePath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    } catch { head = null; }
     this.coordDb.withTransaction(() => {
       this.fencing.assertSession(params.agentId);
       this.coordDb.db
@@ -85,6 +113,7 @@ export class CoWWorktreeManager {
         hydrationMethod,
         hydratedDirs,
       });
+      recordCreatedWorktree(this.coordDb, this.fencing, { agentId: params.agentId, worktreePath, branch, head });
     });
 
     return {
@@ -94,6 +123,13 @@ export class CoWWorktreeManager {
       hydrationMethod,
       hydratedDirs,
       durationMs: Date.now() - start,
+      provenance: 'created',
+      source: 'kith',
+      detached: false,
+      dirty: false,
+      branchCheckedOutElsewhere: false,
+      alreadyRegistered: false,
+      notes: [],
     };
   }
 
@@ -130,17 +166,40 @@ export class CoWWorktreeManager {
     return 'copy';
   }
 
-  public removeWorktree(agentId: string): boolean {
+  public removeWorktree(agentId: string, options?: { deleteAdopted?: boolean }): boolean {
     this.fencing.assertSession(agentId);
+    const registration = readRegistration(this.coordDb, agentId);
+    const agentPath = this.fencing.getAgent(agentId)?.worktree_path ?? null;
+    const adopted = registration?.provenance === 'adopted'
+      || Boolean(agentPath && !isKithOwnedWorktree(this.coordDb, agentPath));
+    if (adopted) {
+      if (!options?.deleteAdopted) {
+        throw new Error(`Refusing to remove an adopted worktree Kith did not create (${agentPath ?? registration?.worktreePath}). The directory was left in place. Pass --delete-adopted to remove it explicitly, or \`kith worktree forget\` to unregister it.`);
+      }
+      const target = agentPath ?? registration?.worktreePath;
+      if (!target || !fs.existsSync(target)) {
+        throw new Error(`Adopted worktree directory is missing (${target ?? 'unknown'}). Nothing was deleted. Use \`kith worktree forget\` to drop the registration.`);
+      }
+      this.removeCheckout(target, true);
+      this.clearAgentWorktree(agentId);
+      return true;
+    }
+
     const safeId = agentId.replace(/[^a-zA-Z0-9_-]/g, '-');
     const worktreePath = path.join(this.coordDb.coordDir, 'worktrees', safeId);
 
     if (!fs.existsSync(worktreePath)) return false;
-    const registered = this.fencing.getAgent(agentId)?.worktree_path;
+    const registered = agentPath;
     if (!registered || physicalPath(registered) !== physicalPath(worktreePath)
       || this.fencing.listAgents(true).some(agent => agent.id !== agentId && agent.worktree_path && physicalPath(agent.worktree_path) === physicalPath(worktreePath))) {
       throw new Error('Refusing to remove a worktree that is not exclusively registered to this agent.');
     }
+    this.removeCheckout(worktreePath, false);
+    this.clearAgentWorktree(agentId);
+    return true;
+  }
+
+  private removeCheckout(worktreePath: string, adopted: boolean): void {
     const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=normal', '--ignored=matching'], {
       cwd: worktreePath, encoding: 'utf8',
     });
@@ -148,42 +207,56 @@ export class CoWWorktreeManager {
       throw new Error(`Refusing to remove dirty worktree: ${worktreePath}. Commit or preserve changed, untracked, and ignored files first.`);
     }
     // The explicit status check also protects ignored files such as .env.
-    execFileSync('git', ['worktree', 'remove', worktreePath], {
-      cwd: this.coordDb.repoRoot, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    this.coordDb.withTransaction(() => {
-      this.fencing.assertSession(agentId);
-      this.coordDb.db.prepare(`UPDATE agents SET worktree_path = NULL, branch = NULL WHERE id = ?`).run(agentId);
-    });
-
-    return true;
+    try {
+      execFileSync('git', ['worktree', 'remove', worktreePath], {
+        cwd: this.coordDb.repoRoot, stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      if (!adopted) throw err;
+      const stderr = err && typeof err === 'object' && 'stderr' in err ? String((err as { stderr?: unknown }).stderr ?? '') : '';
+      throw new Error(`git worktree remove failed; the adopted directory was left in place. ${stderr}`.trim());
+    }
   }
 
-  public listWorktrees(): Array<{ path: string; head: string; branch: string | null }> {
-    try {
-      const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
-        cwd: this.coordDb.repoRoot,
-        encoding: 'utf8',
-      });
+  private clearAgentWorktree(agentId: string): void {
+    this.coordDb.withTransaction(() => {
+      this.fencing.assertSession(agentId);
+      clearRegistration(this.coordDb, agentId);
+      this.coordDb.db.prepare(`UPDATE agents SET worktree_path = NULL, branch = NULL WHERE id = ?`).run(agentId);
+    });
+  }
 
-      const entries: Array<{ path: string; head: string; branch: string | null }> = [];
-      let current: { path: string; head: string; branch: string | null } | null = null;
+  public listWorktrees(): ListedWorktree[] {
+    return listGitWorktrees(this.coordDb.repoRoot);
+  }
 
-      for (const line of out.split(/\r?\n/)) {
-        if (line.startsWith('worktree ')) {
-          if (current) entries.push(current);
-          current = { path: line.slice('worktree '.length).trim(), head: '', branch: null };
-        } else if (line.startsWith('HEAD ') && current) {
-          current.head = line.slice('HEAD '.length).trim();
-        } else if (line.startsWith('branch ') && current) {
-          current.branch = line.slice('branch '.length).replace(/^refs\/heads\//, '').trim();
-        }
-      }
-      if (current) entries.push(current);
-      return entries;
-    } catch {
-      return [];
-    }
+  public registrationFor(agentId: string): WorktreeRegistration | null {
+    return readRegistration(this.coordDb, agentId);
+  }
+
+  public listRegistrations(): WorktreeRegistration[] {
+    return listStoredRegistrations(this.coordDb);
+  }
+
+  public adoptWorktree(params: { agentId: string; path?: string; explicit?: boolean }): WorktreeBinding {
+    return adoptLinkedWorktree(this.coordDb, this.fencing, {
+      agentId: params.agentId, path: params.path, explicit: params.explicit !== false,
+    });
+  }
+
+  public adoptIfUnambiguous(params: { agentId: string; cwd: string }): WorktreeBinding | null {
+    return adoptLinkedIfUnambiguous(this.coordDb, this.fencing, params);
+  }
+
+  public syncRegistration(agentId: string): WorktreeRegistration | null {
+    return syncStoredRegistration(this.coordDb, this.fencing, agentId);
+  }
+
+  public liveAdoption(agent: { id: string; worktree_path?: string | null; branch?: string | null; status?: string } | null | undefined): LiveAdoption | null {
+    return inspectLiveAdoption(this.coordDb, this.fencing, agent as Parameters<typeof inspectLiveAdoption>[2]);
+  }
+
+  public forgetWorktree(agentId: string): boolean {
+    return forgetLinkedWorktree(this.coordDb, this.fencing, agentId);
   }
 }

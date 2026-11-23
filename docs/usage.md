@@ -24,6 +24,30 @@ kith_brief  {"scopeGlobs":["src/auth/**"]}   # the same, over MCP
 
 Run it before beginning work. With `kith init --only brief` Claude Code runs it for you at the start of every session.
 
+## Adopt a worktree that already exists
+
+Claude Code's `claude --worktree <name>` creates `.claude/worktrees/<name>` on a branch named `worktree-<name>`. Subagent worktree isolation and `EnterWorktree` use that same directory. Other tools create ordinary linked worktrees anywhere `git worktree list` shows them. Kith can register that checkout as the agent's workspace.
+
+A joined hook does this on its own when the hook input `cwd` (not `CLAUDE_PROJECT_DIR`, which stays on the original checkout) is inside exactly one linked worktree of this repository, the session does not already have a different worktree, and no other live agent has that path. The primary checkout is never adopted. Anything ambiguous is left alone. The [Claude Code plugin](install.md#claude-code-plugin) runs `kith hook pre|post --client claude --auto` and forwards that `cwd`. Once the auto session has joined, the worktree is adopted, and a later MCP call from the same client keeps that workspace. `kith install` hooks do the same check.
+
+```sh
+kith adopt                              # current directory, when it is a linked worktree
+kith adopt /path/to/worktree
+kith worktree adopt /path/to/worktree
+kith begin --adopt /path/to/worktree --scope 'src/auth/**'
+```
+
+`--repo` stays the integration checkout. Pass it when you run the command from inside the worktree and the target is the primary checkout. On MCP, pass the original checkout as `repository` and the worktree as `worktreePath`:
+
+```text
+kith_adopt_worktree {"agentId":"auth-worker","worktreePath":"/repo/.claude/worktrees/feature-auth"}
+kith_begin_work     {"agentId":"auth-worker","title":"Refresh authentication","scopeGlobs":["src/auth/**"],"adoptWorktree":true,"worktreePath":"/repo/.claude/worktrees/feature-auth"}
+```
+
+Compact MCP uses `kith_work` with `action: "adopt"`. A dirty tree is adopted unchanged. `kith commit` records commits on a detached HEAD; integration waits until that HEAD is a branch. Integration and `kith commit` both refuse a branch that is also checked out in another worktree. A unique branch still integrates only when the verification command passes, and a failure leaves the target unchanged. In main-checkout mode the adopted directory is the workspace for claims and `kith commit`, and completion does not integrate.
+
+`kith worktree forget` drops the registration and leaves the directory. `kith worktree remove` refuses an adopted worktree. `kith worktree remove --delete-adopted` removes a clean one. `kith gc` never deletes or prunes a worktree Kith did not create.
+
 ## Working in the main checkout
 
 Some teams work on the main branch with one checkout and treat worktrees as overhead. Say so once:

@@ -7,6 +7,7 @@ export * from './core/ast-analyzer.js';
 export * from './core/dep-graph.js';
 export * from './core/shadow-git.js';
 export * from './core/worktree-cow.js';
+export * from './core/worktree-adopt.js';
 export * from './core/merge-train.js';
 export * from './core/bash-guard.js';
 export * from './core/commit.js';

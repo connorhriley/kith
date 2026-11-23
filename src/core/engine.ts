@@ -20,7 +20,7 @@ import { IntentAndTaskEngine } from './intents.js';
 import { HandoffEngine, handoffBlock } from './handoffs.js';
 import { buildBrief, type Brief } from './brief.js';
 import { commitScopedFiles, type CommitParams, type CommitResult } from './commit.js';
-import { MAIN_MODE_NOTE, parseWorkflowMode, workflowModeFrom, type WorkflowMode } from './mode.js';
+import { ADOPT_MAIN_MODE_NOTE, MAIN_MODE_NOTE, parseWorkflowMode, workflowModeFrom, type WorkflowMode } from './mode.js';
 import { LockEngine } from './locks.js';
 import { SpeculativeMergeTrain, runVerificationCommand } from './merge-train.js';
 import { ConflictRecord, ShadowGitEngine } from './shadow-git.js';
@@ -33,6 +33,7 @@ import {
   WorkspaceContractReport,
 } from './workspace-contracts.js';
 import { CoWWorktreeManager } from './worktree-cow.js';
+import { isKithOwnedWorktree, type WorktreeBinding } from './worktree-adopt.js';
 
 export interface AgentUnreadDelta {
   events: CoordEvent[];
@@ -317,6 +318,7 @@ export class KithEngine {
       mutexWaiters: this.coordDb.db.prepare('SELECT ticket,mutex_name,owner_agent_id,session_epoch,expires_at FROM mutex_waiters ORDER BY ticket').all(),
       commandGuards: this.coordDb.db.prepare('SELECT mutex_name,owner_agent_id,worker_pid,supervisor_pid FROM mutex_runs ORDER BY mutex_name').all(),
       workspaces: observeWorkspaces(this.coordDb.repoRoot, agents),
+      worktreeRegistrations: this.worktrees.listRegistrations(),
     };
   }
 
@@ -325,15 +327,26 @@ export class KithEngine {
     return previewIntegration(this.coordDb.repoRoot, this.fencing.getAgent(agentId)!);
   }
 
-  public beginWork(params: Parameters<IntentAndTaskEngine['declareIntent']>[0] & { isolateWorktree?: boolean }) {
+  public beginWork(params: Parameters<IntentAndTaskEngine['declareIntent']>[0] & {
+    isolateWorktree?: boolean; adoptWorktree?: boolean; worktreePath?: string;
+  }) {
+    this.worktrees.syncRegistration(params.agentId);
     // In main-checkout mode there are no worktrees: honour the repository's workflow, and say so, rather than the request.
-    const mode = this.workflowMode(), isolate = mode === 'main' ? false : params.isolateWorktree;
-    const notes = mode === 'main' && params.isolateWorktree ? [MAIN_MODE_NOTE] : [];
+    // Adopting a checkout the agent is already in is not creation, so main mode still records it.
+    const mode = this.workflowMode();
+    const adopting = Boolean(params.adoptWorktree || params.worktreePath);
+    const isolate = mode === 'main' ? false : Boolean(params.isolateWorktree) && !adopting;
+    const notes = [
+      ...(mode === 'main' && params.isolateWorktree && !adopting ? [MAIN_MODE_NOTE] : []),
+      ...(mode === 'main' && adopting ? [ADOPT_MAIN_MODE_NOTE] : []),
+    ];
     const intent = this.intents.declareIntent(params);
-    let worktree: ReturnType<CoWWorktreeManager['spawnWorktree']> | null = null;
-    if (intent.ok && isolate && intent.task) {
+    let worktree: WorktreeBinding | ReturnType<CoWWorktreeManager['spawnWorktree']> | null = null;
+    if (intent.ok && (isolate || adopting) && intent.task) {
       try {
-        worktree = this.worktrees.spawnWorktree({ agentId: params.agentId });
+        worktree = adopting
+          ? this.worktrees.adoptWorktree({ agentId: params.agentId, path: params.worktreePath, explicit: true })
+          : this.claimWorktree(params.agentId);
       } catch (err) {
         this.coordDb.withTransaction(() => {
           this.coordDb.db.prepare('DELETE FROM locks WHERE task_id = ?').run(intent.task!.id);
@@ -346,6 +359,9 @@ export class KithEngine {
       this.coordDb.repoRoot,
       worktree?.worktreePath ?? this.fencing.getAgent(params.agentId)?.worktree_path ?? undefined
     );
+    if (worktree && 'notes' in worktree && Array.isArray(worktree.notes)) {
+      for (const note of worktree.notes) if (!notes.includes(note)) notes.push(note);
+    }
     return {
       ...intent,
       worktree,
@@ -359,16 +375,24 @@ export class KithEngine {
     };
   }
 
-  public claimNextTask(params: { agentId: string; isolateWorktree?: boolean }) {
-    const mode = this.workflowMode(), isolate = mode === 'main' ? false : params.isolateWorktree;
-    const notes = mode === 'main' && params.isolateWorktree ? [MAIN_MODE_NOTE] : [];
+  public claimNextTask(params: { agentId: string; isolateWorktree?: boolean; adoptWorktree?: boolean; worktreePath?: string }) {
+    this.worktrees.syncRegistration(params.agentId);
+    const mode = this.workflowMode();
+    const adopting = Boolean(params.adoptWorktree || params.worktreePath);
+    const isolate = mode === 'main' ? false : Boolean(params.isolateWorktree) && !adopting;
+    const notes = [
+      ...(mode === 'main' && params.isolateWorktree && !adopting ? [MAIN_MODE_NOTE] : []),
+      ...(mode === 'main' && adopting ? [ADOPT_MAIN_MODE_NOTE] : []),
+    ];
     // Claim ownership quickly under SQLite lock, then perform Git/CoW filesystem work outside
     // the transaction so concurrent writers aren't stalled; roll back ownership on spawn error.
     const claimedRes = this.intents.claimNextTask(params.agentId);
     let worktree: ReturnType<KithEngine['claimWorktree']> | null = null;
-    if (claimedRes.claimed && isolate && claimedRes.task) {
+    if (claimedRes.claimed && (isolate || adopting) && claimedRes.task) {
       try {
-        worktree = this.claimWorktree(params.agentId);
+        worktree = adopting
+          ? this.worktrees.adoptWorktree({ agentId: params.agentId, path: params.worktreePath, explicit: true })
+          : this.claimWorktree(params.agentId);
       } catch (err) {
         this.coordDb.withTransaction(() => {
           this.coordDb.db.prepare('DELETE FROM locks WHERE task_id = ?').run(claimedRes.task!.id);
@@ -384,6 +408,9 @@ export class KithEngine {
       this.coordDb.repoRoot,
       worktree?.worktreePath ?? this.fencing.getAgent(params.agentId)?.worktree_path ?? undefined
     );
+    if (worktree && 'notes' in worktree && Array.isArray(worktree.notes)) {
+      for (const note of worktree.notes) if (!notes.includes(note)) notes.push(note);
+    }
     return {
       ...claimedRes,
       worktree,
@@ -402,6 +429,10 @@ export class KithEngine {
     this.fencing.assertSession(agentId);
     const agent = this.fencing.getAgent(agentId)!;
     if (!agent.worktree_path) return this.worktrees.spawnWorktree({ agentId });
+    const registration = this.worktrees.registrationFor(agentId);
+    const adopted = registration?.provenance === 'adopted'
+      || (!registration && !isKithOwnedWorktree(this.coordDb, agent.worktree_path));
+    if (adopted) return this.worktrees.adoptWorktree({ agentId, path: agent.worktree_path, explicit: true });
     const root = physicalPath(agent.worktree_path);
     const owner = discoverRepository(this.coordDb.repoRoot);
     const layout = discoverRepository(root);
@@ -423,12 +454,18 @@ export class KithEngine {
     if (git('rev-parse', 'HEAD') !== head) {
       throw new Error('Saved worktree is ahead or behind the current checkout; integrate or replace it explicitly before claiming another task.');
     }
-    return { agentId, worktreePath: root, branch: agent.branch, hydrationMethod: 'none' as const, hydratedDirs: [] as string[], durationMs: 0 };
+    return {
+      agentId, worktreePath: root, branch: agent.branch, hydrationMethod: 'none' as const, hydratedDirs: [] as string[], durationMs: 0,
+      provenance: 'created' as const, source: 'kith' as const, detached: false, dirty: false, branchCheckedOutElsewhere: false,
+      alreadyRegistered: true, notes: [] as string[],
+    };
   }
 
   public async claimNextTaskWhenAvailable(params: {
     agentId: string;
     isolateWorktree?: boolean;
+    adoptWorktree?: boolean;
+    worktreePath?: string;
     waitTimeoutMs: number;
     signal?: AbortSignal;
   }) {
@@ -462,7 +499,24 @@ export class KithEngine {
   }) {
     this.fencing.assertSession(params.agentId);
     const agent = this.fencing.getAgent(params.agentId);
-    const branch = params.mergeBranch ?? agent?.branch;
+    const adoption = this.worktrees.liveAdoption(agent);
+    if (this.workflowMode() === 'main' && adoption) {
+      if (params.verificationCmd) {
+        try {
+          runVerificationCommand(params.verificationCmd, adoption.worktreePath, this.fencing.sessionEnvironment(params.agentId));
+        } catch (err) {
+          return { ok: false, mergeResult: null, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      const completedTasks = this.intents.completeTask(params);
+      this.fencing.completeAgentSession(params.agentId);
+      this.shadowGit.pruneStaleShadowIndexes();
+      return { ok: true, completedTasks, mergeResult: null, notes: [ADOPT_MAIN_MODE_NOTE] };
+    }
+    if (adoption?.integrationError) {
+      return { ok: false, mergeResult: null, error: adoption.integrationError };
+    }
+    const branch = params.mergeBranch ?? adoption?.branch ?? agent?.branch;
     const mergeResult = branch ? this.mergeTrain.enqueueAndMerge({
       agentId: params.agentId, branch, worktreePath: agent?.worktree_path,
       verificationCmd: params.verificationCmd, waitTimeoutMs: params.waitTimeoutMs,

@@ -6,7 +6,7 @@ Kith is a local ledger for cooperating coding agents. Clients share one reposito
 
 Protocol 1.1 ships with package 0.1.2. Earlier `kith-coord@0.1.1` reports protocol 1.0 and includes full contracts in MCP status; the compact default and `includeContracts` input below require 0.1.2.
 
-`KITH_PROTOCOL_VERSION` and status responses advertise `1.6.0` starting with package 0.1.8; package 0.1.7 advertises `1.5.0`, and package 0.1.6 advertises `1.4.0`. Protocol 1.6 adds optional tools (`kith_write_handoff`, `kith_read_handoffs`, `kith_brief`) and additive result fields (handoffs, `workflowMode`, `session.leaseExpiresAt`, `completedIntegrationCount`). The storage schema stays 3. Opening the database creates an optional `handoffs` table that older binaries ignore. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema have independent versions. The [tool snapshot](protocol/tools.v1.json) contains all 17 tool names, descriptions and JSON input schemas, exported from an actual MCP `tools/list` response. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
+`KITH_PROTOCOL_VERSION` and status responses advertise `1.6.0` starting with package 0.1.8; package 0.1.7 advertises `1.5.0`, and package 0.1.6 advertises `1.4.0`. Protocol 1.6 adds optional tools (`kith_write_handoff`, `kith_read_handoffs`, `kith_brief`) and additive result fields (handoffs, `workflowMode`, `session.leaseExpiresAt`, `completedIntegrationCount`). The storage schema stays 3. Opening the database creates an optional `handoffs` table that older binaries ignore. Package releases (`kith-coord`, beginning at 0.1.0) and the SQLite storage schema have independent versions. The [tool snapshot](protocol/tools.v1.json) contains every full-profile tool name, description and JSON input schema, exported from an actual MCP `tools/list` response. Unreleased 0.2.0 work adds `kith_adopt_worktree`, so the snapshot currently lists 18 tools. The advertised protocol version remains 1.6.0 until the 0.2.0 release records that addition. `pnpm protocol:check` rejects snapshot drift in CI. Update deliberately using `pnpm protocol:export`.
 
 For protocol 1.x, existing tool names, required input fields and the ownership/claim semantics below remain compatible. New optional fields/tools and additive result fields use a minor version; compatible repairs use a patch version. Removing tools, adding required inputs or changing ownership semantics requires a major version. Clients should ignore unknown result fields. The snapshot describes inputs; it is not a machine-validated schema for every result or a guarantee of source-level library compatibility.
 
@@ -44,7 +44,18 @@ A session boundary used to erase what an agent learned: its claims were released
 
 A repository is in one of two modes, shared by every agent and worktree and stored with the coordination state (`worktrees` unless changed). In `worktrees` mode each agent may work in an isolated worktree and integrates through the merge train. In `main` mode every agent works in the one checkout and coordinates through scope claims: `kith_begin_work` and `kith_claim_next_task` never create a worktree, they ignore `isolateWorktree` and say so in `notes`, and completing work releases the claims with no integration step (so a `verificationCmd` is not run). Both tools and `kith_get_status` report `workflowMode`. Set it with `kith mode main|worktrees` or `kith init --mode`; `kith mode` shows it. Generated agent guidance describes the recorded mode.
 
-`kith mcp --compact`, the default used by `kith install`, advertises six workflow tools instead of the 17 in the snapshot: `kith_brief`, `kith_work`, `kith_claim`, `kith_handoff`, `kith_finish` and `kith_resource`. `kith mcp --full` restores the 17-tool list. Both advertise protocol 1.6.0.
+`kith mcp --compact`, the default used by `kith install`, advertises six workflow tools instead of the full snapshot: `kith_brief`, `kith_work`, `kith_claim`, `kith_handoff`, `kith_finish` and `kith_resource`. `kith_work` with `action: "adopt"` registers an existing linked worktree. `kith mcp --full` restores the full list, including `kith_adopt_worktree`. Both advertise protocol 1.6.0.
+
+## Unreleased: adopting an existing worktree
+
+These fields are additive on the current tree and do not change the advertised protocol version.
+
+- `kith_adopt_worktree` registers a linked worktree (`worktreePath`, or the server cwd when that cwd is already the worktree) for an agent. It does not create the directory, clean it, or delete it.
+- `kith_begin_work` and `kith_claim_next_task` accept optional `adoptWorktree` and `worktreePath`. When either is set, Kith adopts that checkout instead of creating one. `isolateWorktree` is not also applied.
+- The worktree object adds `provenance` (`created` or `adopted`), `source` (`kith`, `claude-code`, or `external`), `detached`, `dirty`, `branchCheckedOutElsewhere`, and `notes`. `branch` is null when HEAD is detached.
+- `kith_get_status` adds `worktreeRegistrations`. Storage stays schema 3. Opening the database creates an optional `worktree_registrations` table that older binaries ignore.
+
+A detached adopted HEAD is not integrated. A branch checked out in another worktree is not committed or integrated. An adopted branch that is unique still uses the verification gate below. Clients should keep sending the original checkout as `repository`.
 
 ## Workspace observation and integration
 

@@ -5,6 +5,7 @@ const BOOLEAN_FLAGS = new Set([
   'offline', 'once', 'json', 'quiet', 'no-notify', 'no-radar', 'require-session',
   'release', 'all', 'refresh-guidance', 'compact', 'full', 'human', 'no-hooks', 'force',
   'project', 'main', 'keep', 'auto', 'no-autostart', 'live', 'global', 'include-presence', 'conflicts', 'watch',
+  'delete-adopted',
 ]);
 
 export function parseFlags(argv: string[]): {
@@ -113,7 +114,8 @@ Low-level coordination & plumbing commands:
   kith task add|claim|done|clear|list                    Manage task queue
   kith lock acquire|release|list                         Manage file/glob locks
   kith contract publish|list                             Manage shared contract signatures
-  kith worktree spawn|remove|list|preview                Manage isolated Git worktrees
+  kith adopt [path]                                      Register an existing linked worktree (Claude Code or any git worktree)
+  kith worktree spawn|adopt|forget|remove|list|preview  Manage isolated Git worktrees; remove refuses adopted trees unless --delete-adopted
   kith port --agent <id> --service <name>                Reserve an available local TCP port
   kith dev --agent <id> -- <cmd>                         Run dev command with allocated PORT
   kith mutex --agent <id> --name <m> -- <cmd>            Serialize command execution via mutex

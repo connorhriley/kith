@@ -83,7 +83,7 @@ describe('compact MCP, install, passive hooks, kith run, and human output', () =
     const fullTools = await fullClient.listTools();
     const compactTools = await compactClient.listTools();
 
-    expect(fullTools.tools).toHaveLength(17);
+    expect(fullTools.tools).toHaveLength(18);
     expect(compactTools.tools.map(t => t.name)).toEqual([
       'kith_brief',
       'kith_work',

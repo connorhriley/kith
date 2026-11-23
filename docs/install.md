@@ -37,7 +37,9 @@ npx -y kith-coord hook pre --client claude --auto
 npx -y kith-coord mcp --compact
 ```
 
-`hooks/run.mjs` is the hook command Claude Code actually starts. It forwards stdin to that `npx` command. If `~/.claude/settings.json`, or the project `.claude/settings.json` for `CLAUDE_PROJECT_DIR`, already contains the matching `kith hook` command, the script exits 0 and does not start a second check. PreToolUse uses `onFailure: "block"`, matching `kith install`.
+`hooks/run.mjs` is the hook command Claude Code actually starts. It forwards stdin, including the hook `cwd`, to that `npx` command. If `~/.claude/settings.json`, or the project `.claude/settings.json` for `CLAUDE_PROJECT_DIR`, already contains the matching `kith hook` command, the script exits 0 and does not start a second check. PreToolUse uses `onFailure: "block"`, matching `kith install`.
+
+When that session has joined and its `cwd` is a linked worktree, the hook adopts the checkout instead of creating another one. Claude Code's `claude --worktree` uses `.claude/worktrees/<name>`. The same adoption applies to any other `git worktree list` entry. Kith does not delete a worktree it did not create. `${CLAUDE_PROJECT_DIR}` stays on the original checkout and is not treated as the worktree. See [Adopt a worktree](usage.md#adopt-a-worktree-that-already-exists).
 
 The plugin does not write `~/.claude/settings.json`, does not install Cursor hooks, and does not register the menu bar. Uninstall it from Claude Code's `/plugin` list. That does not remove hooks written by `kith install`; `kith uninstall` does.
 
@@ -49,7 +51,7 @@ The version field is omitted from the manifest, so a GitHub marketplace install 
 npm i -g kith-coord && kith install
 ```
 
-`kith install` puts `kith` on your `PATH` and keeps that runtime outside the npx cache. It writes a global MCP entry for each detected client, using the compact tool profile (`kith mcp --compact`), and installs silent-solo `--auto` hooks for Claude Code and Cursor. One agent stays at **Watching only** and does not write coordination state. When another writer overlaps, the hooks join Kith and isolate that work into a worktree or a claim. On macOS it also loads a login LaunchAgent (`dev.kith.radar`) unless you pass `--no-autostart` or `--no-radar`. It does not claim any files. An agent claims when it starts a task.
+`kith install` puts `kith` on your `PATH` and keeps that runtime outside the npx cache. It writes a global MCP entry for each detected client, using the compact tool profile (`kith mcp --compact`), and installs silent-solo `--auto` hooks for Claude Code and Cursor. One agent stays at **Watching only** and does not write coordination state. When another writer overlaps, the hooks join Kith. If that session is already inside a linked worktree, joining adopts it. Otherwise the hooks isolate the work into a worktree Kith creates, or into a claim. On macOS it also loads a login LaunchAgent (`dev.kith.radar`) unless you pass `--no-autostart` or `--no-radar`. It does not claim any files. An agent claims when it starts a task.
 
 Codex CLI has no native tool hooks, so it uses the MCP tools. Linux and Windows skip the menu bar; use `kith watch`.
 

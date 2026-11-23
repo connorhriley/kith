@@ -139,6 +139,26 @@ export function runHookPhase(params: {
   promotedNotice?: string;
 }): void {
   const { engine, subCmd, flags, stdinPayload, agentId, promotedNotice } = params;
+  let adoptionNotice: string | undefined;
+  if (subCmd === 'pre' || subCmd === 'post' || subCmd === 'pre-commit') {
+    const before = engine.worktrees.registrationFor(agentId);
+    try { engine.worktrees.syncRegistration(agentId); } catch { /* A joined session records provenance; a missing one is enforced below. */ }
+    const cwd = typeof stdinPayload?.cwd === 'string' && path.isAbsolute(stdinPayload.cwd) && fs.existsSync(stdinPayload.cwd)
+      ? stdinPayload.cwd
+      : process.cwd();
+    const noticeFor = (source: string, worktreePath: string, branch: string | null) => {
+      const where = branch ? `${worktreePath} (${branch})` : `${worktreePath} (detached HEAD)`;
+      return `[kith] Adopted the existing ${source} worktree ${where}. Claims, kith commit and integration use it. Kith will not delete it.`;
+    };
+    try {
+      const adopted = engine.worktrees.adoptIfUnambiguous({ agentId, cwd });
+      if (adopted && !adopted.alreadyRegistered) adoptionNotice = noticeFor(adopted.source, adopted.worktreePath, adopted.branch);
+    } catch { /* Ambiguous hook context is not an adoption. */ }
+    if (!adoptionNotice && !before) {
+      const after = engine.worktrees.registrationFor(agentId);
+      if (after?.provenance === 'adopted') adoptionNotice = noticeFor(after.source, after.worktreePath, after.branch);
+    }
+  }
   const handler = new HookHandler(engine, enforcementMode(flags.enforcement));
   const toolName = String(flags.tool ?? stdinPayload?.tool_name ?? 'Edit');
   const filePath =
@@ -155,7 +175,7 @@ export function runHookPhase(params: {
 
   if (subCmd === 'pre') {
     const res = handler.handlePreToolUse({ agentId, toolName, filePath, command });
-    const msg = presentHookMessage([res.message, res.allowed ? promotedNotice : undefined].filter(Boolean).join('\n'));
+    const msg = presentHookMessage([res.message, res.allowed ? adoptionNotice : undefined, res.allowed ? promotedNotice : undefined].filter(Boolean).join('\n'));
     if (flags.client === 'cursor') {
       console.log(JSON.stringify({ permission: res.allowed ? 'allow' : 'deny', ...(msg ? { user_message: msg, agent_message: msg } : {}) }));
     } else if (!res.allowed) {
@@ -182,7 +202,7 @@ export function runHookPhase(params: {
     const res = handler.handlePostToolUse({ agentId, toolName, filePath, command });
     const allowed = res.allowed && !settledReverted;
     const exitCode = settledReverted ? 2 : res.exitCode;
-    const msg = presentHookMessage([promotedNotice, ...settledWarnings, ...res.warnings, res.deltaFooter].filter(Boolean).join('\n'));
+    const msg = presentHookMessage([adoptionNotice, promotedNotice, ...settledWarnings, ...res.warnings, res.deltaFooter].filter(Boolean).join('\n'));
     if (flags.client === 'cursor') {
       console.log(JSON.stringify({ additional_context: msg }));
       process.exitCode = exitCode;

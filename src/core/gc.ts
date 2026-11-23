@@ -13,7 +13,7 @@ export interface GcOptions {
 export interface GcPreservedItem {
   path: string;
   branch: string | null;
-  reason: 'active-session' | 'open-handoff' | 'dirty' | 'unmerged';
+  reason: 'active-session' | 'open-handoff' | 'dirty' | 'unmerged' | 'adopted';
 }
 
 export interface GcReport {
@@ -58,6 +58,31 @@ function gitIsMerged(repoRoot: string, commit: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Remove one Kith-created worktree. Never calls `git worktree prune`, which would also drop metadata Kith does not own. */
+function removeCreatedWorktree(repoRoot: string, wtPath: string, force: boolean): void {
+  let admin: string | null = null;
+  try {
+    const text = fs.readFileSync(path.join(wtPath, '.git'), 'utf8');
+    const match = /^gitdir:\s*(.+)\s*$/m.exec(text);
+    if (match?.[1]) admin = path.resolve(wtPath, match[1].trim());
+  } catch { /* The directory may already be gone. */ }
+  try {
+    execFileSync('git', ['worktree', 'remove', ...(force ? ['--force'] : []), wtPath], {
+      cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return;
+  } catch { /* Fall through to deleting only this directory and its own git metadata. */ }
+  fs.rmSync(wtPath, { recursive: true, force: true });
+  if (!admin) return;
+  try {
+    const layout = discoverRepository(repoRoot);
+    if (!layout.commonGitDir) return;
+    const adminPath = physicalPath(admin);
+    const worktreesAdmin = physicalPath(path.join(layout.commonGitDir, 'worktrees'));
+    if (isWithin(worktreesAdmin, adminPath) && adminPath !== worktreesAdmin) fs.rmSync(adminPath, { recursive: true, force: true });
+  } catch { /* Leave metadata in place rather than pruning every worktree. */ }
 }
 
 function gitHasCommitSince(repoRoot: string, sinceMs: number, files: string[]): boolean {
@@ -181,16 +206,21 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
     );
 
     const worktreesDir = physicalPath(path.join(layout.coordDir, 'worktrees'));
+    const adoptedPaths = new Set(
+      engine.worktrees.listRegistrations()
+        .filter(row => row.provenance === 'adopted')
+        .map(row => { try { return physicalPath(row.worktreePath); } catch { return row.worktreePath; } })
+    );
     if (fs.existsSync(worktreesDir)) {
-      if (!dryRun) {
-        try {
-          execFileSync('git', ['worktree', 'prune'], { cwd: layout.checkoutRoot, stdio: ['ignore', 'ignore', 'ignore'] });
-        } catch { /* Best effort. */ }
-      }
+      // Do not `git worktree prune`: that drops metadata for every missing worktree, including ones Kith did not create.
       const listed = engine.worktrees.listWorktrees();
       for (const wt of listed) {
         const wtPath = physicalPath(wt.path);
         if (!isWithin(worktreesDir, wtPath) || wtPath === worktreesDir) continue;
+        if (adoptedPaths.has(wtPath)) {
+          report.preservedWorktrees.push({ path: wtPath, branch: wt.branch, reason: 'adopted' });
+          continue;
+        }
         if (activeWorktreePaths.has(wtPath)) {
           report.preservedWorktrees.push({ path: wtPath, branch: wt.branch, reason: 'active-session' });
           continue;
@@ -211,17 +241,7 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
         const removeBranch = Boolean(wt.branch && wt.branch.startsWith('kith/') && (!handoffBranches.has(wt.branch) || force));
         if (removeBranch) report.deletedBranches.push(wt.branch!);
         if (!dryRun) {
-          try {
-            execFileSync('git', ['worktree', 'remove', ...(force ? ['--force'] : []), wtPath], {
-              cwd: layout.checkoutRoot,
-              stdio: ['ignore', 'pipe', 'pipe'],
-            });
-          } catch {
-            fs.rmSync(wtPath, { recursive: true, force: true });
-            try {
-              execFileSync('git', ['worktree', 'prune'], { cwd: layout.checkoutRoot, stdio: ['ignore', 'ignore', 'ignore'] });
-            } catch { /* ignore */ }
-          }
+          removeCreatedWorktree(layout.checkoutRoot, wtPath, force);
           if (removeBranch && wt.branch) {
             try {
               execFileSync('git', ['branch', '-D', wt.branch], { cwd: layout.checkoutRoot, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -233,7 +253,7 @@ export function gcCoordination(directory = process.cwd(), options: GcOptions = {
       const remaining = new Set(engine.worktrees.listWorktrees().map(w => physicalPath(w.path)));
       for (const entry of fs.readdirSync(worktreesDir)) {
         const orphan = physicalPath(path.join(worktreesDir, entry));
-        if (remaining.has(orphan) || activeWorktreePaths.has(orphan) || (!force && handoffWorktrees.has(orphan))) continue;
+        if (remaining.has(orphan) || activeWorktreePaths.has(orphan) || adoptedPaths.has(orphan) || (!force && handoffWorktrees.has(orphan))) continue;
         report.removedWorktrees.push(orphan);
         if (!dryRun) fs.rmSync(orphan, { recursive: true, force: true });
       }

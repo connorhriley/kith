@@ -30,7 +30,7 @@ CLI sessions are anchored to their parent process unless `--owner-pid` is suppli
 eval "$(kith session start --agent auth-worker --new --owner-pid "$$" --shell)"
 ```
 
-`--new` does not steal a live session. Worktree paths are retained across generations. After successful worktree integration, use a new maintenance session to run `kith worktree remove`; changed, untracked, and ignored files still prevent removal.
+`--new` does not steal a live session. Worktree paths are retained across generations. After successful worktree integration, use a new maintenance session to run `kith worktree remove`; changed, untracked, and ignored files still prevent removal. That removal applies to a worktree Kith created. An adopted worktree (Claude Code's `.claude/worktrees/<name>`, or any other linked worktree registered with `kith adopt`) is not deleted by `kith worktree remove` or `kith gc`. Unregister it with `kith worktree forget`, or pass `--delete-adopted` when you mean to remove that directory.
 
 ## Git-ignored files and clearing a stuck auto-session
 

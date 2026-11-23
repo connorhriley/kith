@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+Worktree adoption for 0.2.0. The package version stays 0.1.9 and is not published. The protocol advertised by this tree stays 1.6.0. The storage schema stays 3.
+
+- Kith can register a linked worktree an agent is already using, instead of creating one under `.coord/worktrees`. Claude Code `--worktree`, `EnterWorktree`, and subagent `isolation: worktree` checkouts live at `.claude/worktrees/<name>` (branch `worktree-<name>` by default); a hook adopts that checkout when its `cwd` is unambiguously that worktree. `kith adopt [path]`, `kith worktree adopt [path]`, `kith begin --adopt [path]`, MCP `kith_adopt_worktree`, and `adoptWorktree` / `worktreePath` on begin and claim do the same for any `git worktree list` entry.
+- Provenance is stored in an optional `worktree_registrations` table (`created` / `adopted`, source `kith`, `claude-code`, or `external`). Older binaries ignore the table. `kith gc` and `kith worktree remove` do not delete or prune a worktree Kith did not create. `kith worktree forget` drops the registration. `kith worktree remove --delete-adopted` is the explicit removal, and it still refuses a dirty tree.
+- A dirty tree is adopted as it is. A detached HEAD can take `kith commit` and is refused at integration until a branch is checked out. A branch checked out in another worktree is refused for both `kith commit` and integration. An adopted branch that is unique still integrates only through the existing merge train and verification command. In main-checkout mode the adopted worktree is the workspace for claims and `kith commit`, and completion does not integrate it.
+- `kith status` and `kith doctor` name adopted worktrees, including a detached HEAD and a branch checked out elsewhere. The full MCP list adds `kith_adopt_worktree` (18 tools). Compact `kith_work` accepts `action: "adopt"`.
+
 ## 0.1.9 — 2026-11-16
 
 - Hook messages sent back to the model are capped at 2,000 characters. That includes notices, warnings, shared-checkout refusals, and revert warnings, both before and after a tool call. The text is cut on a line boundary. The ready-to-run `kith commit` line in a refusal or revert is kept whole; other text is dropped first so the total stays within 2,000 whenever that line fits. A command longer than the budget is returned intact rather than cut into a command that would not run. The shorter conflict footer from 0.1.8 stays separately bounded and counts toward that total.
