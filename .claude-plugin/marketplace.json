@@ -8,6 +8,7 @@
   "plugins": [
     {
       "name": "kith",
+      "version": "0.2.0",
       "source": "./plugins/kith",
       "description": "File claims, port and command locks, and checked integration for Claude Code. Runs the published kith-coord package.",
       "author": {

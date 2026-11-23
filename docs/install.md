@@ -59,20 +59,20 @@ Directories that scan a repository for an MCP server read the committed [`.mcp.j
 
 ### Upgrading
 
-Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. The storage schema stays 3 and the protocol stays 1.6.0. Databases already on schema 3 open without a version migration. The first open on 0.1.8 or later creates an optional `handoffs` table; binaries from 0.1.6 and 0.1.7 ignore that table and keep working, but they do not read or write handoff notes. An upgrade from schema 2 still applies the 0.1.6 migration to schema 3, which older binaries refuse. After upgrading, run `kith install` so hooks and client entries use this runtime. `kith doctor` reports a hook or MCP entry still pinned to an older runtime. Existing custom launchers are preserved; review their pinned version before reconnecting. On macOS, `kith install` and `kith setup` register a login LaunchAgent unless `--no-autostart` or `--no-radar` is passed. See [recovery guidance](reliability.md#recovery).
+Stop existing Kith connections first. Back up stopped coordination state (including SQLite sidecars) and retain worktrees; upgrade all coordinators sharing a repository together. The storage schema stays 3 and the protocol stays 1.6.0. Databases already on schema 3 open without a version migration. The first open on 0.2.0 creates an optional `worktree_registrations` table; binaries from 0.1.6 through 0.1.9 ignore it. The first open on 0.1.8 or later creates an optional `handoffs` table; binaries from 0.1.6 and 0.1.7 ignore that table and keep working, but they do not read or write handoff notes. An upgrade from schema 2 still applies the 0.1.6 migration to schema 3, which older binaries refuse. After upgrading, run `kith install` so hooks and client entries use this runtime. `kith doctor` reports a hook or MCP entry still pinned to an older runtime. Existing custom launchers are preserved; review their pinned version before reconnecting. On macOS, `kith install` and `kith setup` register a login LaunchAgent unless `--no-autostart` or `--no-radar` is passed. See [recovery guidance](reliability.md#recovery).
 
 ### VS Code or Cursor
 
 Install **Kith** (`kith-coord.kith`) from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kith-coord.kith) or [Cursor / Open VSX](https://open-vsx.org/extension/kith-coord/kith). You can also search for `kith-coord.kith` in the editor's Extensions view.
 
-To select release **0.1.9** explicitly with an editor CLI already on your `PATH`:
+To select release **0.2.0** explicitly with an editor CLI already on your `PATH`:
 
 ```sh
-code --install-extension kith-coord.kith@0.1.9
-cursor --install-extension kith-coord.kith@0.1.9
+code --install-extension kith-coord.kith@0.2.0
+cursor --install-extension kith-coord.kith@0.2.0
 ```
 
-Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](../extensions/editor/README.md#install) also links the published 0.1.9 VSIX.
+Use the command for your editor. A marketplace lookup can temporarily select an older version; the [extension guide](../extensions/editor/README.md#install) also links the published 0.2.0 VSIX.
 
 Open a trusted local Git checkout and approve Kith's MCP server through the editor. The extension bundles the coordination server, detects Node, and preserves existing MCP entries, hooks and tool permissions. **No global npm install is needed.** It registers the compact tool profile (`kith.mcp.profile`, `compact` by default, or `full`), shows a read-only global hook status note in Output, and adds **Kith: Install Global Hooks & Autostart** (`kith.installGlobal`). The bundled extension does not include the macOS menu-bar helper; run `kith install` from the CLI on macOS for Radar login autostart. Each agent still needs to use Kith's tools; installing the extension alone does not enforce claims on other writers.
 
@@ -91,7 +91,7 @@ The [extension guide](../extensions/editor/README.md) covers settings and existi
 Configure detected clients and add project instructions with:
 
 ```sh
-npx --yes --package kith-coord@0.1.9 kith setup
+npx --yes --package kith-coord@0.2.0 kith setup
 ```
 
 **`kith install`** is the one-command onboarding path. `kith setup` remains a compatible alias:

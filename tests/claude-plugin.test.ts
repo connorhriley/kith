@@ -46,9 +46,9 @@ it('parses the Claude Code marketplace and plugin manifests', () => {
   expect(marketplace.plugins).toEqual([
     expect.objectContaining({ name: 'kith', source: './plugins/kith' }),
   ]);
-  expect(marketplace.plugins[0].version).toBeUndefined();
+  expect(marketplace.plugins[0].version).toBe('0.2.0');
   expect(plugin.name).toBe('kith');
-  expect(plugin.version).toBeUndefined();
+  expect(plugin.version).toBe('0.2.0');
   expect(fs.existsSync(path.join(repoRoot, 'plugins/kith/.claude-plugin/plugin.json'))).toBe(true);
 
   const events = hooks.hooks;

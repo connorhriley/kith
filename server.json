@@ -3,7 +3,7 @@
   "name": "io.github.connorhriley/kith",
   "title": "Kith",
   "description": "File ownership for coding agents you already run: claims, locks, checked integration.",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "repository": {
     "url": "https://github.com/connorhriley/kith",
     "source": "github"
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "kith-coord",
-      "version": "0.1.9",
+      "version": "0.2.0",
       "runtimeHint": "npx",
       "runtimeArguments": [
         {

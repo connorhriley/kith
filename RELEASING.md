@@ -38,6 +38,19 @@ Publishing jobs use the GitHub environment `release`. No job reads `NPM_TOKEN`.
 
 ## Already on npm
 
+0.2.0 is cut the same way as 0.1.9 while the npm trusted publisher is not configured: publish manually from the merged release commit, confirm the registry, then push the tag. The tag must not be the thing that first publishes the version.
+
+```sh
+git checkout main
+git pull
+npm publish --access public
+npm view kith-coord@0.2.0 version
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Publish the same commit you tag. The earlier Windows job tests a tarball packed from the tag. The later Windows job installs `kith-coord@0.2.0` from the registry and validates that copy. The editor job publishes extension 0.2.0 only when `VSCE_PAT` and `OVSX_PAT` are present.
+
 0.1.9 is published manually, from the merged release commit, before `v0.1.9` is pushed. The npm trusted publisher is not configured yet, so the tag must not be the thing that first publishes that version. After `npm view kith-coord@0.1.9 version` prints `0.1.9`, push the tag. The workflow then skips `npm publish` and still creates the GitHub release, publishes `server.json` with `mcp-publisher` (GitHub OIDC), and runs the Windows job that installs `kith-coord@0.1.9` from the registry.
 
 Publish the same commit you tag. The earlier Windows job tests a tarball packed from the tag. The later Windows job installs `kith-coord@0.1.9` from the registry and validates that copy.
