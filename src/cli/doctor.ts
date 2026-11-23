@@ -6,6 +6,7 @@ import { parse as parseToml } from 'smol-toml';
 import { isWithin, physicalPath } from '../core/repository.js';
 import { readCoordinationState } from '../core/observation.js';
 import { launchAgentPath } from './autostart.js';
+import { claudeKithPluginStatus } from './claude-plugin.js';
 import { claudeDesktopConfigPath, runtimeVersionCheck } from './runtime-pin.js';
 
 /** Diagnostics read files and inspect a snapshot; they never initialize state, trust projects, install packages or run configured hooks. */
@@ -57,21 +58,30 @@ export function doctorReport(directory=process.cwd(), home=os.homedir()) {
       check(`${client}-mcp`,true,'Launcher files are present; native connection, project trust and tool approval are not verified by doctor');
     } catch(error) {check(`${client}-mcp`,false,`${target}: ${error instanceof Error ? error.message : String(error)}; configuration preserved`);}
   }
-  check('mcp-configuration',configured>0,'Use global kith install or project kith init for your client; configuration alone does not establish a connection');
+  const realHome = physicalPath(home);
+  const claudePlugin = claudeKithPluginStatus(realHome, root);
+  if (configured > 0) check('mcp-configuration', true, 'Use global kith install or project kith init for your client; configuration alone does not establish a connection');
+  else if (claudePlugin.active) check('mcp-configuration', true, `The Claude Code plugin provides the Kith MCP server${claudePlugin.id ? ` (${claudePlugin.id})` : ''}. It runs npx -y kith-coord mcp --compact. kith install still configures Cursor, Codex, and other clients.`);
+  else check('mcp-configuration', false, 'Use global kith install, the Claude Code plugin, or project kith init for your client; configuration alone does not establish a connection');
   if(state.state==='ready') check('workflow-mode',true,state.workflowMode==='main'?'main-checkout mode: agents share the main checkout and no worktrees are created (change with kith mode worktrees)':state.workflowModeConfigured?'worktree mode: each agent can work in an isolated worktree (change with kith mode main)':'worktree mode (default, not explicitly set — run kith mode main or kith mode worktrees to pin)');
   check('coordination-state',state.state!=='unavailable',state.state==='ready'?'Schema and counters validated on a private snapshot':state.error??'No project state yet; the first owned task initializes it. No state was created by doctor');
-  const realHome = physicalPath(home);
   const globalClaudeHooks = path.join(realHome, '.claude/settings.json');
+  const pluginHookDetail = 'Claude Code plugin hooks are configured and run npx -y kith-coord. Use kith install when you also want Cursor, Codex, and the macOS menu bar.';
   if (fs.existsSync(globalClaudeHooks)) {
     try {
       const cfg = JSON.parse(fs.readFileSync(globalClaudeHooks, 'utf8'));
       const pre = Array.isArray(cfg?.hooks?.PreToolUse) ? cfg.hooks.PreToolUse : [];
-      const hasKith = pre.some((e: any) => Array.isArray(e?.hooks) && e.hooks.some((h: any) => typeof h?.command === 'string' && h.command.includes(' hook pre')));
-      if (hasKith) check('global-claude-hooks', true, 'Passive Claude Code global hooks configured');
+      const kithEntries = pre.filter((e: any) => Array.isArray(e?.hooks) && e.hooks.some((h: any) => typeof h?.command === 'string' && h.command.includes(' hook pre')));
+      if (kithEntries.length) {
+        const notes = ['Passive Claude Code global hooks configured.'];
+        if (kithEntries.length > 1) notes.push(`${kithEntries.length} Kith PreToolUse entries share one ledger. This is not a failure; kith install keeps a single entry.`);
+        if (claudePlugin.active) notes.push('The Claude Code plugin is also enabled. Its hooks defer to these, so a tool call is checked once.');
+        check('global-claude-hooks', true, notes.join(' '));
+      } else if (claudePlugin.active) check('global-claude-hooks', true, pluginHookDetail);
     } catch {
       check('global-claude-hooks', false, `Cannot parse ${globalClaudeHooks}`);
     }
-  }
+  } else if (claudePlugin.active) check('global-claude-hooks', true, pluginHookDetail);
   const globalCursorHooks = path.join(realHome, '.cursor/hooks.json');
   if (fs.existsSync(globalCursorHooks)) {
     try {

@@ -1,7 +1,7 @@
 {
   "name": "kith-coord",
   "version": "0.1.9",
-  "description": "Vendor-neutral local coordination for cooperating coding agents: scoped work claims, isolated Git worktrees, shared resource mutexes, and verified integration, with no hosted service.",
+  "description": "File ownership for coding agents you already run: claims, port and command locks, and checked integration, with no account and no coordination server.",
   "type": "module",
   "bin": {
     "kith": "./dist/cli/index.js",
