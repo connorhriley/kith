@@ -1,5 +1,6 @@
 {
   "name": "kith",
+  "version": "0.2.0",
   "description": "File claims, port and command locks, and checked integration for Claude Code. Runs the published kith-coord package.",
   "author": {
     "name": "connorhriley",

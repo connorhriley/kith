@@ -85,12 +85,12 @@ Uninstall restores the exact original bytes/permissions or deletes files created
 
 ## Registry installation
 
-The package is `kith-coord`, and its binary remains `kith`. Install it persistently (`npm install --global kith-coord@0.1.9`) before `kith init`, because generated configurations launch `kith` on PATH. Invoking init through npx alone does not create that persistent executable.
+The package is `kith-coord`, and its binary remains `kith`. Install it persistently (`npm install --global kith-coord@0.2.0`) before `kith init`, because generated configurations launch `kith` on PATH. Invoking init through npx alone does not create that persistent executable.
 
 An MCP client can instead use a pinned registry launcher without a global install:
 
 ```json
-{"mcpServers":{"kith":{"command":"npx","args":["--yes","--package","kith-coord@0.1.9","kith","mcp","--repo","/absolute/checkout"]}}}
+{"mcpServers":{"kith":{"command":"npx","args":["--yes","--package","kith-coord@0.2.0","kith","mcp","--repo","/absolute/checkout"]}}}
 ```
 
 Use a version you have verified; the unrelated npm package named `kith` is not Kith's distribution. Hook commands still need their configured executable to remain available. The clean-package smoke check exercises the installed binary, library, supervised worker and actual MCP discovery/status in a separate consumer.
@@ -103,7 +103,7 @@ Version 0.1.1 generates MCP configuration using the current absolute Node execut
 
 ## Configure detected local clients
 
-From 0.1.7, `npx --yes --package kith-coord@0.1.9 kith setup /absolute/checkout` is the single setup path. Versions through 0.1.6 need a persistent npm installation first. Setup retains the exact bundled runtime under `~/.local/share/kith/runtimes/`, validates actual MCP discovery without selecting a repository, configures supported detected clients and adds marked project guidance. Clearing the original npx cache does not break its launcher. Repeat setup reuses identical content. `kith install` removes retained runtimes under `~/.local/share/kith/runtimes/` that no live hook, MCP entry, or login agent still names, and keeps a runtime any of those configs still point at. A damaged selected runtime is refused rather than overwritten. Custom launchers remain custom. `kith doctor` fails when one of those configs points at a different Kith version than the CLI you just ran, and tells you to run `kith install`.
+From 0.1.7, `npx --yes --package kith-coord@0.2.0 kith setup /absolute/checkout` is the single setup path. Versions through 0.1.6 need a persistent npm installation first. Setup retains the exact bundled runtime under `~/.local/share/kith/runtimes/`, validates actual MCP discovery without selecting a repository, configures supported detected clients and adds marked project guidance. Clearing the original npx cache does not break its launcher. Repeat setup reuses identical content. `kith install` removes retained runtimes under `~/.local/share/kith/runtimes/` that no live hook, MCP entry, or login agent still names, and keeps a runtime any of those configs still point at. A damaged selected runtime is refused rather than overwritten. Custom launchers remain custom. `kith doctor` fails when one of those configs points at a different Kith version than the CLI you just ran, and tells you to run `kith install`.
 
 **From 0.1.8,** `kith install` is the single onboarding command and `kith setup` remains an alias. Both retain the runtime above, and on macOS they open read-only Radar and register a login LaunchAgent (`dev.kith.radar`) unless `--no-radar` or `--no-autostart` is passed. Repeating setup keeps an existing view and its selected workspace; use its **Switch Workspace** menu to change projects. `--dry-run` previews without launching. Linux and Windows skip the menu-bar view and use `kith watch`. Radar makes no model calls. A Radar startup failure is reported with a nonzero exit while preserving completed client setup; rerun after resolving the error. `kith uninstall` removes the LaunchAgent, global hooks and global MCP entries it recorded.
 

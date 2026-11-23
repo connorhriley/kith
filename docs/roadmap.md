@@ -16,7 +16,7 @@ MCP is the default agent interface. Keep one shared ownership ledger per Git com
 
 Published 0.1.7 / protocol 1.5 is on npm, including durable setup and compact MCP replies. Kith 0.1.8 advances the additive protocol to 1.6 (handoffs, the brief, workflow mode, lease receipts and quieter status) and keeps storage schema 3, with an optional handoffs table that older binaries ignore. Each candidate must pass its own combined core/platform, bundled-server and clean-install gates before publication; a green prior release does not certify a new branch.
 
-Unreleased 0.2.0 work registers a linked worktree an agent already has — Claude Code's `.claude/worktrees/<name>` layout first, and any other `git worktree list` entry — instead of always creating one. The package on npm remains 0.1.9 until that release is cut.
+0.2.0 registers a linked worktree an agent already has — Claude Code's `.claude/worktrees/<name>` layout first, and any other `git worktree list` entry — instead of always creating one. Publish that package from the merged release commit; a green pull request is not a registry release.
 
 ## Deferred
 
