@@ -537,16 +537,23 @@ export async function runKithMcpStdioServer(
   const close = () => {
     if (closing) return;
     closing = true;
-    process.stdin.off('end', close);
-    process.stdin.off('close', close);
+    process.stdin.off('end', onClientInputClosed);
+    process.stdin.off('close', onClientInputClosed);
     process.off('SIGTERM', close);
     process.off('SIGINT', close);
     void server.close();
   };
   // The SDK transport does not translate stdin EOF into onclose. A running command
   // otherwise keeps the server alive until the client force-kills it.
-  process.stdin.once('end', close);
-  process.stdin.once('close', close);
+  // 'close' without 'end' is not a disconnect: spawning the detached command
+  // worker can emit it on macOS while the client pipe is still open, which
+  // aborted the command before it wrote its pid file.
+  const onClientInputClosed = () => {
+    if (!process.stdin.readableEnded && !process.stdin.destroyed) return;
+    close();
+  };
+  process.stdin.on('end', onClientInputClosed);
+  process.stdin.on('close', onClientInputClosed);
   process.once('SIGTERM', close);
   process.once('SIGINT', close);
   try { await server.connect(transport); }

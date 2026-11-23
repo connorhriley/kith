@@ -268,20 +268,39 @@ it('stops a disconnected borrowed-session MCP command while preserving the origi
   env.KITH_AGENT_ID = 'borrowed'; env.KITH_SESSION_TOKEN = session.sessionToken;
   const { client } = await connect();
   const pidFile = path.join(root, 'borrowed-command');
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  let startupFailure: unknown;
+  let startupResult: { isError?: boolean; content?: unknown } | undefined;
   const pending = tool(client, 'kith_run_with_mutex', { agentId: 'borrowed', mutexName: 'borrowed-command', leaseDurationMs: 300,
-    command: [process.execPath, '-e', `require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`] }).catch(() => undefined);
+    command: [process.execPath, '-e', `require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));setInterval(()=>{},1000)`] })
+    .then((result) => { startupResult = result; }, (error) => { startupFailure = error; });
   try {
-    const deadline = Date.now() + 10000;
-    while (!fs.existsSync(pidFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(fs.existsSync(pidFile)).toBe(true);
+    // Starting and reaping used to share one deadline, so a slow start left no
+    // time to observe the exit. A tool error was swallowed, and the assertion
+    // was only that the pid file was missing.
+    const startedBy = Date.now() + 15_000;
+    while (!fs.existsSync(pidFile)) {
+      if (startupFailure) throw startupFailure;
+      if (startupResult?.isError) throw new Error(`Borrowed session command failed before it started: ${JSON.stringify(startupResult.content)}`);
+      if (Date.now() >= startedBy) throw new Error('Borrowed session command did not start');
+      await wait(20);
+    }
     const pid = Number(fs.readFileSync(pidFile, 'utf8'));
-    await client.close(); await pending;
-    const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
-    while (alive() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(alive()).toBe(false);
+    await client.close();
+    await pending;
+    const reaped = () => {
+      try { process.kill(pid, 0); return false; }
+      catch (err) { return (err as NodeJS.ErrnoException).code === 'ESRCH'; }
+    };
+    const reapedBy = Date.now() + 5_000;
+    while (!reaped() && Date.now() < reapedBy) await wait(20);
+    expect(reaped(), 'command process was reaped after disconnect').toBe(true);
     expect(engine.fencing.getAgent('borrowed')?.status).toBe('active');
     expect(engine.fencing.getAgent('borrowed')?.pid).toBe(process.pid);
-    expect(engine.broker.listResources().filter((r) => r.type === 'mutex')).toEqual([]);
+    const releasedBy = Date.now() + 5_000;
+    const mutexes = () => engine.broker.listResources().filter((r) => r.type === 'mutex');
+    while (mutexes().length && Date.now() < releasedBy) await wait(20);
+    expect(mutexes()).toEqual([]);
   } finally { engine.close(); }
 });
 

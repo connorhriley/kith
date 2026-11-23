@@ -1,4 +1,4 @@
-import { fork } from 'node:child_process';
+import { execFileSync, fork } from 'node:child_process';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
@@ -241,6 +241,7 @@ export class ResourceBroker {
     const requestId = crypto.randomUUID();
     const started = Date.now();
     let run: MutexRun | null = null;
+    let groupReaped = false;
     const abortError = () => new DOMException('Mutex command cancelled', 'AbortError');
     this.activeExecutions++;
     try {
@@ -278,7 +279,9 @@ export class ResourceBroker {
         worker.on('error', () => {});
         throw new Error('Could not start command supervisor');
       }
-      let workerIdentity = FencingAndAgentManager.getProcessStartTime(workerPid);
+      // Identity is resolved asynchronously. A synchronous `ps` here used to run
+      // before the renewal timer and could outlast a short lease on macOS.
+      let workerIdentity: string | null = null;
       let failure: Error | undefined;
       let outcome: { exitCode: number; error?: string } | undefined;
       const stdout: Buffer[] = [];
@@ -304,12 +307,16 @@ export class ResourceBroker {
       };
       const onAbort = () => stop(abortError());
       params.signal?.addEventListener('abort', onAbort, { once: true });
+      const renew = () => {
+        this.fencing.heartbeat(params.agentId);
+        this.renewMutex({ ...params, fencingToken: run!.fencing_token });
+        lifecycle?.renew();
+      };
+      // Arm renewal before any further inspection. The first timer tick is a full
+      // period away, and the lease may already be shorter than a slow `ps`.
+      try { renew(); } catch (err) { stop(err instanceof Error ? err : new Error(String(err))); }
       const interval = setInterval(() => {
-        try {
-          this.fencing.heartbeat(params.agentId);
-          this.renewMutex({ ...params, fencingToken: run!.fencing_token });
-          lifecycle?.renew();
-        } catch (err) { stop(err instanceof Error ? err : new Error(String(err))); }
+        try { renew(); } catch (err) { stop(err instanceof Error ? err : new Error(String(err))); }
       }, Math.max(10, Math.floor(leaseMs / 3)));
       const commandTimer = params.commandTimeoutMs === undefined ? undefined
         : setTimeout(() => stop(new Error('Mutex command execution timed out')), params.commandTimeoutMs);
@@ -321,25 +328,38 @@ export class ResourceBroker {
       };
       worker.stdout!.on('data', capture(stdout, params.onStdout));
       worker.stderr!.on('data', capture(stderr, params.onStderr));
+      let launchStarted = false;
       worker.on('message', (message: { ready?: boolean; exitCode?: number; error?: string }) => {
         if (disposed) return;
         if (message.ready) {
-          try {
-            if (params.signal?.aborted) throw abortError();
-            this.coordDb.withTransaction(() => {
-              this.fencing.assertSession(params.agentId);
-              const identity = FencingAndAgentManager.getProcessStartTime(workerPid);
+          // The worker repeats ready until the start message arrives. Launch once.
+          if (launchStarted || failure) return;
+          launchStarted = true;
+          void (async () => {
+            try {
+              if (params.signal?.aborted) throw abortError();
+              try { renew(); } catch (err) { throw err instanceof Error ? err : new Error(String(err)); }
+              const identity = await FencingAndAgentManager.waitForProcessStartTime(workerPid, 5_000,
+                () => disposed || Boolean(failure) || Boolean(params.signal?.aborted));
+              if (disposed || failure) return;
+              if (params.signal?.aborted) throw abortError();
               if (!identity) throw new Error('Cannot inspect command worker');
-              this.coordDb.db.prepare('UPDATE mutex_runs SET worker_pid=?, worker_start=? WHERE run_id=?')
-                .run(workerPid, identity, requestId);
-              run!.worker_pid = workerPid;
-              run!.worker_start = identity;
-              workerIdentity = identity;
-              this.renewMutex({ ...params, fencingToken: run!.fencing_token });
-              lifecycle?.renew();
-            });
-            worker.send({ command: prepared?.command ?? params.command, env: prepared?.env, cwd: params.cwd ?? this.coordDb.repoRoot, mutexName: params.mutexName });
-          } catch (err) { stop(err instanceof Error ? err : new Error(String(err))); }
+              this.coordDb.withTransaction(() => {
+                this.fencing.assertSession(params.agentId);
+                this.coordDb.db.prepare('UPDATE mutex_runs SET worker_pid=?, worker_start=? WHERE run_id=?')
+                  .run(workerPid, identity, requestId);
+                run!.worker_pid = workerPid;
+                run!.worker_start = identity;
+                workerIdentity = identity;
+                this.renewMutex({ ...params, fencingToken: run!.fencing_token });
+                lifecycle?.renew();
+              });
+              if (params.signal?.aborted || failure) throw abortError();
+              worker.send({ command: prepared?.command ?? params.command, env: prepared?.env, cwd: params.cwd ?? this.coordDb.repoRoot, mutexName: params.mutexName });
+            } catch (err) {
+              if (!disposed && !failure) stop(err instanceof Error ? err : new Error(String(err)));
+            }
+          })();
         } else {
           outcome = { exitCode: message.exitCode ?? 1, error: message.error };
         }
@@ -363,12 +383,22 @@ export class ResourceBroker {
           const killError = signalGroup(workerPid, 'SIGKILL', workerIdentity);
           failure ??= killError;
           const deadline = stopDeadline ?? Date.now() + 5000;
-          while (groupIsAlive(workerPid, workerIdentity) && Date.now() < deadline) await delay(20);
+          let lastZombieCheck = 0;
+          while (groupIsAlive(workerPid, workerIdentity) && Date.now() < deadline) {
+            // macOS reports zombies as alive to kill(pid, 0). A group of only
+            // zombies cannot keep running the command; waiting out the deadline
+            // would retain the mutex after the client had already disconnected.
+            if (process.platform === 'darwin' && Date.now() - lastZombieCheck >= 200) {
+              lastZombieCheck = Date.now();
+              if (darwinGroupHasLiveMember(workerPid) === false) { groupReaped = true; break; }
+            }
+            await delay(20);
+          }
         }
         disposed = true;
         if (killTimer) clearTimeout(killTimer);
         if (stopTimer) clearTimeout(stopTimer);
-        if (groupIsAlive(workerPid, workerIdentity)) {
+        if (!groupReaped && groupIsAlive(workerPid, workerIdentity)) {
           // Retain the durable guard, but don't leave this caller pinned forever.
           worker.stdout?.destroy(); worker.stderr?.destroy();
           if (worker.connected) worker.disconnect();
@@ -381,7 +411,7 @@ export class ResourceBroker {
         this.coordDb.withTransaction(() => {
           this.coordDb.db.prepare('DELETE FROM mutex_waiters WHERE mutex_name=? AND request_id=? AND session_epoch=?')
             .run(params.mutexName, requestId, epoch);
-          if (run && !this.runIsAlive(run)) this.clearRun(run);
+          if (run && (groupReaped || !this.runIsAlive(run))) this.clearRun(run);
           // No protected command can start before the worker-group handshake.
           if (run && run.worker_pid === null) this.clearRun(run);
           if (!this.getRun(params.mutexName)) lifecycle?.release();
@@ -459,6 +489,26 @@ interface MutexRun {
 interface MutexWaiter {
   ticket: number; request_id: string; owner_agent_id: string; session_epoch: number;
   waiter_pid: number; waiter_start: string; expires_at: number;
+}
+/** `null` when `ps` cannot be consulted. `false` when every member is a zombie or gone. */
+function darwinGroupHasLiveMember(pgid: number): boolean | null {
+  try {
+    const out = execFileSync('ps', ['-ax', '-o', 'pid=,pgid=,stat='], {
+      encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, LC_ALL: 'C' },
+    });
+    let sawMember = false;
+    for (const line of out.split('\n')) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 3) continue;
+      const pid = Number(parts[0]);
+      const group = Number(parts[1]);
+      if (pid !== pgid && group !== pgid) continue;
+      sawMember = true;
+      if (!parts.slice(2).join(' ').startsWith('Z')) return true;
+    }
+    return sawMember ? false : null;
+  } catch { return null; }
 }
 function groupIsAlive(pgid: number, expectedStart?: string | null): boolean {
   if (expectedStart) {
